@@ -57,11 +57,7 @@ POST /api/v1/build-requests
 ```json
 {
   "package_id": "package-uuid",
-  "version": "1.0.0",
-  "platform": "linux",
-  "arch": "amd64",
-  "config": "optional-config-hash",
-  "priority": "normal"
+  "package_name": "DaveGamble/cJSON"
 }
 ```
 
@@ -74,6 +70,11 @@ POST /api/v1/build-requests
   "estimated_wait_time": 300
 }
 ```
+
+**说明**
+- `package_id`: 包的唯一标识符
+- `package_name`: 包名称，用于从配方仓库获取构建配方
+- 未来将支持第三方配方仓库，通过 package_name 的前缀或配置来识别配方来源
 
 ### 1.3 查询构建请求状态
 
