@@ -1,0 +1,1202 @@
+# LLAR 技术设计文档（完整版）
+
+## 1. 系统整体架构
+
+### 1.1 四模块工厂架构设计
+
+LLAR采用工厂模式的四模块架构，由Factory作为总控制器统筹协调，三个功能模块分别负责配方管理、依赖解析和构建执行。
+
+```mermaid
+graph TD
+A[CLI Commands] --> E[Factory]
+
+E --> F[Formula Module]
+E --> D[Dependency Module]
+E --> B[Build Module]
+
+F --> |比较函数| D
+F --> |配方结构| D
+D --> |MVS依赖图| B
+B --> |构建任务| E
+
+subgraph "Factory"
+    E1[统筹协调]
+    E2[模块管理]
+    E3[流程控制]
+end
+
+subgraph "Formula Module"
+    F1[获取自定义比较器]
+    F2[配方管理]
+    F3[配方实例化]
+end
+
+subgraph "Dependency Module"
+    D1[解析versions.json]
+    D2[MVS算法执行]
+    D3[依赖图生成]
+end
+
+subgraph "Build Module"
+    B1[构建任务生成]
+    B2[构建调度]
+    B3[产物管理]
+end
+```
+
+### 1.2 模块职责定义
+
+**Factory（工厂模块）**
+- 作为总控制器，负责统筹协调各模块
+- 管理模块间的依赖关系和数据传递
+- 控制整体构建流程和生命周期管理
+- 提供统一的外部接口
+
+**Formula Module（配方模块）**
+- **功能1**: 获取自定义比较方式
+  - 输入: PackageName
+  - 输出: 版本比较函数
+- **功能2**: 配方管理
+  - 输入: PackageName + PackageVersion
+  - 输出: 配方结构（含配方实例和方法）
+
+**Dependency Module（依赖管理模块）**
+- 输入: versions.json文件 + 比较函数
+- 输出: MVS依赖图（Buildlist, Require）
+- 实现Go MVS算法进行依赖解析
+
+**Build Module（构建模块）**
+- 输入: MVS依赖图
+- 输出: 构建任务
+- 负责构建任务的生成、调度和执行
+
+### 1.3 模块依赖关系
+
+```
+Build Module --> Dependency Module --> Formula Module
+        ↑                                    ↑
+        └──────────────── Factory ────────────┘
+```
+
+### 1.4 核心接口设计
+
+#### Engine
+```go
+type Engine interface {
+    Initialize() error
+    Build(packageName string, version string) (BuildResult, error)
+    Shutdown() error
+
+    Formula() Formula
+    Dependency() Dependency
+    Builder() Builder
+}
+```
+
+#### Formula Module
+```go
+type Formula interface {
+    // 获取自定义比较方式
+    ComparatorOf(packageName string) (VersionComparator, error)
+
+    // 配方管理
+    Load(packageName string, version string) (FormulaStruct, error)
+}
+
+type FormulaStruct struct {
+    Instance    FormulaPackage
+    Metadata    FormulaMetadata
+}
+
+type VersionComparator func(v1, v2 string) int
+```
+
+#### Dependency Module
+```go
+type Dependency interface {
+    // 输入: versions.json + 比较函数，输出: MVS依赖图
+    Resolve(versionsFile string, comparators map[string]VersionComparator) (Graph, error)
+
+    // MVS核心方法
+    BuildList(target PackageVersion) ([]PackageVersion, error)
+    Require(pkg PackageVersion) ([]PackageVersion, error)
+}
+
+type Graph struct {
+    BuildList   []PackageVersion
+    RequireMap  map[string][]PackageVersion
+    Dependencies DependencyGraph
+}
+```
+
+#### Build Module
+```go
+type Builder interface {
+    // 输入: MVS依赖图，输出: 构建任务
+    Plan(graph Graph) ([]Task, error)
+    Execute(tasks []Task) (BuildResult, error)
+}
+
+type Task struct {
+    Package     PackageVersion
+    Formula     FormulaStruct
+    Dependencies []PackageVersion
+    BuildFunc   func() (BuildArtifact, error)
+}
+```
+
+### 1.5 数据流向
+
+1. CLI → Engine: 触发Build()
+2. Engine → Formula: 获取比较器和配方结构
+3. Engine → Dependency: 传入versions.json和比较器，获取MVS依赖图
+4. Engine → Builder: 传入依赖图，生成构建任务
+5. Engine → Builder: 执行构建任务，返回结果
+
+## 3. 配方系统设计
+
+### 3.1 FormulaApp基础设计
+
+#### 基类定义
+```go
+type FormulaApp struct {
+    gsh.App
+}
+
+type FormulaPackage interface {
+    // FormulaApp基类实现
+
+    // 返回当前配方所在目录
+    Dir() fs.FS
+
+    // 上一个产物信息
+    LastArtifact() *Artifact
+
+    // 返回当前PackageName
+    PackageName__0() string
+
+    // 必填，声明当前LLAR Package Name，格式为：owner/repo
+    PackageName__1(name string)
+
+    // 返回当前描述
+    Desc__0() string
+
+    // 可选，添加Package Homepage页面
+    Desc__1(desc string)
+
+    // 返回当前Package Homepage URL
+    Homepage__0() string
+
+    // 可选，添加Package Homepage URL
+    Homepage__1(homepage string)
+
+    // 返回当前Package的构建矩阵
+    Matrix__0() matrix.Matrix
+
+    // 声明Package的构建矩阵
+    Matrix__1(mrx matrix.Matrix)
+
+    // 返回当前Package的版本
+    Version() version.Version
+
+    // 声明该Formula能够处理的起始版本号
+    FromVersion(v string)
+
+    OnRequire(fn func(deps.Graph))
+
+    // 声明构建
+    OnBuild(fn func() (*Artifact, error))
+
+    // 提供该Package源码下载方法，并要求维护者实现相关源码验证逻辑
+    OnSource(fn func(ver version.Version) (sourceDir string, err error))
+
+    // 当前配方所有版本
+    OnVersions(fn func() []version.Version)
+}
+```
+
+#### 为什么选择XGO Classfile？
+
+因为`XGO Classfile`具有一切构建脚本需要的东西：
+
+1. **系统命令调用**: `XGO Classfile` GSH提供了调用Bash命令来完成编译和IO操作的功能
+2. **抽象机制**: `XGO Classfile` 基本上每个文件都是建立在抽象之上的，对于一般的抽象机制非常便捷
+3. **语法简单**: `XGO Classfile` 提供了极其丰富的builtin函数和极其简单语法集
+4. **低心智负担**: 提供抽象和低开发心智均衡，特别的错误处理机制解决Go的 `if err != nil` 问题
+5. **后端切换**: 提供便捷后端切换机制，允许引入`LLGo`进行跨语言处理
+
+### 2.2 配方示例
+
+#### 单个Package例子
+
+`CJSON_llar.gox` (DaveGamble/cJSON):
+```javascript
+// 声明相关信息
+
+// 当前配方仅兼容1.0.0后的版本
+fromVersion "1.0.0";
+
+// 当前Package Name
+packageName "DaveGamble/cJSON";
+
+// Package 描述
+desc "Ultralightweight JSON parser in ANSI C";
+
+// Package 主页
+homepage "https://github.com/DaveGamble/cJSON";
+
+matrix {
+    Require: {
+        "os": ["linux", "darwin"],
+        "arch": ["amd64", "arm64"]
+    },
+    Options: {
+        "zlib": ["zlibON", "zlibOFF"]
+    }
+}
+
+onBuild matrix => {
+    args := []
+
+    if matrix["toolchain"].contains "clang" {
+        args <- "-DTOOLCHAIN=clang";
+    }
+
+    args <- ".";
+
+    cmake args
+    cmake "--build" ".";
+
+    return {
+        Info: {
+            BuildResults: [
+                {LDFlags, "/xxx/cjson.so"},
+                {Custom, "-Map t.map"},
+            ]
+        }
+    }, nil
+}
+
+onSource ver => {
+    sourceDir := download("https://github.com/DaveGamble/cJSON/releases/tag/v${ver.Version}")!
+
+    err := hashDirAndCompare(sourceDir, "aaaabbbbccccddddeee")
+
+    return sourceDir, err
+}
+
+onVersions => {
+    tags := fetchTagsFromGitHub("DaveGamble/cJSON")!
+    return githubTagsToVersion("v1", tags)
+}
+```
+
+### 2.3 配方调用机制
+
+#### 依赖调用流程
+
+```mermaid
+sequenceDiagram
+    participant A as Package cJSON
+    participant B as Package zlib
+    participant C as Package xxlib
+
+    alt "Build"
+        A ->> C: Build()
+        C ->> B: 传递产物Artifact信息
+        A ->> B: Build()
+        B ->> A: 传递产物Artifact信息
+        A ->> A: Build()
+    end
+```
+
+### 2.4 构建输出与产物传递
+
+#### 构建输出结构
+一般C/C++语言输出：
+```
+project/
+├── include/         // 头文件
+├── lib/         // 库文件
+│   └── pkgconfig/         // PC文件
+└── bin/         // 可执行二进制（可选）
+```
+
+#### 产物传递设计
+```go
+type Artifact struct {
+    BasicFormula // 输出时，选填，构建时期自动填入
+    Dir  string // 产物输出目录，必填
+    Prev *Artifact // 上一个构建产物信息，选填，构建时期自动填入
+    Link func(compileArgs []string) []string // 链接回调函数，必填
+}
+```
+
+#### 链接回调链机制
+构建信息由构建列表从上往下传递，每构建完一个产物，会自动将回调函数进行连接：
+
+```
+B.Link() -> A.Link()
+```
+
+最终形成回调链条：
+```
+N.Link() -> ... -> B.Link() -> A.Link()
+```
+
+最终调用：
+```
+N.Link([]string{}) // 结果: -Innn ... -Ibbb -Iaaa
+```
+
+## 3. 版本管理系统设计
+
+### 3.1 版本管理背景
+
+我们为什么要重新建立一个版本管理系统？
+
+答案是不可以直接复用别人的。因为，LLAR目标是任意语言的资产管理。
+
+不同语言之间，往往管理体系不一样，甚至压根没有管理体系（C/C++），我们需要为他们提供一套统一，标准的版本管理方案。
+
+这样我们才能彻底消除不同语言的隔阂，实现统一的包资产管理。
+
+### 3.2 设计目标
+
+1. 尽量不破坏原库版本管理体系前提下，为其引入LLAR版本管理
+2. 统一，标准版本管理
+
+### 3.3 版本结构设计
+
+```go
+type PackageVersion {
+    // 原版本号
+    Version string
+}
+```
+
+### 3.4 自定义版本比较
+
+#### 背景
+默认情况下，LLAR使用GNU Coreutils的`sort -V`算法（GNU算法），其算法来源为Deb版本比较。
+
+GNU的版本比较为我们提供了一套尽可能通用的版本比较算法，然而C/C++并无明确版本规范，GNU的算法仅仅是竭尽所能去比较（Best Effort），并不适合所有情况。
+
+#### 解决方案
+如果维护者发现该包需要自定义比较算法，我们为自定义比较设计了一套规则。
+
+由于配方会因为上游版本号变动导致配方出现版本号问题，我们将比较逻辑重新拆出来一个独立文件，后缀为`_cmp.gox`，必须存在于当前包根目录下：
+
+```
+DaveGamble
+   └── cJSON
+       ├── 1.0.0
+       │   ├── cJSON_llar.gox
+       │   └── versions.json
+       ├── 1.5.0
+       │   ├── cJSON_llar.gox
+       │   └── versions.json
+       ├── 2.0.0
+       │   ├── cJSON_llar.gox
+       │   └── versions.json
+       ├── cJSON_cmp.gox
+       ├── go.mod
+       └── go.sum
+```
+
+#### 自定义比较接口
+```go
+type ComparableVersion interface {
+    // 当 a > b，返回 1, a == b, 返回 0， a < b，返回 -1
+    Compare(a, b PackageVersion) int
+}
+```
+
+由于`XGO Classfile`最佳实践是避免用户写函数声明，使用闭包函数替代：
+```go
+type ComparableVersion interface {
+    Compare(comparator func (a, b PackageVersion) int)
+}
+```
+
+#### 比较示例
+```javascript
+import (
+    semver "github.com/Masterminds/semver/v3";
+)
+
+compare (a, b) => {
+    echo "a: ${a.Ver} b: ${b.Ver}";
+    v1 := semver.NewVersion(a.Ver)!
+    v2 := semver.NewVersion(b.Ver)!
+    return v1.Compare(v2)
+}
+```
+
+### 3.5 配方版本管理
+
+#### 目录规范
+```
+DaveGamble/
+└── cJSON/
+    ├── go.mod
+    ├── go.sum
+    ├── 1.x/
+    │   └── CJSON_llar.gox
+    └── 2.x/
+        └── CJSON_llar.gox
+```
+
+目录名称应该与配方`FromVersion`保持一致。
+
+#### 为什么采用版本号为目录的方式
+
+在LLPkg中，遇到了类似的问题，LLPkg的解决方案是使用Go Nested Module方式，然而这类解决方案看起来优雅，却有相当多的问题：
+
+1. 对历史Formula进行维护会产生诸多问题
+2. 版本映射问题
+3. 容易产生大量的tags
+
+我们吸取LLPkg教训后，决定不再采取Go Nested Module设计。
+
+### 3.6 依赖管理文件
+
+#### versions.json格式
+```json
+{
+    "name": "DaveGamble/cJSON",
+    "deps": {
+        "1.0.0": [{
+            "name": "madler/zlib",
+            "version": "1.2.1"
+        }],
+        "1.2.0": [{
+            "name": "madler/zlib",
+            "version": "1.2.3"
+        }]
+    }
+}
+```
+
+#### 结构化定义
+```go
+type Dependency struct {
+    PackageName string `json:"name"`
+    Version            string `json:"version"`
+}
+
+type PackageDependencies struct {
+    PackageName string `json:"name"`
+    Dependencies []Dependency `json:"deps"`
+}
+```
+
+#### 顺序
+Package依赖顺序为有向图拓扑顺序摊平后的顺序，具体看MVS Buildlist。
+
+### 3.7 配方版本选择
+
+#### 选择流程
+用户需要`DaveGamble/cJSON`的1.7.18版本时：
+
+```mermaid
+graph TD
+A[DaveGamble/cJSON 1.7.18] --> B{查找 fromVersion <= 1.7.18 配方}
+B -- 找到配方 --> C{调用onRequire回调函数}
+B -- 否 --> D[报错退出]
+C --> E[解析 versions.json，发现依赖 madler/zlib ]
+E --> F{查找 fromVersion <= 1.1.0 配方}
+F -- 找到配方 --> G[... 完成依赖有向图构建]
+F -- 否 --> H[报错退出]
+```
+
+#### 选择过程演示
+
+假设目录结构：
+```
+DaveGamble
+   └── cJSON
+       ├── 1.0.0 // fromVersion: 1.0.0
+       │   ├── CJSON_llar.gox
+       │   └── versions.json
+       ├── 1.5.0 // fromVersion: 1.5.0
+       │   ├── CJSON_llar.gox
+       │   └── versions.json
+       ├── 2.0.0 // fromVersion: 2.0.0
+       │   ├── CJSON_llar.gox
+       │   └── versions.json
+       ├── CJSON_version.gox
+       ├── go.mod
+       └── go.sum
+```
+
+选择过程：
+```mermaid
+graph TD
+A[随机选择一个配方] --> B{DaveGamble/cJSON 1.5.0 <= 1.7.18 ?}
+B -- 是 --> C[记录当前配方信息]
+C --> D
+B -- 否 --> D{DaveGamble/cJSON 2.0.0 <= 1.7.18 ?}
+D -- 是 --> E{是否最优配方?}
+E -- 是 --> F[记录当前配方信息]
+E -- 否 --> G
+F --> G
+D -- 否 --> G{DaveGamble/cJSON 1.0.0 <= 1.7.18 ?}
+G -- 是 --> H{是否最优配方?}
+H -- 是 --> I[记录当前配方信息]
+I --> J
+H -- 否 --> J[结束]
+```
+
+### 3.8 自定义依赖管理
+
+#### 背景
+在设计这套版本管理方案的时候，我们一开始太过于理想化，没有考虑到库本身自带版本依赖的问题。
+
+例如该库原本使用了类似于conan，ninja类似包管理工具的时候，我们其实可以从这些工具中读取准确和最新的依赖信息。
+
+#### onRequire使用方式
+```javascript
+onRequire deps => {
+    graph := readDepsFromNinja()?
+
+    graph.visit((parent, dep) => {
+        deps.require(parent, dep)
+    })
+}
+```
+
+#### deps.Graph接口
+```go
+type Graph interface {
+    // 修改 packageName 的 依赖 为 deps
+    Require(packageName string, deps []Dependency)
+    // 获取 版本为version的packageName 的依赖
+    RequiredBy(packageName string, version version.Version) ([]Dependency, bool)
+}
+```
+
+## 4. 构建矩阵系统设计
+
+### 4.1 背景
+
+LLAR出发点是为了解决构建产物难题，即当构建配置无限进行膨胀。
+
+而conan，并没有构建矩阵这个概念。但是conan提出了类似的构建配置，并将用户构建配置分为两部分：settings和options，其中settings是会向下传播的，编译需要的，options则仅限于当前package，不会向下传播的配置。
+
+我们希望能够通过一种标准化的方案去表达这些构建配置。
+
+### 4.2 设计目标
+
+- 能够提供一种标准化的构建配置解决方案
+- 能够自动完成构建配置选择
+
+### 4.3 基本设计
+
+类似于Conan，构建矩阵有两部分组成，分别是 `require` 和 `option`。 `require` 类似于conan `settings`，默认向下传播，而`options` 则不会向下传播，仅限于当前package。
+
+#### 矩阵结构
+```json
+{
+    "matrix": {
+        "require": {
+            "arch": ["amd64", "arm64"],
+            "lang": ["c", "cpp"],
+            "key1": ["value 1", "value 2", ... "value n"],
+            "key2": ["value 1", "value 2", ... "value n"],
+            ...
+            "keyn": ["value 1", "value 2", ... "value n"]
+        },
+        "options": {
+            "key1": ["value 1", "value 2", ... "value n"]
+        }
+    }
+}
+```
+
+#### 结构化定义
+```go
+type PackageMatrix struct {
+        Require map[string][]string `json:"require"`
+        Options map[string][]string `json:"options"`
+}
+```
+
+#### 必需字段
+- `arch`: 代表编译平台
+- `lang`: 代表该包的语言（可选值：c, cpp, py)
+
+#### 特殊可选字段
+- `os`: 代表OS
+- `toolchain`: 工具链（可选值: gcc，clang）
+
+`os`不是必须的情况是因为该包有可能允许在裸机环境下运行。
+
+其次，key必须代表某种编译集成配置，例如说，`sse2`，那么应该代表着该包全部组件启用`sse2`，而不是某个部分。
+
+### 4.4 为什么需要引入 require 和 options 概念？
+
+在构建矩阵第一版设计中，是不存在的，默认参数都会又最上层的包一层一层进行传播。
+
+但我们在经过讨论后发现以下事实：
+1. 如果一层一层传播，最底层的依赖会得到一个巨大的构建矩阵，很多字段其实并不需要
+2. 以及可能会出现以下复杂情况：
+
+A 依赖 B 可能会出现：
+1. A有B不需要的字段，A传导给了B（这个case问题不大）
+2. B有A不存在的字段（这个往往出现在optional的参数。但这个参数没有值，那么此时该参数要不要往下继续传播呢，因为我们不能确定下一个依赖是否依赖了该参数）
+
+为了解决第二个问题，引入 `require` 和 `options` 概念后，case 2所导致的复杂问题可以被简单解决，因为`options`默认不会被传播，只能接受来自最上层的传入。
+
+### 4.5 构建矩阵的表现形式
+
+#### 算法
+由于JSON Object在RFC规范中定义是无序组合，因此我们需要对其Object key齐进行按字母排序，然后从排序顺序前至后进行排序组合（按层序顺序，第一层和第二层组合，其结果再和第三层组合，依次递归）
+
+#### 示例
+```json
+{
+    "matrix": {
+        "require": {
+            "os": ["linux", "darwin"],
+            "arch": ["x86_64", "arm64"],
+            "lang": ["c", "cpp"]
+        }
+    }
+}
+```
+
+将产生以下组合：
+`x86_64-c-linux`, `arm64-c-linux`, `x86_64-c-darwin`, `arm64-c-darwin`,
+`x86_64-cpp-linux`, `arm64-cpp-linux`, `x86_64-cpp-darwin`, `arm64-cpp-darwin`
+
+计算过程：
+1. 排序得到key顺序：`arch`, `lang`, `os`
+2. 进行组合：
+   - `arch`与`lang`组合：`x86_64-c`, `arm64-c`, `x86_64-cpp`, `arm64-cpp`
+   - 其结果与`os`组合得到完整结果
+
+#### 有options字段
+在完成`require`字段组合后，再进行`options`组合，最后用`|` 进行连接：
+`x86_64-c-linux|zlibON`
+
+### 4.6 矩阵的传播
+
+#### 传播规则
+默认情况下，`require` 要求所有包必须是入口`require`子集，而`options`则只接受来自最上层的传入。
+
+#### 传播示例
+
+无`options`:
+```mermaid
+graph TD
+A[Root x86_64-c-linux] --> B[B x86_64-c-linux]
+A --> C[C x86_64-c-linux]
+```
+
+仅C有`options`:
+```mermaid
+graph TD
+A["Root x86_64-c-linux|zlibON"] --> B[B x86_64-c-linux]
+A --> C["C x86_64-c-linux|zlibON"]
+C --> D["D x86_64-c-linux"]
+```
+
+非子集：
+```mermaid
+graph TD
+A[Root x86_64-c-linux] --> |Panic|B["B arm64-c-linux"]
+A --> C[C x86_64-c-linux]
+```
+
+如果发现非子集情况，将会直接终止配方运行。
+
+### 4.7 矩阵的选择与使用
+
+构建矩阵在实现上可以使用哈希表进行实现。
+
+因此其选择过程就变成了使用哈希进行子集匹配，可以忽略顺序问题，这一实现有点像Go BuildTags，即：一个配方只需要取其适合的配置信息，忽视掉不需要的。
+
+但是，如果出现了某个配方接受到了不预期的`require`，往往只有一种结果：该包无法编译出该平台或者该配置的。此时应该强制panic以让配方编写者知道问题。
+
+## 5. ixgo运行模块设计
+
+ixgo运行模块是LLAR系统中的核心组件，负责执行XGO配方脚本。详细的ixgo设计和实现请参考：[ixgo设计文档](./ixgo-design.md)
+
+### 5.1 核心功能
+- 动态执行XGO语言配方
+- 自动配置xgo项目（RegisterProject)
+- 与依赖管理模块互动
+- 根据依赖管理模块执行构建
+
+### 5.2 依赖管理模块互动
+```mermaid
+graph TD
+A["初始化：调用配方Main()"] --> B[执行配方onRequire回调]
+B --> C[依赖管理模块]
+C --> D[获取依赖有向图]
+D --> E[获得Buildlist]
+E --> F[根据Buildlist执行配方构建]
+```
+
+### 5.3 技术特点
+- 基于Go reflect机制实现动态执行
+- 支持XGO到Go的无缝编译转换
+- 提供丰富的扩展机制（RegisterExternal、RegisterPatch等）
+- 完整的错误处理和调试支持
+
+## 6. LLAR后端设计
+
+### 6.1 背景
+由于LLAR设计出发点就是为了满足庞大产物构建需求，而GitHub Action无法提供如此庞大的算力资源，因此我们必须设计一套LLAR 后端。
+
+### 6.2 设计目标
+- 满足庞大产物构建，存储需求
+- 保证集群可靠性，高并发
+
+### 6.3 构建架构图
+```mermaid
+graph LR
+    A[用户] <--> 0
+    0 --> H
+    0 --> C
+    C[构建请求] --> |发布|D
+    H[获取/修改/删除预构建信息] --> 3.1
+    3.1 -.-> |返回预构建信息|0
+    A -.-> |下载预构建|F
+
+    subgraph 0[中间层]
+        B[LLAR 用户 API]
+    end
+
+    subgraph 1[数据应用层]
+        subgraph D[消息处理模块]
+                D.1[(消息队列)]
+        end
+
+        L[计算集群调度模块]
+
+        J[(镜像仓库)]
+        subgraph 1.1[K8S控制平面]
+            subgraph E[构建集群]
+                E1[构建节点1]
+                E2[构建节点2]
+                E3[构建节点...]
+            end
+        end
+        E1 --> |拉取|J
+        E2 --> |拉取|J
+        E3 --> |拉取|J
+        I[KubeSphere] <--> 1.1
+        L --> |调用K8S API|1.1
+        D --> |触发|L
+    end
+
+   E1 --> |订阅|D
+   E2 --> |订阅|D
+   E3 --> |订阅|D
+   E1 --> |获得配方|K
+   E2 --> |获得配方|K
+   E3 --> |获得配方|K
+
+    subgraph 2[数据管理层]
+        subgraph 3[数据管理中间层]
+            3.1[LLAR 数据管理 内网 API]
+        end
+        K[(中心化配方仓库)]
+        F[(云存储)]
+        subgraph G[MongoDB 主从复制集群]
+            G1[数据库节点1]
+            G2[数据库节点2]
+            G3[数据库节点...]
+        end
+        F <--> |数据保持|G
+    end
+
+    E --> |上传产物|3.1
+    3.1 -.-> |返回产物URL|E
+    E -.-> |产物URL|3.1
+    3.1 --> |构建任务信息|G
+```
+
+相关架构分层：
+- **中间层**：负责提供对用户接口，集成相关功能
+- **数据应用层**：负责处理构建请求，由多台机器组成构建集群
+- **数据管理中间层**：负责为数据管理层对内提供统一的接口
+- **数据管理层**：负责管理构建信息，和存放对应的构建产物，一般是对象存储（七牛云KODO）
+
+### 6.4 实现细节
+
+#### 构建集群
+
+##### 管理
+使用KubeSphere作为可视化面板，连接K8S控制平面，作为集群管理工具
+
+##### 任务调度
+- **调度目标**：尽量塞满集群内每一台机器的CPU核心
+- **调度单位**：单台集群成员
+
+##### 设计
+一般来说，一个任务需要开一台容器，以保证其构建安全性
+
+构建集群容器成员应使用消息队列的 `Pub-Sub` 进行任务监听拉取，这样好处有：
+
+1. 拉取任务的服务器一定"空闲"，这个空闲状态可以后期由各种算法决定，单台构建服务器只需要关心自身负载状态，无需关心系统整体
+2. 任务完成后再发送ACK确认消费，避免任务未构建完成意外退出
+
+#### 构建依赖问题
+
+一般来说，构建集群需要频繁调用依赖，而且还会产生一些顺序问题。
+
+例如并发构建的时候，cjson 依赖 zlib，同时构建cjson和zlib。为了避免这类问题，我们一般不允许维护者提交这类请求，然而这种要求并非强制性的。
+
+为了确保系统鲁棒性，这类构建请求被错误提交的时候应该有一定处理逻辑。
+
+回到刚才例子，我们如何处理上述依赖并发冲突构建问题：
+
+如果zlib构建任务先被开始执行：
+1. 检查是否已经存在构建任务，没有则往数据库插入构建任务信息
+2. 执行完成，更新数据库
+
+如果cjson开始执行：
+1. 配方脚本会自动先编译zlib，检查数据库是否存在，没有就插入，有就直接使用存储中的预构建产物
+2. 再执行cjson构建
+
+#### 配方设计
+
+由于服务端逻辑会和用户端不一样，一般来说，不能采用用户端那套逻辑。
+
+但是本质上并不需要太多更改，我们只需要修改Root wrapper即可。
+
+服务器Root Wrapper调用Build之前会去云存储中检查产物，而不是像用户一样从本地中去检查。
+
+### 6.5 LLAR API设计
+
+#### 需求
+1. 提交，查询构建请求任务
+2. 获取构建请求信息
+3. 获取，删除预构建产物
+
+#### 获取构建产物信息
+```
+GET /v1/{{PackageName}}/{{Version}}/{{Matrix}}.{{Suffix}}
+```
+
+URL参数:
+- `PackageName`: Package Name
+- `Version`: Package版本
+- `Matrix`: 构建矩阵
+- `Suffix`: 文件后缀
+
+Query参数：
+- `id`: 可选，`Package ID`，当存在多个相同Package Name的Package时候需要指定
+
+返回:
+- `302`: 跳转到Package预构建云存储URL
+- `404`: 查无此包
+
+例子:
+```
+GET /v1/zlib/v1-1.2.1/x86_64-c-linux.a
+```
+
+#### 提交云构建请求
+```
+PUT /v1/build/{{PackageName}}/{{Version}}/{{Matrix}}
+```
+
+URL参数:
+- `PackageName`: Package Name
+- `Version`: Package版本
+- `Matrix`: 构建矩阵
+
+Query参数：
+- `id`: 可选，`Package ID`
+
+返回:
+```json
+{
+     "taskID": "xxxx-xxxx-xxxx-xxxx"
+}
+```
+
+#### 获取云构建请求
+```
+GET /v1/build/{{taskID}}
+```
+
+URL参数:
+- `taskID`: 构建任务ID
+
+返回:
+```json
+{
+     "status": "DONE"
+}
+```
+
+`status`: 构建状态
+- `DONE`: 已完成
+- `STARTING`: 还未开始构建
+- `BUILDING`: 构建中
+
+### 6.6 数据库设计
+
+使用MongoDB主从复制集群存储构建任务信息，与云存储保持数据一致性。
+
+### 6.7 云存储
+
+直接使用对象存储服务（如七牛云KODO）存储构建产物，通过CDN提供下载加速。
+
+## 7. 配方仓库管理
+
+### 7.1 目录结构
+
+#### Git仓库托管
+```
+{{owner}}/
+└── {{repo}}/
+    ├──  versions.json
+    └── {{repo名称首字母大写}}_llar.gox
+```
+
+**示例：** `github.com/DaveGamble/cJSON`
+
+对应的目录结构：
+```
+DaveGamble/
+└── cJSON/
+    └── CJSON_llar.gox
+```
+
+#### 版本管理结构
+```
+{{owner}}/
+└── {{repo}}/
+    ├── 1.x/
+    │   └── {{repo名称首字母大写}}_llar.gox
+    └── 2.x/
+        └── {{repo名称首字母大写}}_llar.gox
+```
+
+### 7.2 CI系统设计
+
+#### 产品设计
+
+##### 需求
+
+提交侧(Pull Request)：
+- **检查配方是否编写正确**
+    - 检查是否加载并继承`FormulaApp`
+    - 检查Package Name和Package ID是否已经填写
+    - 检查依赖图是否无法自动完成解决或者有构建矩阵的冲突
+- **运行配方构建，得到产物后运行测试**
+    - 超过20种可能性就随机抽样1/10构建矩阵组合，因为如果产生大量构建矩阵组合，将无法全部测试
+
+##### 用户故事
+
+用户可以：
+- 使用PR提交到中心化仓库
+
+## 8. 版本选择设计
+
+### 8.1 背景
+
+现有包管理器版本选择往往是不够智能的，以conan为例，其版本选择仅是为包管理提供一种比较简单版本选择，例如依赖可以选择版本范围，这类功能使得维护者可以不那么频繁更新配方脚本，但对于版本冲突解决，conan往往需要人工手动解决，这对于具有一定复杂度的依赖是非常不友好的。
+
+我们希望为LLAR引入一种类似于Go MVS具有High-Fidelity Builds（高保真构建），且足够通用能够自动解决版本冲突的版本选择方案。
+
+### 8.2 设计目标
+
+- 能够自动解决版本冲突，具有高保真构建特性
+- 足够通用，适配所有
+
+### 8.3 具体设计
+
+#### 版本号相关问题
+通常，多数语言一般都避免了C/C++没有版本规则带来的混乱，一般都会遵循一套特定的版本规则，例如NPM和Go都遵守Semver规范，Python也有类似Semver规范的规则。
+
+因此我们只需要关心C/C++这类无版本规范的情况。
+
+我们调研后发现，虽然版本形态不同，但是作为版本号，他们一般有一个清晰的特征：
+
+> 单调递增的
+
+#### 版本比较方案
+
+针对我们观察到的信息，我们提出了两种方案：
+
+- **方案一**：利用NLP算法分析出其版本号特征，并通过Semver进行标准化
+- **方案二**：让维护者提供自定义版本比较规则
+
+选择理由：
+
+1. 配方维护者往往很容易就能找出这个版本的规律，并编写出该包的比较规则
+2. 一般来说，多数库的版本规则不会发生改变。但如果发生改变，我们也可以进行灵活处理
+
+### 8.4 算法设计
+
+类似于Go MVS，我们将采用类似的方案。初步采用和Go MVS一样的算法。
+
+当遇到版本号冲突时，算法将使用用户提供的 `Compare` 接口自动选择最新的版本。
+
+例如：
+```mermaid
+graph TD
+A[A v1 1.0.0] --> B[B v1 1.0.0]
+A --> C[C v1 1.0.0]
+B --> D[D v1 1.1.0]
+C --> E[D v1 1.2.1]
+```
+
+当遇到冲突`D`的时候，我们会找到D配方提供的`Compare` 方法，比较得出最新的版本号，进而我们能够得出以下选择
+
+```mermaid
+graph TD
+D[D v1 1.1.0]
+A[A v1 1.0.0] --> B[B v1 1.0.0]
+A --> C[C v1 1.0.0]
+B --> E
+C --> E[D v1 1.2.1]
+```
+
+### 8.5 算法实现
+
+由于我们采用Go MVS选择算法，算法要求提供：
+1. 版本比较（已提供）
+2. Module Path
+
+我们为此提供类似于Module Path的设计：`{{PackageName}}/{{FromVersion}}`
+
+例如: `DaveGamble/cJSON/1.0.0`
+
+### 8.6 高保真保证
+
+由于Go MVS已经实现了高保真比较，我们可以很顺利就实现了高保真版本选择
+
+## 9. Build模块设计
+
+### 9.1 Build的执行
+为了保证虚拟环境安全，Build执行会被严格限制在某个目录下
+
+像内置的`Download`函数都会默认下载到其指定目录
+
+#### Build缓存
+Build阶段，需要去检查Cache，这个Cache实现是一个接口
+
+```go
+type PackageCache interface {
+        Get(pkg FormulaPackage) (buildInfo BuildInfo, ok bool)
+        Put(pkg FormulaPackage, buildInfo BuildInfo) error
+}
+```
+
+PackageCache在服务端与用户端逻辑并不相同，服务端检查云存储，用户端检查当地存储
+
+如果没有Cache，用户端则发送云端构建请求，并执行`Build()`，服务端则直接执行`Build`
+
+## 10. 开发计划
+
+### 10.1 排期
+
+| 任务 | 预期耗时 | 预期完成 |
+|------|----------|----------|
+| 建立中心化配方仓库和CI系统 | 2个星期 | +14 |
+| 编写FormulaApp基类 | 2个星期 | +14 |
+| 搭建后端环境 | 1个星期 | +7 |
+| 编写LLAR后端 | 1个月 | +22 |
+| 编写LLAR Cli | 2个星期 | +14 |
+
+### 10.2 MVP现状
+
+基于Issue #26，当前MVP实现：https://github.com/MeteorsLiu/llar-mvp
+
+发现的问题：
+1. ixgo export.go与源码导入混用有副作用
+2. 配方如何管理（需要讨论）
+3. 产物输出目录（需要讨论）
+4. 由于`compare`放在配方中会导致其存在版本变化，所以单独拆分出了`_version.gox`配方放`compare`
+5. 产物信息传递
+
+配方仓库：https://github.com/MeteorsLiu/llarformula
+
+## 11. 关键技术决策
+
+### 11.1 为什么选择XGO Classfile作为配方语言
+
+1. **系统命令支持**: GSH提供了调用Bash命令的能力
+2. **抽象机制**: 每个文件都建立在抽象之上，便于实现配方接口
+3. **语法简洁**: 提供丰富的builtin函数和简单语法集
+4. **错误处理**: 特别的错误处理机制解决Go的冗余错误处理
+5. **后端切换**: 支持LLGo后端，实现跨语言处理能力
+
+### 11.2 为什么采用Go MVS算法
+
+1. **高保真构建**: 确保相同输入产生相同输出
+2. **自动冲突解决**: 通过算法自动选择兼容版本
+3. **久经验证**: Go生态系统的成功实践
+4. **可扩展性**: 支持自定义版本比较逻辑
+
+### 11.3 为什么设计惰性构建
+
+1. **资源效率**: 避免预构建所有可能组合的巨大开销
+2. **用户体验**: 无需等待，本地和云端并发构建
+3. **扩展性**: 支持任意数量的构建配置组合
+4. **缓存利用**: 最大化利用已有构建结果
+
+## 12. 安全性与可靠性设计
+
+### 12.1 构建环境安全
+
+#### 容器隔离
+每个构建任务运行在独立容器中，确保：
+- 构建过程互不影响
+- 恶意代码无法影响宿主系统
+- 资源使用受到严格限制
+
+#### 源码验证
+- 使用Hash校验确保源码完整性
+- 支持多种Hash算法（SHA256等）
+- 验证失败时终止构建过程
+
+### 12.2 系统可靠性
+
+#### 高可用性设计
+- MongoDB主从复制确保数据可靠性
+- 多节点构建集群避免单点故障
+- 消息队列确保任务不丢失
+
+#### 故障恢复
+- 构建任务失败自动重试机制
+- 节点故障时任务自动迁移
+- 完整的日志记录便于问题追踪
+
+## 13. 性能优化策略
+
+### 13.1 构建优化
+
+#### 并发构建
+- 多节点并行处理构建任务
+- 依赖图并行构建（无依赖关系的包）
+- 智能调度算法优化资源利用
+
+#### 缓存策略
+- 多层缓存：本地缓存 + 云端缓存
+- 增量构建支持
+- 智能缓存失效策略
+
+### 13.2 网络优化
+
+#### CDN加速
+- 构建产物通过CDN分发
+- 全球节点提供就近下载
+- 智能路由优化传输路径
+
+#### 压缩优化
+- 构建产物自动压缩
+- 网络传输压缩
+- 差分更新减少传输量
+
+---
+
+*本文档基于LLAR项目所有开放issues (#9, #11, #12, #14, #15, #17, #18, #21, #22, #23, #24, #25, #26) 的完整技术分析，全面反映了LLAR的技术架构设计和实现方案。*
