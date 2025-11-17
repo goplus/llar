@@ -231,6 +231,216 @@ sequenceDiagram
 - 自动解决版本冲突，解决构建矩阵冲突
 - 自动解决工具链依赖(TODO)
 
+#### 配方回调函数用户故事
+
+配方维护者通过实现以下回调函数来定义包的构建行为：
+
+##### onSource - 源码下载
+**功能**：定义包的源码获取方式，并实现源码验证逻辑
+
+用户可以：
+- **指定源码下载地址**：从GitHub releases、官方网站或其他源下载特定版本的源码
+- **实现源码验证**：使用Hash校验确保源码完整性和安全性
+- **支持多种下载方式**：HTTP/HTTPS下载、Git克隆、本地文件等
+
+**示例场景**：
+```javascript
+onSource ver => {
+    // 从GitHub下载特定版本源码
+    sourceDir := download("https://github.com/DaveGamble/cJSON/archive/v${ver.Version}.tar.gz")!
+
+    // Hash校验确保源码未被篡改
+    err := hashDirAndCompare(sourceDir, "aaaabbbbccccddddeee")
+
+    return sourceDir, err
+}
+```
+
+##### onVersions - 版本列表管理
+**功能**：返回该包所有可用的版本列表
+
+用户可以：
+- **自动获取版本信息**：从GitHub tags、官方API或其他源自动获取版本列表
+- **版本过滤和转换**：将上游版本格式转换为LLAR标准格式
+- **支持多种版本源**：GitHub、GitLab、官方网站、自定义API等
+
+**示例场景**：
+```javascript
+onVersions => {
+    // 从GitHub获取所有tags
+    tags := fetchTagsFromGitHub("DaveGamble/cJSON")!
+
+    // 转换为版本列表（过滤出符合v1.x.x格式的版本）
+    return githubTagsToVersion("v1", tags)
+}
+```
+
+##### onRequire - 自定义依赖管理
+**功能**：动态定义包的依赖关系，支持从第三方构建系统读取依赖信息
+
+用户可以：
+- **覆盖静态依赖配置**：动态修改versions.json中的依赖关系
+- **集成第三方构建系统**：从Conan、Ninja、CMake等工具读取依赖信息
+- **动态依赖解析**：根据构建矩阵、版本等条件动态调整依赖
+
+**示例场景**：
+```javascript
+onRequire deps => {
+    // 从Ninja构建文件读取依赖图
+    graph := readDepsFromNinja()?
+
+    // 遍历依赖图并更新到LLAR依赖系统
+    graph.visit((parent, dep) => {
+        deps.require(parent, dep)
+    })
+}
+```
+
+**应用场景**：
+- 包已有成熟的依赖管理工具（如Conan、vcpkg）
+- 依赖关系需要根据构建配置动态变化
+- 需要与现有构建系统集成
+
+##### onBuild - 构建执行
+**功能**：定义包的具体构建步骤和产物输出
+
+用户可以：
+- **执行构建命令**：调用CMake、Make、编译器等构建工具
+- **处理构建矩阵**：根据不同的构建配置（arch、os、toolchain等）执行不同的构建逻辑
+- **生成构建产物**：返回包含头文件、库文件、链接参数等信息的Artifact结构
+
+**示例场景**：
+```javascript
+onBuild matrix => {
+    args := []
+
+    // 根据构建矩阵选择工具链
+    if matrix["toolchain"].contains "clang" {
+        args <- "-DTOOLCHAIN=clang"
+    }
+
+    // 根据架构设置编译参数
+    if matrix["arch"] == "arm64" {
+        args <- "-DARCH=ARM64"
+    }
+
+    args <- "."
+
+    // 执行CMake配置和构建
+    cmake args
+    cmake "--build" "."
+
+    // 返回构建产物信息
+    return {
+        Info: {
+            BuildResults: [
+                {LDFlags, "-L/path/to/lib -lcjson"},
+                {CFlags, "-I/path/to/include"},
+            ]
+        }
+    }, nil
+}
+```
+
+**应用场景**：
+- 执行跨平台构建（Linux、macOS、Windows）
+- 处理多种工具链（GCC、Clang、MSVC）
+- 生成不同类型的产物（静态库、动态库、Header-Only）
+
+#### 回调函数调用顺序说明
+
+**重要**：`onRequire`、`onSource` 和 `onBuild` 的调用顺序和执行环境有所不同：
+
+##### onRequire 调用顺序
+- **顺序**：按照依赖树的**正常遍历顺序**（深度优先）
+- **示例**：`cJSON -> zlib -> glibc`，会先调用 `cJSON` 的 `onRequire`，再调用 `zlib` 的，最后是 `glibc`
+- **目的**：收集所有包的依赖关系信息
+
+##### onSource 调用时机
+- **时机**：在每个包的 `onRequire` **之前**执行
+- **原因**：`onRequire` 可能需要解析 CMake、Conan 等构建系统的依赖信息，需要先下载源码
+- **执行环境**：
+  - 会切换到一个**临时工作目录**
+  - 源码下载到该临时目录
+  - 临时目录结构：`{{TempDir}}/{{PackageName}}/{{Version}}/source/`
+
+##### onBuild 调用顺序
+- **顺序**：按照 MVS **BuildList 顺序**（拓扑排序后的构建顺序）
+- **示例**：`cJSON -> zlib -> glibc` 的 BuildList 可能是 `glibc -> zlib -> cJSON`（从底层依赖到上层）
+- **执行环境**：
+  - 复用 `onSource` 下载的源码（同一个临时目录）
+  - 构建在临时目录中进行
+  - 返回的 `Artifact.Dir` 会被**移动**到最终的配方 build 目录：
+    `{{UserCacheDir}}/.llar/formulas/{{owner}}/{{repo}}/build/{{Version}}/{{Matrix}}/`
+
+##### 完整调用流程
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant E as Engine
+    participant F as Formula
+    participant FS as FileSystem
+
+    U->>E: 请求构建 Package@Version
+
+    Note over E,F: 阶段1: 版本验证
+    E->>F: 调用 onVersions()
+    F-->>E: 返回版本列表
+    E->>E: 验证版本存在
+
+    Note over E,FS: 阶段2: 依赖解析（正常顺序）
+    loop 每个包（cJSON -> zlib -> glibc）
+        E->>FS: 创建临时工作目录
+        E->>F: 调用 onSource(version)
+        F->>FS: 下载源码到临时目录
+        F-->>E: 返回源码路径
+
+        E->>F: 调用 onRequire(deps)
+        F->>FS: 读取 CMake/Conan 等依赖信息
+        F-->>E: 更新依赖图
+    end
+
+    E->>E: MVS算法生成 BuildList
+
+    Note over E,FS: 阶段3: 构建执行（BuildList顺序）
+    loop 每个包（glibc -> zlib -> cJSON）
+        E->>F: 调用 onBuild(matrix)
+        F->>FS: 在临时目录中构建
+        F-->>E: 返回 Artifact（临时Dir）
+        E->>FS: 移动 Artifact.Dir 到配方 build 目录
+    end
+
+    E-->>U: 返回构建结果
+```
+
+##### 目录变化示例
+
+**onSource 执行时**（临时目录）：
+```
+/tmp/llar-build-xxx/
+└── DaveGamble/
+    └── cJSON/
+        └── 1.7.18/
+            └── source/
+                ├── CMakeLists.txt
+                ├── cJSON.c
+                └── cJSON.h
+```
+
+**onBuild 执行后**（最终目录）：
+```
+{{UserCacheDir}}/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin/
+├── .cache.json
+├── include/
+│   └── cjson/
+│       └── cJSON.h
+└── lib/
+    ├── libcjson.a
+    └── pkgconfig/
+        └── cjson.pc
+```
+
 #### 构建流程
 总的流程分为两部分：Build -> Test
 
@@ -351,14 +561,56 @@ JSON格式：
 
 #### 获取Package构建信息
 ```bash
-llar build info <package>[@version]
+llar info <PackageName>[@<PackageVersion>]
 ```
 
-参数：
-- `-f` / `--filter`: 正则过滤掉不需要的参数
-- `-m` / `--match`: 正则匹配需要的参数
+输出：返回 `.cache.json` 文件内容
 
-如果二者组合使用，那么先过滤，后匹配
+参数：
+- `-json`: 以JSON格式输出（默认格式化输出）
+
+输出示例（格式化输出）：
+```
+Package: DaveGamble/cJSON
+Version: 1.7.18
+Matrix: x86_64-c-darwin
+Build Time: 2025-01-17T10:30:00Z
+Build Duration: 45.2s
+
+Matrix Details:
+  arch: x86_64
+  lang: c
+  os: darwin
+
+Build Outputs:
+  Dir: /Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin
+  LinkArgs: -L/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin/lib -lcjson -I/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin/include
+
+Source Hash: sha256:aaaabbbbccccdddd...
+Formula Hash: sha256:1111222233334444...
+```
+
+JSON格式输出（-json）：
+```json
+{
+    "packageName": "DaveGamble/cJSON",
+    "version": "1.7.18",
+    "matrix": "x86_64-c-darwin",
+    "matrixDetails": {
+        "arch": "x86_64",
+        "lang": "c",
+        "os": "darwin"
+    },
+    "buildTime": "2025-01-17T10:30:00Z",
+    "buildDuration": "45.2s",
+    "outputs": {
+        "dir": "/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin",
+        "linkArgs": "-L/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin/lib -lcjson -I/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin/include"
+    },
+    "sourceHash": "sha256:aaaabbbbccccdddd...",
+    "formulaHash": "sha256:1111222233334444..."
+}
+```
 
 #### 依赖管理
 
@@ -551,7 +803,7 @@ E --> F[根据Buildlist执行配方构建]
 1. ixgo export.go与源码导入混用有副作用
 2. 配方如何管理（需要讨论）
 3. 产物输出目录（需要讨论）
-4. 由于`compare`放在配方中会导致其存在版本变化，所以单独拆分出了`_version.gox`配方放`compare`
+4. 由于`compare`放在配方中会导致其存在版本变化，所以单独拆分出了`_cmp.gox`配方放`compare`
 5. 产物信息传递
 
 MVP：https://github.com/MeteorsLiu/llar-mvp

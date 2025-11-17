@@ -30,7 +30,7 @@ llar-mvp/
 
 ```mermaid
 graph TD
-A[CLI Commands] --> E[Engine Factory]
+A[CLI Commands] --> E[Engine]
 
 E --> F[Formula Module]
 E --> D[Dependency Module]
@@ -41,7 +41,7 @@ F --> |配方结构| D
 D --> |MVS依赖图| B
 B --> |构建任务| E
 
-subgraph "Engine Factory"
+subgraph "Engine"
     E1[统筹协调]
     E2[模块管理]
     E3[流程控制]
@@ -94,7 +94,7 @@ llar/
 
 ### 模块职责划分
 
-**Engine Factory（工厂模块）**
+**Engine（工厂模块）**
 - 作为总控制器，负责统筹协调各模块
 - 管理模块间的依赖关系和数据传递
 - 控制整体构建流程和生命周期管理
@@ -123,14 +123,14 @@ llar/
 ```
 Build Module --> Dependency Module --> Formula Module
         ↑                                    ↑
-        └───────────── Engine Factory ────────┘
+        └──────────────── Engine ─────────────┘
 ```
 
 ## 核心接口设计
 
-### Engine Factory
+### Engine
 ```go
-type Factory interface {
+type Engine interface {
     Initialize() error
     Build(packageName string, version string) (BuildResult, error)
     Shutdown() error
@@ -152,8 +152,7 @@ type Formula interface {
 }
 
 type FormulaStruct struct {
-    Instance    FormulaInstance
-    Methods     FormulaMethods
+    Instance    FormulaPackage
     Metadata    FormulaMetadata
 }
 
@@ -196,11 +195,11 @@ type Task struct {
 
 ## 数据流向
 
-1. CLI → Factory: 触发Build()
-2. Factory → Formula: 获取比较器和配方结构
-3. Factory → Dependency: 传入versions.json和比较器，获取MVS依赖图
-4. Factory → Builder: 传入依赖图，生成构建任务
-5. Factory → Builder: 执行构建任务，返回结果
+1. CLI → Engine: 触发Build()
+2. Engine → Formula: 获取比较器和配方结构
+3. Engine → Dependency: 传入versions.json和比较器，获取MVS依赖图
+4. Engine → Builder: 传入依赖图，生成构建任务
+5. Engine → Builder: 执行构建任务，返回结果
 
 ## 文档状态
 
