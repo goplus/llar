@@ -158,6 +158,8 @@ Package Name唯一限制就是要求必须是ASCII中的可打印字符，不允
 
 这个限制主要是因为，Package Name作为给用户展示的字符，不应该存在一些看起来乱码的字符
 
+**注意**: Package Name 也被用作 Go MVS 算法中的 Module Path，因此必须保持唯一性和稳定性
+
 ## 6. 构建流程设计
 
 ### 6.1 惰性构建流程
@@ -352,8 +354,8 @@ onBuild matrix => {
 **重要**：`onRequire`、`onSource` 和 `onBuild` 的调用顺序和执行环境有所不同：
 
 ##### onRequire 调用顺序
-- **顺序**：按照依赖树的**正常遍历顺序**（深度优先）
-- **示例**：`cJSON -> zlib -> glibc`，会先调用 `cJSON` 的 `onRequire`，再调用 `zlib` 的，最后是 `glibc`
+- **顺序**：按照依赖树的**深度优先遍历顺序**
+- **示例**：假设依赖关系为 `cJSON` 依赖 `zlib`，`zlib` 依赖 `glibc`，则遍历顺序为：`cJSON -> zlib -> glibc`
 - **目的**：收集所有包的依赖关系信息
 
 ##### onSource 调用时机
@@ -365,8 +367,8 @@ onBuild matrix => {
   - 临时目录结构：`{{TempDir}}/{{PackageName}}/{{Version}}/source/`
 
 ##### onBuild 调用顺序
-- **顺序**：按照 MVS **BuildList 顺序**（拓扑排序后的构建顺序）
-- **示例**：`cJSON -> zlib -> glibc` 的 BuildList 可能是 `glibc -> zlib -> cJSON`（从底层依赖到上层）
+- **顺序**：按照 MVS **BuildList 顺序**（拓扑排序后的构建顺序，从底层依赖到上层）
+- **示例**：假设依赖关系为 `cJSON` 依赖 `zlib`，`zlib` 依赖 `glibc`，则 BuildList 顺序为：`glibc -> zlib -> cJSON`（必须先构建底层依赖）
 - **执行环境**：
   - 复用 `onSource` 下载的源码（同一个临时目录）
   - 构建在临时目录中进行
@@ -389,7 +391,7 @@ sequenceDiagram
     F-->>E: 返回版本列表
     E->>E: 验证版本存在
 
-    Note over E,FS: 阶段2: 依赖解析（正常顺序）
+    Note over E,FS: 阶段2: 依赖解析（深度优先遍历）
     loop 每个包（cJSON -> zlib -> glibc）
         E->>FS: 创建临时工作目录
         E->>F: 调用 onSource(version)
@@ -494,10 +496,12 @@ LLAR Cli是将LLAR与用户连接的"门户"("Gateway")，用户通过LLAR Cli�
 
 ### 7.2 具体设计
 
-#### 预缓存Package
+#### 下载并使用Package
 ```bash
 llar download <package>[@version]
 ```
+
+**功能**: 显式下载包并返回其构建信息，用于一次性获取包的链接参数
 
 参数：
 - `-s` / `--source`: 仅获取源码不需要二进制包（默认仅获取二进制)

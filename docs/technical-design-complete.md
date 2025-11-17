@@ -18,7 +18,10 @@ F --> |比较函数| D
 F --> |配方结构| D
 D --> |MVS依赖图| B
 B --> |构建任务| E
+```
 
+```mermaid
+graph TD
 subgraph "Engine"
     E1[统筹协调]
     E2[模块管理]
@@ -424,14 +427,64 @@ project/
 ```
 
 #### 产物传递设计
+
+**BasicFormula 接口定义**：
+```go
+type BasicFormula interface {
+    // 返回当前PackageName
+    PackageName__0() string
+    // 声明当前LLAR Package Name，格式为：owner/repo
+    PackageName__1(name string)
+    // 返回当前描述
+    Desc__0() string
+    // 添加Package描述
+    Desc__1(desc string)
+    // 返回当前Package Homepage URL
+    Homepage__0() string
+    // 添加Package Homepage URL
+    Homepage__1(homepage string)
+    // 返回当前Package的构建矩阵
+    Matrix__0() matrix.Matrix
+    // 声明Package的构建矩阵
+    Matrix__1(mrx matrix.Matrix)
+    // 返回当前Package的版本
+    Version() version.Version
+}
+```
+
+**运行时结构**（配方中使用）：
 ```go
 type Artifact struct {
-    BasicFormula // 输出时，选填，构建时期自动填入
+    BasicFormula // 嵌入接口，包含包名、版本、矩阵等信息，构建时期自动填入
     Dir  string // 产物输出目录，必填
     Prev *Artifact // 上一个构建产物信息，选填，构建时期自动填入
     Link func(compileArgs []string) []string // 链接回调函数，必填
 }
 ```
+
+**持久化结构**（.cache.json 中存储）：
+```go
+type ArtifactCache struct {
+    PackageName    string            `json:"packageName"`
+    Version        string            `json:"version"`
+    Matrix         string            `json:"matrix"`
+    MatrixDetails  map[string]string `json:"matrixDetails"`
+    BuildTime      string            `json:"buildTime"`
+    BuildDuration  string            `json:"buildDuration"`
+    Outputs        struct {
+        Dir       string `json:"dir"`
+        LinkArgs  string `json:"linkArgs"` // 通过 Link() 回调生成
+    } `json:"outputs"`
+    SourceHash     string `json:"sourceHash"`
+    FormulaHash    string `json:"formulaHash"`
+}
+```
+
+**说明**：
+- `Artifact` 是运行时结构，`BasicFormula` 接口提供包的元信息（包名、版本、矩阵）
+- `Link` 是动态函数，用于在运行时生成链接参数
+- `ArtifactCache` 是序列化结构，`linkArgs` 是预先计算好的字符串
+- 构建完成后，调用 `Link([]string{})` 生成 `linkArgs` 并保存到 `.cache.json`
 
 #### 链接回调链机制
 构建信息由构建列表从上往下传递，每构建完一个产物，会自动将回调函数进行连接：
@@ -587,12 +640,12 @@ DaveGamble/
 ```go
 type Dependency struct {
     PackageName string `json:"name"`
-    Version            string `json:"version"`
+    Version     string `json:"version"`
 }
 
 type PackageDependencies struct {
-    PackageName string `json:"name"`
-    Dependencies []Dependency `json:"deps"`
+    PackageName  string                   `json:"name"`
+    Dependencies map[string][]Dependency  `json:"deps"` // key: fromVersion, value: 依赖列表
 }
 ```
 
@@ -847,14 +900,14 @@ ixgo运行模块是LLAR系统中的核心组件，负责执行XGO配方脚本。
 **重要说明**：回调函数的调用顺序和执行环境：
 
 1. **onSource + onRequire 阶段**（依赖解析）
-   - 按照依赖树的**正常遍历顺序**（深度优先）
-   - 示例：`cJSON -> zlib -> glibc`
+   - 按照依赖树的**深度优先遍历顺序**
+   - 示例：假设 `cJSON` 依赖 `zlib`，`zlib` 依赖 `glibc`，则遍历顺序为 `cJSON -> zlib -> glibc`
    - 每个包先执行 `onSource`（下载源码到临时目录），再执行 `onRequire`（解析依赖）
    - 目的：`onRequire` 可能需要读取 CMake/Conan 等构建文件来获取依赖信息
 
 2. **onBuild 阶段**（构建执行）
-   - 按照 MVS **BuildList 顺序**（拓扑排序）
-   - 示例：BuildList 可能是 `glibc -> zlib -> cJSON`（从底层依赖到上层）
+   - 按照 MVS **BuildList 顺序**（拓扑排序，从底层依赖到上层）
+   - 示例：假设 `cJSON` 依赖 `zlib`，`zlib` 依赖 `glibc`，则 BuildList 顺序为 `glibc -> zlib -> cJSON`（必须先构建底层依赖）
    - 复用 onSource 下载的源码（临时目录）
    - 构建产物移动到配方 build 目录
 
@@ -862,7 +915,7 @@ ixgo运行模块是LLAR系统中的核心组件，负责执行XGO配方脚本。
 
 ```mermaid
 graph TD
-A["初始化：调用配方Main()"] --> B["阶段1: 依赖解析（正常顺序）"]
+A["初始化：调用配方Main()"] --> B["阶段1: 依赖解析（深度优先遍历）"]
 B --> C["遍历每个包: cJSON -> zlib -> glibc"]
 C --> D["创建临时工作目录"]
 D --> E["调用 onSource: 下载源码到临时目录"]
@@ -1199,11 +1252,7 @@ C --> E[D v1 1.2.1]
 
 由于我们采用Go MVS选择算法，算法要求提供：
 1. 版本比较（已提供）
-2. Module Path
-
-我们为此提供类似于Module Path的设计：`{{PackageName}}/{{FromVersion}}`
-
-例如: `DaveGamble/cJSON/1.0.0`
+2. Module Path（使用 PackageName 作为 Module Path）
 
 ### 7.6 高保真保证
 
@@ -1246,7 +1295,7 @@ PackageCache检查本地存储，如果没有Cache则直接执行`Build()`
 1. ixgo export.go与源码导入混用有副作用
 2. 配方如何管理（需要讨论）
 3. 产物输出目录（需要讨论）
-4. 由于`compare`放在配方中会导致其存在版本变化，所以单独拆分出了`_version.gox`配方放`compare`
+4. 由于`compare`放在配方中会导致其存在版本变化，所以单独拆分出了`_cmp.gox`配方放`compare`
 5. 产物信息传递
 
 配方仓库：https://github.com/MeteorsLiu/llarformula

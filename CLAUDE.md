@@ -203,10 +203,26 @@ type Task struct {
 
 ## 文档状态
 
-- ✅ 产品设计文档: `/docs/product-design-complete.md`
-- ✅ 技术设计文档: `/docs/technical-design-complete.md`
+- ✅ 产品设计文档: `/docs/product-design-complete.md` (已修复)
+- ✅ 技术设计文档: `/docs/technical-design-complete.md` (已修复)
 - ✅ ixgo模块文档: `/docs/ixgo-design.md`
 - ✅ MVP代码分析和重构建议
+
+## 最近文档修复 (2025-11-17)
+
+修复了以下关键问题：
+
+### 产品设计文档
+1. 明确了依赖遍历为"深度优先遍历"而非模糊的"正常顺序"
+2. 添加了 PackageName 也作为 Go MVS Module Path 的说明
+3. 优化了 BuildList 顺序的示例说明
+
+### 技术设计文档
+1. **修复 Artifact 结构定义**：添加了 BasicFormula 接口定义，明确了运行时结构和持久化结构的区别
+2. **修复 versions.json 结构定义**：将 Dependencies 类型从 `[]Dependency` 改为 `map[string][]Dependency`
+3. **修复 Go MVS Module Path 设计**：删除了错误的 `{{PackageName}}/{{FromVersion}}` 设计，改为直接使用 PackageName 作为 Module Path
+4. **统一命名**：将 MVP 中的 `_version.gox` 统一为 `_cmp.gox`
+5. **优化依赖解析说明**：明确了深度优先遍历和 BuildList 拓扑排序的区别
 
 ## 下一步工作
 
