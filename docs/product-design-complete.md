@@ -133,7 +133,13 @@ flowchart TD
 
 包是我们定义的一个抽象的概念，其实现载体为配方(Formula)。
 
-一个包存在Package Name， Package ID，Desc（描述），Homepage（原库主页）
+一个包存在以下核心属性：
+- **Package Name**（包名）
+- **Version**（版本）
+- **Desc**（描述）
+- **Homepage**（原库主页）
+- **Build Matrix**（构建矩阵）
+- **Dependencies**（依赖关系）
 
 ### 5.1 LLAR Package Name
 
@@ -145,12 +151,6 @@ flowchart TD
 
 其LLAR Package Name应该为: `DaveGamble/cJSON`
 
-如果是非Github托管的，看起来不存在此类格式，不过，我们依然可以取得这类名称，因为Package Name并无来源限制
-
-举个例子：`https://mumps-solver.org/MUMPS_1.2.tar.gz`
-
-维护者可以给他取 `mumps-solver/MUMPS`
-
 Package Name很重要的一个用途就是将该package以人类可阅读的形式展示给用户，并不用于标识符使用
 
 #### 限制
@@ -159,6 +159,348 @@ Package Name唯一限制就是要求必须是ASCII中的可打印字符，不允
 这个限制主要是因为，Package Name作为给用户展示的字符，不应该存在一些看起来乱码的字符
 
 **注意**: Package Name 也被用作 Go MVS 算法中的 Module Path，因此必须保持唯一性和稳定性
+
+### 5.2 版本管理
+
+#### 版本结构
+```go
+type PackageVersion {
+    Version string  // 原版本号，保持上游格式
+}
+```
+
+#### 版本比较机制
+
+**默认比较算法**：LLAR使用GNU Coreutils的`sort -V`算法（来源于Debian版本比较），这是一种尽可能通用的版本比较算法。
+
+**自定义比较**：对于有特殊版本规则的包，维护者可以通过`_cmp.gox`文件提供自定义比较逻辑：
+
+```
+DaveGamble/
+└── cJSON/
+    ├── versions.json
+    ├── cJSON_cmp.gox       # 自定义版本比较
+    ├── 1.x/
+    │   └── cJSON_llar.gox
+    └── 2.x/
+        └── cJSON_llar.gox
+```
+
+**比较示例**：
+```javascript
+import (
+    semver "github.com/Masterminds/semver/v3"
+)
+
+compare (a, b) => {
+    v1 := semver.NewVersion(a.Ver)!
+    v2 := semver.NewVersion(b.Ver)!
+    return v1.Compare(v2)
+}
+```
+
+### 5.3 构建矩阵（Build Matrix）
+
+构建矩阵用于表达一个包在不同构建配置下的所有可能产物组合。
+
+#### 矩阵结构
+
+矩阵由两部分组成：
+- **require**：必需的编译参数，会向下传播给依赖包（类似Conan的settings）
+- **options**：可选的编译参数，仅限于当前包，不向下传播（类似Conan的options）
+
+```json
+{
+    "matrix": {
+        "require": {
+            "arch": ["x86_64", "arm64"],
+            "lang": ["c", "cpp"],
+            "os": ["linux", "darwin"]
+        },
+        "options": {
+            "zlib": ["zlibON", "zlibOFF"]
+        }
+    }
+}
+```
+
+#### 必需字段
+- **arch**：编译平台（如 x86_64, arm64）
+- **lang**：包的语言（如 c, cpp, py）
+
+#### 可选字段
+- **os**：操作系统（如 linux, darwin, windows）
+- **toolchain**：工具链（如 gcc, clang, msvc）
+
+#### 矩阵组合表示
+
+矩阵组合通过按字母排序的key值，用`-`连接：
+- `require` 组合：`x86_64-c-linux`
+- 加上 `options`：`x86_64-c-linux|zlibON`
+
+**示例**：上述矩阵将产生以下组合：
+```
+x86_64-c-linux
+x86_64-c-darwin
+arm64-c-linux
+arm64-c-darwin
+x86_64-cpp-linux
+x86_64-cpp-darwin
+arm64-cpp-linux
+arm64-cpp-darwin
+```
+
+如果包含options字段，每个组合会进一步扩展：
+```
+x86_64-c-linux|zlibON
+x86_64-c-linux|zlibOFF
+...
+```
+
+#### 矩阵传播规则
+
+```mermaid
+graph TD
+A["Root: x86_64-c-linux|zlibON"] --> B["依赖B: x86_64-c-linux"]
+A --> C["依赖C: x86_64-c-linux|zlibON"]
+C --> D["依赖D: x86_64-c-linux"]
+```
+
+**说明**：
+- `require` 字段必须向下传播，所有依赖包的 `require` 必须是入口包的交集
+- `options` 字段仅在声明了该option的包中生效
+- 如果依赖包的 `require` 不是入口包的交集，系统会终止并报错
+
+### 5.4 包的依赖关系
+
+#### 依赖声明方式
+
+**静态依赖**（通过 `versions.json`）：
+```json
+{
+    "name": "DaveGamble/cJSON",
+    "deps": {
+        "1.0.0": [{
+            "name": "madler/zlib",
+            "version": "1.2.1"
+        }],
+        "1.2.0": [{
+            "name": "madler/zlib",
+            "version": "1.2.3"
+        }]
+    },
+    "replace": {
+        "1.0.0": {
+            "madler/zlib": "1.2.13"
+        }
+    }
+}
+```
+
+**说明**：
+- `deps` 对象的 key（如 `"1.0.0"`）表示 `fromVersion`，即从该版本开始使用对应的依赖配置
+- 查询某个版本的依赖时，会选择小于等于该版本的最大 `fromVersion` 的依赖列表
+- `replace` 对象（可选）也按 `fromVersion` 组织，用于强制替换依赖版本
+
+**动态依赖**（通过 `onRequire` 回调）：
+```javascript
+onRequire deps => {
+    // 从Ninja构建文件读取依赖图
+    graph := readDepsFromNinja()?
+
+    // 更新LLAR依赖系统
+    graph.visit((parent, dep) => {
+        deps.require(parent, dep)
+    })
+
+    // 强制替换依赖版本（类似 go.mod 的 replace）
+    deps.replace("madler/zlib", "1.2.13")
+}
+```
+
+**应用场景**：
+- 包已有成熟的依赖管理工具（如Conan、vcpkg、CMake）
+- 依赖关系需要根据构建配置动态变化
+- 需要与现有构建系统集成
+
+#### 依赖解析顺序
+
+依赖解析采用**深度优先遍历**：
+
+```mermaid
+graph LR
+A[cJSON] --> B[zlib]
+B --> C[glibc]
+```
+
+遍历顺序：`cJSON -> zlib -> glibc`
+
+每个包的处理流程：
+1. 执行 `onSource`（下载源码到临时目录）
+2. 执行 `onRequire`（解析依赖关系）
+
+### 5.5 包的版本选择
+
+#### MVS算法
+
+LLAR采用Go MVS（Minimal Version Selection）算法进行版本选择，确保：
+- **高保真构建**：相同输入产生相同输出
+- **自动冲突解决**：遇到版本冲突时自动选择最新版本
+
+#### 版本冲突解决示例
+
+```mermaid
+graph TD
+A[A 1.0.0] --> B[B 1.0.0]
+A --> C[C 1.0.0]
+B --> D1[D 1.1.0]
+C --> D2[D 1.2.1]
+```
+
+**解决过程**：
+1. 检测到依赖D存在两个版本：1.1.0 和 1.2.1
+2. 使用D包的 `Compare` 方法比较版本
+3. 自动选择较新的版本 1.2.1
+
+**解决后的依赖图**：
+```mermaid
+graph TD
+A[A 1.0.0] --> B[B 1.0.0]
+A --> C[C 1.0.0]
+B --> D[D 1.2.1]
+C --> D
+```
+
+### 5.6 包的存储结构
+
+#### 配方存储
+
+**位置**：`{{UserCacheDir}}/.llar/formulas/`（Git仓库，LLAR自动管理）
+
+**目录结构**：
+```
+{{UserCacheDir}}/.llar/formulas/
+├── .git/                        # Git版本控制
+├── DaveGamble/
+│   └── cJSON/
+│       ├── versions.json        # 依赖管理文件
+│       ├── cJSON_cmp.gox        # 可选：自定义版本比较
+│       ├── go.mod               # 可选：Go依赖（如果配方需要import）
+│       ├── go.sum
+│       ├── 1.x/
+│       │   └── CJSON_llar.gox
+│       └── 2.x/
+│           └── CJSON_llar.gox
+└── madler/
+    └── zlib/
+        ├── versions.json
+        └── ZLIB_llar.gox
+```
+
+#### 产物存储
+
+**位置**：`{{UserCacheDir}}/.llar/formulas/{{owner}}/{{repo}}/build/{{Version}}/{{Matrix}}/`
+
+**目录结构**：
+```
+{{UserCacheDir}}/.llar/formulas/DaveGamble/cJSON/build/
+├── 1.7.18/                      # 版本号目录
+│   ├── x86_64-c-darwin/         # 矩阵组合1
+│   │   ├── .cache.json          # 构建缓存信息
+│   │   ├── include/
+│   │   │   └── cjson/
+│   │   │       └── cJSON.h
+│   │   └── lib/
+│   │       ├── libcjson.a
+│   │       └── pkgconfig/
+│   │           └── cjson.pc
+│   ├── arm64-c-darwin/          # 矩阵组合2
+│   │   ├── .cache.json
+│   │   ├── include/
+│   │   └── lib/
+│   └── x86_64-c-linux/          # 矩阵组合3
+│       ├── .cache.json
+│       ├── include/
+│       └── lib/
+└── 1.7.17/
+    └── x86_64-c-darwin/
+        ├── .cache.json
+        ├── include/
+        └── lib/
+```
+
+#### 构建缓存信息
+
+每个构建产物目录下包含两个元数据文件：
+
+**`.cache.json`** - 构建产物信息：
+```json
+{
+    "packageName": "DaveGamble/cJSON",
+    "version": "1.7.18",
+    "matrix": "x86_64-c-darwin",
+    "matrixDetails": {
+        "arch": "x86_64",
+        "lang": "c",
+        "os": "darwin"
+    },
+    "buildTime": "2025-01-17T10:30:00Z",
+    "buildDuration": "45.2s",
+    "outputs": {
+        "dir": "/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin",
+        "linkArgs": "-L.../lib -lcjson -I.../include"
+    },
+    "sourceHash": "sha256:aaaabbbbccccdddd...",
+    "formulaHash": "sha256:1111222233334444..."
+}
+```
+
+**`.deps-lock.json`** - 依赖锁定信息：
+```json
+{
+    "dependencies": [
+        {
+            "name": "madler/zlib",
+            "version": "1.2.13",
+            "sourceHash": "sha256:eeeeffff11112222...",
+            "formulaHash": "sha256:33334444aaaabbbb..."
+        }
+    ]
+}
+```
+
+**字段说明**：
+- `.cache.json` 记录当前包的构建产物信息
+- `.deps-lock.json` 记录当前包构建时使用的所有依赖版本（MVS解析后的结果）及其 Hash，确保构建的可重现性
+
+### 5.7 包的完整生命周期
+
+```mermaid
+graph TD
+A[用户请求包] --> B{本地是否有配方?}
+B -- 否 --> C[从中心化仓库克隆配方]
+B -- 是 --> D[git pull更新配方]
+C --> E[选择适配版本的配方]
+D --> E
+E --> F[执行onSource: 下载源码]
+F --> G[执行onRequire: 解析依赖]
+G --> H[MVS算法生成BuildList]
+H --> I{本地是否有构建缓存?}
+I -- 是 --> J[返回缓存产物]
+I -- 否 --> K{云端是否有预构建包?}
+K -- 是 --> L[下载云端产物]
+K -- 否 --> M[触发本地+云端并发构建]
+M --> N[执行onBuild: 构建产物]
+N --> O[保存到本地缓存]
+O --> J
+L --> J
+J --> P[返回构建信息给用户]
+```
+
+**说明**：
+- `onVersions` 回调仅在 `llar list` 命令时被调用，用于列出包的所有可用版本
+- `onSource` 会在下载源码时自动检查版本是否存在，如果版本不存在会直接报错
+- 正常构建流程不需要单独的版本检查步骤
 
 ## 6. 构建流程设计
 

@@ -183,12 +183,7 @@ type BuildResult struct {
 表示一次构建的完整结果，包含产物信息和构建元数据。
 
 #### DependencyGraph
-```go
-type DependencyGraph struct {
-    Nodes map[string]PackageVersion      // 依赖节点
-    Edges map[string][]PackageVersion    // 依赖边
-}
-```
+
 
 表示包之间的依赖关系图，用于拓扑排序和构建顺序确定。
 
@@ -249,7 +244,6 @@ sequenceDiagram
 
 #### 错误传递原则
 - 各模块返回标准的Go error类型
-- 使用errors.Wrap添加上下文信息
 - Engine层统一处理和格式化错误信息给用户
 
 #### 错误恢复机制
@@ -359,7 +353,7 @@ matrix {
     }
 }
 
-onBuild matrix => {
+onBuild => {
     args := []
 
     if matrix["toolchain"].contains "clang" {
@@ -627,6 +621,11 @@ DaveGamble/
             "name": "madler/zlib",
             "version": "1.2.3"
         }]
+    },
+    "replace": {
+        "1.0.0": {
+            "madler/zlib": "1.2.13"
+        }
     }
 }
 ```
@@ -635,6 +634,7 @@ DaveGamble/
 - `deps` 对象的 key 值（如 `"1.0.0"`, `"1.2.0"`）表示 `fromVersion`，即**从该版本开始**使用对应的依赖配置
 - 当查询某个版本的依赖时，会选择小于等于该版本的最大 `fromVersion` 对应的依赖列表
 - 例如：查询版本 `1.1.5` 时，会使用 `fromVersion = "1.0.0"` 的依赖配置；查询版本 `1.5.0` 时，会使用 `fromVersion = "1.2.0"` 的依赖配置
+- `replace` 对象（可选）也按 `fromVersion` 组织，用于强制替换依赖版本
 
 #### 结构化定义
 ```go
@@ -645,7 +645,8 @@ type Dependency struct {
 
 type PackageDependencies struct {
     PackageName  string                   `json:"name"`
-    Dependencies map[string][]Dependency  `json:"deps"` // key: fromVersion, value: 依赖列表
+    Dependencies map[string][]Dependency  `json:"deps"`    // key: fromVersion, value: 依赖列表
+    Replace      map[string]map[string]string `json:"replace"` // key: fromVersion, value: {packageName: version}
 }
 ```
 
@@ -737,6 +738,8 @@ type Graph interface {
     Require(packageName string, deps []Dependency)
     // 获取 版本为version的packageName 的依赖
     RequiredBy(packageName string, version version.Version) ([]Dependency, bool)
+    // 强制替换依赖包的版本（类似 go.mod 的 replace）
+    Replace(packageName string, version string)
 }
 ```
 
@@ -847,7 +850,7 @@ A 依赖 B 可能会出现：
 ### 4.6 矩阵的传播
 
 #### 传播规则
-默认情况下，`require` 要求所有包必须是入口`require`子集，而`options`则只接受来自最上层的传入。
+默认情况下，`require` 要求所有包必须是入口`require`交集，而`options`则只接受来自最上层的传入。
 
 #### 传播示例
 
@@ -866,20 +869,20 @@ A --> C["C x86_64-c-linux|zlibON"]
 C --> D["D x86_64-c-linux"]
 ```
 
-非子集：
+非交集：
 ```mermaid
 graph TD
 A[Root x86_64-c-linux] --> |Panic|B["B arm64-c-linux"]
 A --> C[C x86_64-c-linux]
 ```
 
-如果发现非子集情况，将会直接终止配方运行。
+如果发现非交集情况，将会直接终止配方运行。
 
 ### 4.7 矩阵的选择与使用
 
 构建矩阵在实现上可以使用哈希表进行实现。
 
-因此其选择过程就变成了使用哈希进行子集匹配，可以忽略顺序问题，这一实现有点像Go BuildTags，即：一个配方只需要取其适合的配置信息，忽视掉不需要的。
+因此其选择过程就变成了使用哈希进行交集匹配，可以忽略顺序问题，这一实现有点像Go BuildTags，即：一个配方只需要取其适合的配置信息，忽视掉不需要的。
 
 但是，如果出现了某个配方接受到了不预期的`require`，往往只有一种结果：该包无法编译出该平台或者该配置的。此时应该强制panic以让配方编写者知道问题。
 
@@ -1066,6 +1069,33 @@ N -- 否 --> O["构建完成"]
   - `linkArgs`: 链接参数，通过 Artifact.Link() 回调函数生成
 - `sourceHash`: 源码Hash
 - `formulaHash`: 配方Hash
+
+**`.deps-lock.json`格式**：
+```json
+{
+    "deps": [
+        {
+            "name": "madler/zlib",
+            "version": "1.2.13",
+            "sourceHash": "sha256:eeeeffff11112222...",
+            "formulaHash": "sha256:33334444aaaabbbb..."
+        }
+    ]
+}
+```
+
+**结构化定义**：
+```go
+type DependencyLock struct {
+    Dependency          // 嵌入 Dependency 结构体
+    SourceHash   string `json:"sourceHash"`
+    FormulaHash  string `json:"formulaHash"`
+}
+
+type DependencyLockFile struct {
+    Dependencies []DependencyLock `json:"deps"`
+}
+```
 
 #### 6.0.4 完整示例
 
