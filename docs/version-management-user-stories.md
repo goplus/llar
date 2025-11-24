@@ -578,17 +578,22 @@ style F stroke:#DC143C,stroke-width:3px
 **示例**:
 ```json
 {
-    "name": "A",
+    "name": "DaveGamble/cJSON",
     "versions": {
-        "1.0.0": {
-            "dependencies": {
-                "B": {
-                    "version": "1.1.0",
-                    "sourceHash": "e3b0c44298fc1c14...",
-                    "formulaHash": "fed456cba987321"
-                }
+        "1.7.18": [
+            {
+                "name": "madler/zlib",
+                "version": "1.2.13",
+                "sourceHash": "b095afb551dd4efb9ee43543cd547aeb179644d7a51c1f4d1d92b831b2ccd1469d419c7980a1428da66a95aaaa...",
+                "formulaHash": "abc123def456789"
+            },
+            {
+                "name": "other/package",
+                "version": "2.1.0",
+                "sourceHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855...",
+                "formulaHash": "fed456cba987321"
             }
-        }
+        ]
     }
 }
 ```
