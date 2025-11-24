@@ -34,17 +34,18 @@ fromVersion: 1.5.0
 DaveGamble/
 └── cJSON/
     ├── _version.gox              # 版本管理（所有版本共用）
+    ├── deps.json                 # 依赖声明（包级别）
     ├── 1.0.x/                    # fromVersion: 1.0.0
-    │   ├── formula.gox
-    │   └── deps.json
+    │   └── formula.gox
     └── 1.5.x/                    # fromVersion: 1.5.0
-        ├── formula.gox
-        └── deps.json
+        └── formula.gox
 ```
 
-**目录命名规范**：
-- 目录名与 fromVersion 对应
-- 使用通配符表示版本范围（如 `1.0.x`、`2.x`）
+**目录结构说明**：
+- `_version.gox`: 版本管理脚本，所有版本共用
+- `deps.json`: 依赖声明文件，放在**包根目录**下，而非配方目录中
+- `1.0.x/`, `1.5.x/`: 配方目录，目录名与 fromVersion 对应
+- 目录名使用通配符表示版本范围（如 `1.0.x`、`2.x`）
 
 ### 3.3 选择算法
 
@@ -69,11 +70,11 @@ E --> F["使用 1.5.x/ 目录的配方"]
 | 1.7.18    | 1.0.0, 1.5.0    | 1.5.x/  |
 | 2.0.0     | 1.0.0, 1.5.0    | 1.5.x/  |
 
-## 4. deps.json 中的版本范围
+## 4. deps.json 依赖声明
 
-### 4.1 结构
+### 4.1 位置与结构
 
-每个配方目录有自己的 deps.json，定义该配方支持的包版本及其依赖：
+`deps.json` 位于**包根目录**下（与 `_version.gox` 同级），定义该包所有版本的依赖关系：
 
 ```json
 {
@@ -92,6 +93,7 @@ E --> F["使用 1.5.x/ 目录的配方"]
 ```
 
 **说明**：
+- deps.json 放在包根目录，由所有配方目录共享
 - `deps` 的 key 是 **fromVersion**（单一版本号），表示从该版本开始使用此依赖配置
 - 查询时选择 `fromVersion <= 目标版本` 的最大 fromVersion
 
@@ -100,11 +102,16 @@ E --> F["使用 1.5.x/ 目录的配方"]
 ```mermaid
 graph TD
 A["构建 cJSON@1.7.5"] --> B["选择配方: 1.5.x/"]
-B --> C["读取 1.5.x/deps.json"]
+B --> C["读取包根目录的 deps.json"]
 C --> D["匹配包版本 1.7.5"]
 D --> E{"1.7.5 >= fromVersion 1.7.0?"}
 E -- "是" --> F["使用依赖:<br/>zlib >=1.2.8 <2.0.0"]
 ```
+
+**关键点**：
+- 无论选择哪个配方目录（1.0.x/ 或 1.5.x/），都读取同一个 deps.json（包根目录）
+- deps.json 包含该包所有版本的依赖声明
+- 根据目标包版本在 deps.json 中查找匹配的依赖配置
 
 ## 5. 配方代码版本管理
 
@@ -135,12 +142,12 @@ sequenceDiagram
     participant S as 系统
     participant F as 配方仓库
 
-    U->>S: llar build ninja@1.11.0
+    U->>S: llar install ninja@1.11.0
     S->>F: 查找 ninja-build/ninja 配方
     F->>S: 返回配方目录列表:<br/>1.0.x/ (fromVersion: 1.0.0)<br/>1.10.x/ (fromVersion: 1.10.0)
     S->>S: 选择 fromVersion <= 1.11.0 的最大值
-    S->>S: 选中 1.10.x/
-    S->>F: 读取 1.10.x/deps.json
+    S->>S: 选中 1.10.x/formula.gox
+    S->>F: 读取包根目录的 deps.json
     S->>S: 匹配包版本 1.11.0 的依赖
     S->>S: 执行 MVS 解析依赖
     S->>U: 开始构建
@@ -151,25 +158,37 @@ sequenceDiagram
 ```
 ninja-build/
 └── ninja/
-    ├── _version.gox
+    ├── _version.gox          # 版本管理
+    ├── deps.json             # 所有版本的依赖声明
     ├── 1.0.x/
-    │   ├── formula.gox       # 旧构建系统
-    │   └── deps.json
+    │   └── formula.gox       # 旧构建系统
     └── 1.10.x/
-        ├── formula.gox       # 新构建系统（CMake）
-        └── deps.json
+        └── formula.gox       # 新构建系统（CMake）
 ```
+
+**结构说明**：
+- deps.json 在包根目录，包含所有版本的依赖信息
+- 每个配方目录（1.0.x/、1.10.x/）只包含 formula.gox
+- 配方根据 fromVersion 选择，依赖根据包版本从 deps.json 中匹配
 
 ## 7. 与其他模块的关系
 
 ```mermaid
 graph LR
 A["fromVersion 选择"] --> B["确定配方目录"]
-B --> C["读取 deps.json"]
-C --> D["版本范围解析"]
+A --> C["读取包根目录的 deps.json"]
+C --> D["匹配包版本的依赖"]
 D --> E["MVS 算法"]
-E --> F["BuildList"]
+E --> F["versions.json + BuildList"]
+B --> G["执行 formula.gox"]
 ```
+
+**流程说明**：
+1. 根据目标包版本选择合适的配方目录（基于 fromVersion）
+2. 同时读取包根目录的 deps.json
+3. 在 deps.json 中匹配目标包版本的依赖配置
+4. MVS 算法解析依赖并生成 versions.json
+5. 基于 versions.json 生成 BuildList 并执行构建
 
 ## 8. 参考
 

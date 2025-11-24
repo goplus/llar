@@ -56,88 +56,121 @@ style E stroke:#32CD32,stroke-width:3px
 - 不使用 `{{PackageName}}/{{FromVersion}}` 格式
 - 简化设计，与 Go 保持一致
 
-### 3.2 MVS 算法输入
+### 3.2 MVS 算法输入输出
 
 ```mermaid
 graph LR
-A["versions.json<br/>精确版本"] --> B["MVS 算法"]
+A["deps.json<br/>版本范围约束"] --> B["MVS 算法<br/>依赖解析"]
 C["Compare 方法<br/>版本比较"] --> B
-B --> D["BuildList<br/>拓扑排序"]
+D["onVersions<br/>获取可用版本"] --> B
+B --> E["versions.json<br/>精确版本"]
+E --> F["BuildList<br/>拓扑排序"]
 
 style A stroke:#4169E1,stroke-width:3px
 style B stroke:#DC143C,stroke-width:3px
-style D stroke:#32CD32,stroke-width:3px
+style E stroke:#9370DB,stroke-width:3px
+style F stroke:#32CD32,stroke-width:3px
 ```
 
-**输入要求**:
-1. **精确版本**: versions.json 中的确切依赖版本（非版本范围）
+**输入**:
+1. **deps.json**: 包含版本范围约束的依赖声明
 2. **Compare 方法**: 用于版本大小比较
-3. **依赖图**: 所有包的依赖关系
+3. **onVersions**: 获取包的所有可用版本列表
 
-**注意**: 版本范围解析在 MVS 之前完成。
+**输出**:
+1. **versions.json**: MVS 计算后确定的精确版本
+2. **BuildList**: 基于 versions.json 生成的拓扑排序构建列表
 
 ### 3.3 MVS 核心方法
 
 #### 3.3.1 BuildList 方法
 
-**作用**: 生成构建所需的所有依赖包列表（拓扑排序）
+**作用**: MVS 算法的核心方法，完成依赖解析并生成构建列表
 
 ```mermaid
 graph TD
-A["Target: A@1.0.0"] --> B["递归收集所有依赖"]
-B --> C["检测版本冲突"]
-C --> D["选择最小满足版本"]
-D --> E["拓扑排序"]
-E --> F["BuildList:<br/>[B@1.3, C@2.1, A@1.0.0]"]
+A["Target: A@1.0.0"] --> B["通过 Require 递归收集依赖"]
+B --> C["调用 onVersions 获取版本"]
+C --> D["检测版本冲突并选择版本"]
+D --> E["生成 versions.json"]
+E --> F["拓扑排序"]
+F --> G["BuildList:<br/>[B@1.3, C@2.1, A@1.0.0]"]
 
 style A stroke:#FF8C00,stroke-width:3px
+style E stroke:#9370DB,stroke-width:3px
+style G stroke:#32CD32,stroke-width:3px
+```
+
+**示例**:
+```
+输入: A@1.0.0 的 deps.json
+deps.json:
+  A 依赖: B >=1.2 <2.0, C >=2.0 <3.0
+  C 依赖: B >=1.3 <2.0
+
+MVS 过程:
+1. Require(A@1.0.0):
+   - 读取 deps.json: B >=1.2 <2.0
+   - onVersions(B) → [1.2, 1.3, 1.4]
+   - 选择 B@1.4
+
+2. Require(C@2.0):
+   - 读取 deps.json: B >=1.3 <2.0
+   - onVersions(B) → [1.2, 1.3, 1.4]
+   - 选择 B@1.4
+
+3. 检测 B 的冲突: 1.4 vs 1.4 → 无冲突
+
+4. 生成 versions.json（精确版本）
+
+5. 拓扑排序: [B@1.4, C@2.0, A@1.0.0]
+
+输出:
+  - versions.json（精确版本）
+  - BuildList = [B@1.4, C@2.0, A@1.0.0]
+```
+
+#### 3.3.2 Require 方法
+
+**作用**: 查询指定包的直接依赖，解析版本范围并选择版本
+
+```mermaid
+graph TD
+A["Require(A@1.0.0)"] --> B["读取 deps.json"]
+B --> C["获取 A@1.0.0 的依赖范围"]
+C --> D["对每个依赖调用 onVersions"]
+D --> E["选择满足范围的最大版本"]
+E --> F["返回: [B@1.4, C@2.1]"]
+
+style A stroke:#4169E1,stroke-width:3px
 style F stroke:#32CD32,stroke-width:3px
 ```
 
 **示例**:
 ```
 输入: A@1.0.0
-A 依赖: B@1.2, C@2.0
-C 依赖: B@1.3
-
-MVS 过程:
-1. 收集 A 的直接依赖: B@1.2, C@2.0
-2. 收集 C 的依赖: B@1.3
-3. 检测 B 的冲突: 1.2 vs 1.3
-4. 选择更大版本: B@1.3
-5. 拓扑排序: [B@1.3, C@2.0, A@1.0.0]
-
-输出: BuildList = [B@1.3, C@2.0, A@1.0.0]
-```
-
-#### 3.3.2 Require 方法
-
-**作用**: 查询指定包的直接依赖
-
-```mermaid
-graph TD
-A["Require(A@1.0.0)"] --> B["读取 versions.json"]
-B --> C["查找 A@1.0.0 的依赖"]
-C --> D["返回: [B@1.2, C@2.0]"]
-
-style A stroke:#4169E1,stroke-width:3px
-style D stroke:#32CD32,stroke-width:3px
-```
-
-**示例**:
-```
-输入: A@1.0.0
-versions.json 内容:
+deps.json 内容:
 {
     "versions": {
-        "1.0.0": [
-            {"name": "B", "version": "1.2"},
-            {"name": "C", "version": "2.0"}
-        ]
+        "1.0.0": {
+            "deps": [
+                {"name": "B", "constraint": ">=1.2.0 <2.0.0"},
+                {"name": "C", "constraint": ">=2.0.0 <3.0.0"}
+            ]
+        }
     }
 }
 
-输出: [B@1.2, C@2.0]
+处理过程:
+1. B: onVersions 返回 [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+   - 过滤 >=1.2.0 <2.0.0: [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+   - 选择最大: 1.4.0
+
+2. C: onVersions 返回 [2.0.0, 2.1.0]
+   - 过滤 >=2.0.0 <3.0.0: [2.0.0, 2.1.0]
+   - 选择最大: 2.1.0
+
+输出: [B@1.4.0, C@2.1.0]
 ```
 
 ## 4. MVS 算法详细流程
@@ -220,49 +253,63 @@ C → B
 3. 最后构建 A（A 依赖 B 和 C）
 ```
 
-## 5. MVS 与版本范围的集成
+## 5. MVS 作为依赖解析器
 
 ### 5.1 整体流程
 
 ```mermaid
 sequenceDiagram
     participant D as deps.json
-    participant V as versions.json
     participant M as MVS
+    participant O as onVersions
+    participant V as versions.json
     participant B as BuildList
 
-    Note over D: 大范围版本约束
-    D->>V: 版本范围解析
+    Note over D: 版本范围约束
+    D->>M: 读取依赖约束
+    M->>M: 递归收集依赖
+    loop 每个依赖
+        M->>O: 获取可用版本
+        O-->>M: 返回版本列表
+        M->>M: 过滤并选择版本
+    end
+    M->>M: 解决版本冲突
+    M->>V: 生成 versions.json
     Note over V: 精确版本
-    V->>M: 提供精确版本
-    M->>M: 执行 MVS 算法
-    M->>M: 解决冲突
-    M->>M: 拓扑排序
-    M->>B: 生成 BuildList
+    V->>B: 拓扑排序
+    Note over B: 构建顺序
 ```
 
 **关键点**:
-- deps.json 使用版本范围
-- 版本范围解析后得到精确版本
-- MVS 算法基于精确版本执行
-- MVS 输入是精确版本，输出是 BuildList
+- MVS 是依赖解析器，负责将版本范围解析为精确版本
+- 输入是 deps.json（版本范围约束）
+- 通过 onVersions 获取可用版本列表
+- 使用 Compare 方法比较版本并选择合适版本
+- 输出是 versions.json（精确版本）
+- 最后基于 versions.json 生成 BuildList
 
-### 5.2 版本范围解析 vs MVS
+### 5.2 MVS 依赖解析过程
 
-| 阶段 | 输入 | 输出 | 作用 |
-|------|------|------|------|
-| 版本范围解析 | deps.json（范围） | versions.json（精确） | 选择最大版本 |
-| MVS 算法 | versions.json（精确） | BuildList（拓扑） | 解决冲突，排序 |
+| 阶段 | 输入 | 处理 | 输出 | 作用 |
+|------|------|------|------|------|
+| 依赖解析 | deps.json（范围） | MVS + onVersions | versions.json（精确） | 选择版本，解决冲突 |
+| 构建排序 | versions.json（精确） | 拓扑排序 | BuildList（拓扑） | 确定构建顺序 |
 
 **示例**:
 ```
-阶段 1: 版本范围解析
-输入: deps.json → B: >=1.2.0 <2.0.0
-输出: versions.json → B: 1.3.0
+阶段 1: MVS 依赖解析
+输入: deps.json → A 依赖 B: >=1.2.0 <2.0.0
+处理:
+  - 调用 onVersions 获取 B 的版本: [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+  - 过滤满足约束的版本: [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+  - 选择最大版本: 1.4.0
+  - 检查 C 的依赖也需要 B: >=1.3.0 <2.0.0
+  - B 的 1.4.0 同时满足两个约束
+输出: versions.json → B: 1.4.0, C: 2.1.0
 
-阶段 2: MVS 算法
-输入: versions.json → B: 1.3.0, C: 2.0.0
-输出: BuildList → [B@1.3.0, C@2.0.0, A@1.0.0]
+阶段 2: 构建排序
+输入: versions.json → B: 1.4.0, C: 2.1.0
+输出: BuildList → [B@1.4.0, C@2.1.0, A@1.0.0]
 ```
 
 ## 6. 完整示例
@@ -283,53 +330,70 @@ style B2 stroke:#4169E1,stroke-width:3px
 
 ### 6.2 解析过程
 
-**步骤 1: 版本范围解析**
+**步骤 1: MVS 依赖解析**
 
 ```
-A@1.0.0 依赖 B >=1.2.0 <2.0.0
-- 调用 B 的 onVersions
-- 获取: [1.2.11, 1.2.13, 1.3.0, 1.4.0]
-- 过滤 >=1.2.0 <2.0.0: [1.2.11, 1.2.13, 1.3.0, 1.4.0]
-- 选择最大: 1.4.0
+目标: 构建 A@1.0.0
 
-A@1.0.0 依赖 C >=2.0.0 <3.0.0
-- 调用 C 的 onVersions
-- 选择最大: 2.1.0
+1. 读取 A@1.0.0 的 deps.json:
+   - B: >=1.2.0 <2.0.0
+   - C: >=2.0.0 <3.0.0
 
-C@2.1.0 依赖 B >=1.3.0 <2.0.0
-- 调用 B 的 onVersions
-- 过滤 >=1.3.0 <2.0.0: [1.3.0, 1.4.0]
-- 选择最大: 1.4.0
+2. 解析 B 的版本:
+   - 调用 onVersions → [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+   - 过滤 >=1.2.0 <2.0.0 → [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+   - 选择最大 → B@1.4.0
+
+3. 解析 C 的版本:
+   - 调用 onVersions → [2.0.0, 2.1.0]
+   - 过滤 >=2.0.0 <3.0.0 → [2.0.0, 2.1.0]
+   - 选择最大 → C@2.1.0
+
+4. 递归解析 C@2.1.0 的依赖:
+   - 读取 C@2.1.0 的 deps.json
+   - B: >=1.3.0 <2.0.0
+   - 调用 onVersions → [1.2.11, 1.2.13, 1.3.0, 1.4.0]
+   - 过滤 >=1.3.0 <2.0.0 → [1.3.0, 1.4.0]
+   - 选择最大 → B@1.4.0
+
+5. 检测版本冲突:
+   - B: A 要求 1.4.0, C 要求 1.4.0
+   - 无冲突（版本相同）
+
+6. 生成 versions.json:
+   {
+       "name": "A",
+       "versions": {
+           "1.0.0": [
+               {"name": "B", "version": "1.4.0"},
+               {"name": "C", "version": "2.1.0"}
+           ]
+       }
+   }
+   {
+       "name": "C",
+       "versions": {
+           "2.1.0": [
+               {"name": "B", "version": "1.4.0"}
+           ]
+       }
+   }
 ```
 
-**步骤 2: 生成 versions.json**
-
-```json
-{
-    "name": "A",
-    "versions": {
-        "1.0.0": [
-            {"name": "B", "version": "1.4.0"},
-            {"name": "C", "version": "2.1.0"}
-        ]
-    }
-}
-```
-
-**步骤 3: MVS 算法**
+**步骤 2: 生成 BuildList**
 
 ```
-收集依赖:
-- A@1.0.0 → [B@1.4.0, C@2.1.0]
-- C@2.1.0 → [B@1.4.0]
+基于 versions.json 进行拓扑排序:
 
-检测冲突:
-- B: 1.4.0 vs 1.4.0 → 无冲突
+依赖关系:
+- A@1.0.0 → B@1.4.0, C@2.1.0
+- C@2.1.0 → B@1.4.0
+- B@1.4.0 → (无依赖)
 
 拓扑排序:
-- B 无依赖，先构建
-- C 依赖 B，次之
-- A 依赖 B 和 C，最后
+1. B@1.4.0 无依赖，先构建
+2. C@2.1.0 依赖 B，次之
+3. A@1.0.0 依赖 B 和 C，最后
 
 BuildList: [B@1.4.0, C@2.1.0, A@1.0.0]
 ```
@@ -387,10 +451,15 @@ MVS 算法在以下情况调用 Compare:
 
 ```mermaid
 sequenceDiagram
+    participant D as deps.json
     participant M as MVS
+    participant V as versions.json
     participant B as Builder
     participant L as versions-lock.json
 
+    D->>M: 提供依赖约束
+    M->>V: 生成 versions.json
+    V->>M: 拓扑排序
     M->>B: 提供 BuildList
     Note over B: 按 BuildList 顺序构建
     loop 遍历 BuildList
@@ -426,9 +495,11 @@ BuildList: [B@1.3, C@2.1, A@1.0]
 | Module Path | go.mod 中的 module path | PackageName |
 | 版本格式 | semver | 自定义（支持 Compare） |
 | 版本比较 | semver 规则 | Compare 方法 + GNU sort -V |
-| 输入 | go.mod（精确版本） | versions.json（精确版本） |
-| 输出 | BuildList | BuildList |
-| replace 支持 | 是 | 是（在 versions.json 中） |
+| 输入 | go.mod（版本约束）+ go.sum | deps.json（版本范围） |
+| 中间产物 | - | versions.json（精确版本） |
+| 输出 | BuildList | versions.json + BuildList |
+| 版本获取 | GOPROXY | onVersions 回调 |
+| replace 支持 | 是 | 是（在 deps.json 中） |
 
 ## 10. 参考
 

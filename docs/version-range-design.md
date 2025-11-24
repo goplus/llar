@@ -62,6 +62,12 @@ style F stroke:#9370DB,stroke-width:2px,stroke-dasharray: 5 5
 | **支持 replace** | 否 | 是 | 否 |
 | **类比** | - | go.mod | go.sum |
 | **目的** | 减少维护，自动更新 | 用户依赖管理 | 构建可重现 |
+| **包含信息** | 版本范围、依赖关系 | 精确版本号 | 版本号 + sourceHash + **formulaHash** |
+
+**versions-lock.json 特性**：
+- **formulaHash**: 存储配方仓库的 git commit hash
+- **可复现性**: 通过 git 还原配方快照，确保不同时间、环境的构建一致
+- **团队协作**: 团队成员共享 versions-lock.json，使用完全相同的配方版本
 
 ## 3. 核心流程
 
@@ -114,6 +120,79 @@ style B stroke:#DC143C,stroke-width:3px
 style C stroke:#4169E1,stroke-width:3px
 style D stroke:#FF8C00,stroke-width:3px
 ```
+
+### 3.3 可复现性构建：formulaHash 恢复机制
+
+当存在 `versions-lock.json` 时，LLAR 会通过 `formulaHash` 还原配方至指定快照，确保构建的可复现性。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant L as LLAR
+    participant VL as versions-lock.json
+    participant G as Git 配方仓库
+    participant B as 构建系统
+
+    U->>L: llar install package@1.0.0
+    L->>VL: 检查 versions-lock.json
+    alt versions-lock.json 存在
+        VL-->>L: 返回 formulaHash
+        L->>G: git checkout <formulaHash>
+        Note over L,G: 还原配方至锁定的快照
+        G-->>L: 配方代码已还原
+        L->>B: 使用锁定的配方构建
+    else versions-lock.json 不存在
+        L->>G: 使用当前配方代码
+        L->>B: 正常构建流程
+        B->>VL: 生成 versions-lock.json
+        Note over VL: 记录 formulaHash
+    end
+    B-->>U: 构建完成
+```
+
+**流程说明**：
+
+1. **检查锁定文件**：构建前检查是否存在 `versions-lock.json`
+
+2. **恢复配方快照**：
+   - 读取 `versions-lock.json` 中每个依赖的 `formulaHash`
+   - 对每个依赖，使用 `git checkout <formulaHash>` 还原配方代码
+   - 确保使用的配方与构建时完全一致
+
+3. **构建执行**：使用还原后的配方执行构建
+
+4. **验证一致性**：构建完成后验证生成的 Hash 与锁定文件中的一致
+
+**示例场景**：
+
+```
+场景：团队协作，确保所有成员使用相同配方
+
+开发者 A:
+1. 首次构建 cJSON@1.7.18
+2. 生成 versions-lock.json:
+   {
+       "name": "madler/zlib",
+       "version": "1.2.13",
+       "sourceHash": "b095afb551dd...",
+       "formulaHash": "abc123def456"  # 配方 commit hash
+   }
+3. 提交 versions-lock.json 到项目仓库
+
+开发者 B:
+1. 拉取项目代码（包含 versions-lock.json）
+2. 执行 llar install cJSON@1.7.18
+3. LLAR 读取 formulaHash = "abc123def456"
+4. LLAR 执行: git checkout abc123def456
+5. 使用相同的配方版本构建
+6. 得到完全相同的构建结果
+```
+
+**关键点**：
+- **formulaHash** 是配方仓库的 git commit hash
+- 通过 git 机制实现配方版本的精确控制
+- 确保不同时间、不同环境的构建结果一致
+- 即使配方仓库后续更新，也能还原到历史版本
 
 ## 4. 文件结构定义
 
@@ -222,14 +301,14 @@ type VersionsFile struct {
             {
                 "name": "madler/zlib",
                 "version": "1.2.13",
-                "sourceHash": "sha256:aaaabbbb...",
-                "formulaHash": "sha256:11112222..."
+                "sourceHash": "b095afb551dd4efb9ee43543cd547aeb179644d7a51c1f4d1d92b831b2ccd1469d419c7980a1428da66a95aaaa...",
+                "formulaHash": "abc123def456789"
             },
             {
                 "name": "other/package",
                 "version": "2.1.0",
-                "sourceHash": "sha256:ccccdddd...",
-                "formulaHash": "sha256:33334444..."
+                "sourceHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855...",
+                "formulaHash": "fed456cba987321"
             }
         ]
     }
@@ -241,8 +320,8 @@ type VersionsFile struct {
 type DependencyLock struct {
     PackageName   string `json:"name"`           // 包名
     Version       string `json:"version"`        // 锁定的版本号
-    SourceHash    string `json:"sourceHash"`     // 源码 Hash
-    FormulaHash   string `json:"formulaHash"`    // 配方 Hash
+    SourceHash    string `json:"sourceHash"`     // 源码 Hash (默认 sha256)
+    FormulaHash   string `json:"formulaHash"`    // 配方 Git Commit Hash
 }
 
 type VersionLockFile struct {
@@ -258,7 +337,15 @@ type VersionLockFile struct {
 - **上传策略**: 不上传到远程仓库（应添加到 .gitignore）
 - **类比**: 类似 Go 的 go.sum
 - **不包含** `replace` 字段（replace 在 versions.json 中）
-- 用于构建可重现性和安全性验证
+- **用途**:
+  - **构建可重现性**: 通过 `formulaHash` 还原配方快照（详见 [3.3 可复现性构建](#33-可复现性构建formulahash-恢复机制)）
+  - **安全性验证**: 通过 `sourceHash` 验证源码完整性
+  - **版本锁定**: 记录精确的依赖版本，防止意外更新
+- **Hash 字段说明**:
+  - `sourceHash`: 源码哈希值，默认使用 sha256 算法，存储纯哈希值（不含 "sha256:" 前缀）
+  - `formulaHash`: 配方仓库的 git commit hash，存储 commit id（不含 "sha256:" 前缀）
+  - 构建时通过 `git checkout <formulaHash>` 还原配方代码
+  - 确保不同时间、不同环境使用相同的配方版本
 
 ## 5. 版本范围语法
 
@@ -548,8 +635,8 @@ sequenceDiagram
             {
                 "name": "B",
                 "version": "1.2.0",
-                "sourceHash": "sha256:...",
-                "formulaHash": "sha256:..."
+                "sourceHash": "b095afb551dd4efb...",
+                "formulaHash": "abc123def456"
             }
         ]
     }
@@ -599,8 +686,8 @@ sequenceDiagram
             {
                 "name": "B",
                 "version": "1.1.0",
-                "sourceHash": "sha256:...",
-                "formulaHash": "sha256:..."
+                "sourceHash": "e3b0c44298fc1c14...",
+                "formulaHash": "fed456cba987321"
             }
         ]
     }

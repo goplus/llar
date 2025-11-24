@@ -452,7 +452,7 @@ sequenceDiagram
 **流程图**:
 ```mermaid
 graph TD
-A["用户执行 llar download A@1.0.0"] --> B{"versions.json<br/>存在?"}
+A["用户执行 llar install A@1.0.0"] --> B{"versions.json<br/>存在?"}
 B -- "否" --> C["读取 deps.json"]
 C --> D["发现 B 版本范围<br/>>=1.0.0 <2.0.0"]
 D --> E["调用 B 的 onVersions"]
@@ -584,8 +584,8 @@ style F stroke:#DC143C,stroke-width:3px
             "dependencies": {
                 "B": {
                     "version": "1.1.0",
-                    "sourceHash": "sha256:...",
-                    "formulaHash": "sha256:..."
+                    "sourceHash": "e3b0c44298fc1c14...",
+                    "formulaHash": "fed456cba987321"
                 }
             }
         }
