@@ -192,8 +192,9 @@ sequenceDiagram
 **示例场景**:
 - madler/zlib 上游发布 1.3.0
 - 系统读取 _version.gox，调用 onVersions
-- onVersions 从 GitHub tags 获取 `["1.2.11", "1.2.13", "1.3.0"]`
-- 系统自动选择 1.3.0（在范围 `>=1.2.3 <2.0.0` 内的最大版本）
+- onVersions 从 GitHub tags 获取 `["1.2.3", "1.2.11", "1.2.13", "1.3.0"]`
+- 默认模式：系统选择 1.2.3（在范围 `>=1.2.3 <2.0.0` 内的最小版本，已测试）
+- 升级模式 (-u)：系统选择 1.3.0（在范围内的最大版本）
 - 整个过程不需要加载 formula.gox
 
 #### 故事 1.3: 实现 compare 回调自定义版本比较（可选）
@@ -266,7 +267,8 @@ compare (v1, v2) => {
 - `resolve(libraryName)`: 将库名转换为完整的 packageName（如 `"re2c"` → `"skvadrik/re2c"`）
 - `versionsOf(packageName)`: 获取指定包的版本列表（内部加载 _version.gox 并调用 onVersions）
 - `versionList.filter(constraint)`: 根据版本约束过滤版本（内部调用 _version.gox 的 compare）
-- `versionList.max`: 获取最大版本（XGo 自动属性，编译为 `.Max()`）
+- `versionList.min`: 获取最小版本（XGo 自动属性，编译为 `.Min()`）**[默认推荐]**
+- `versionList.max`: 获取最大版本（XGo 自动属性，编译为 `.Max()`）**[升级模式]**
 - `deps.require(packageName, dependencies)`: 填入依赖到依赖图
 
 **示例场景 - Ninja 构建工具**:
@@ -314,8 +316,10 @@ onRequire deps => {
         // 3. 解析库名为完整 packageName
         packageName := resolve("re2c")  // 返回 "skvadrik/re2c"
 
-        // 4. 获取版本列表，过滤并选择最大版本
-        selectedVersion := versionsOf(packageName).filter(">=2.0").max
+        // 4. 获取版本列表，过滤并选择版本
+        // 默认使用 .min 选择最小版本（已测试）
+        // 升级模式使用 .max 选择最大版本
+        selectedVersion := versionsOf(packageName).filter(">=2.0").min
 
         // 5. 填入精确版本
         deps.require("ninja-build/ninja", [{
@@ -446,7 +450,8 @@ sequenceDiagram
 **验收标准**:
 - 检测到 versions.json 不存在时，自动从 deps.json 解析
 - 调用 onVersions 获取可用版本
-- 根据版本范围选择最大版本
+- 默认模式：根据版本范围选择最小版本（已测试）
+- 升级模式 (-u)：根据版本范围选择最大版本（最新）
 - 生成 versions.json 记录确切版本
 
 **流程图**:
@@ -457,12 +462,18 @@ B -- "否" --> C["读取 deps.json"]
 C --> D["发现 B 版本范围<br/>>=1.0.0 <2.0.0"]
 D --> E["调用 B 的 onVersions"]
 E --> F["获取版本列表<br/>[1.0.0, 1.1.0, 1.2.0]"]
-F --> G["选择最大版本<br/>1.2.0"]
-G --> H["生成 versions.json<br/>记录 B@1.2.0"]
-H --> I["继续构建流程"]
+F --> G{"-u 参数?"}
+G -- "否(默认)" --> H["选择最小版本<br/>1.0.0"]
+G -- "是(-u)" --> I["选择最大版本<br/>1.2.0"]
+H --> J["生成 versions.json"]
+I --> J
+J --> K["继续构建流程"]
 
 style C stroke:#FF8C00,stroke-width:3px
-style H stroke:#4169E1,stroke-width:3px
+style G stroke:#9370DB,stroke-width:3px
+style H stroke:#32CD32,stroke-width:3px
+style I stroke:#FFA500,stroke-width:3px
+style J stroke:#4169E1,stroke-width:3px
 ```
 
 #### 故事 2.2: 手动升级依赖版本
@@ -671,7 +682,11 @@ sequenceDiagram
     S->>VF: 调用 onVersions
     VF-->>S: [1.0.0, 1.1.0, 1.2.0]
     S->>VF: 调用 compare 排序（如果有）
-    S->>S: 选择最大版本 1.2.0
+    alt 默认模式
+        S->>S: 选择最小版本 1.0.0
+    else 升级模式 (-u)
+        S->>S: 选择最大版本 1.2.0
+    end
     S->>V: 生成 versions.json
 
     Note over S,MVS: 阶段2：MVS依赖解析
@@ -682,7 +697,7 @@ sequenceDiagram
         OR->>OR: 读取构建系统文件<br/>(CMakeLists.txt等)
         OR->>OR: resolve() + versionsOf()
         Note over OR,VF: versionsOf() 内部加载 _version.gox
-        OR->>OR: filter + max 选择版本
+        OR->>OR: filter + min/max 选择版本<br/>(默认min，-u时max)
         OR-->>MVS: 填入精确依赖版本
     else 配方未实现 onRequire
         MVS->>V: 使用 versions.json 中的依赖

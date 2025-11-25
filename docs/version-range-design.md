@@ -13,6 +13,30 @@
 **根本原因**:
 固定版本依赖缺乏版本范围表达能力,导致配方仓库更新不及时时,用户无法获取上游的修复版本。
 
+## 1.1 版本选择策略
+
+LLAR 采用**保守的最小版本选择**策略：
+
+**默认行为（llar install）**:
+- deps.json 中的版本范围是**指导版本**
+- 默认选择满足约束的**最小版本**（通常是约束下界，如 `>=1.2.0` 选择 `1.2.0`）
+- **原因**: 最小版本在配方提交时已通过 CI 测试，确保可用
+- **好处**: 避免使用未经测试的新版本，降低构建失败风险
+
+**升级模式（llar install -u）**:
+- 使用 `-u` (upgrade) 参数时，选择满足约束的**最大版本**
+- 适用场景：用户主动希望升级到最新版本获取新功能或修复
+- 示例：`llar install -u package@1.0.0`
+
+**版本选择示例**:
+```
+deps.json: ">=1.2.0 <2.0.0"
+可用版本: [1.2.0, 1.2.5, 1.3.0, 1.4.0]
+
+默认: llar install → 选择 1.2.0 (最小版本，已测试)
+升级: llar install -u → 选择 1.4.0 (最大版本，可能未测试)
+```
+
 ## 2. 三层版本管理架构
 
 ### 2.1 架构概览
@@ -82,30 +106,35 @@ B -- "是" --> D["读取 versions.json"]
 C --> E["读取配方仓库的 deps.json"]
 E --> F["发现依赖使用版本范围<br/>例: >=1.2.0 <2.0.0"]
 F --> G["调用依赖包的 onVersions"]
-G --> H["从上游获取所有版本<br/>例: [1.2.11, 1.2.13, 1.3.0]"]
+G --> H["从上游获取所有版本<br/>例: [1.2.0, 1.2.11, 1.2.13, 1.3.0]"]
 H --> I["根据版本范围过滤"]
 I --> J["使用 Compare 方法排序"]
-J --> K["选择最大版本<br/>例: 1.3.0"]
-K --> L["生成 versions.json<br/>记录确切依赖版本"]
+J --> K{"是否使用 -u 参数?"}
+K -- "否(默认)" --> L["选择最小版本<br/>例: 1.2.0"]
+K -- "是(-u)" --> M["选择最大版本<br/>例: 1.3.0"]
+L --> N["生成 versions.json<br/>记录确切依赖版本"]
+M --> N
 
-D --> M{"检查 replace 字段?"}
-M -- "存在" --> N["使用 replace 指定版本<br/>(优先级最高)"]
-M -- "不存在" --> O["使用 versions.json 中的版本"]
+D --> P{"检查 replace 字段?"}
+P -- "存在" --> Q["使用 replace 指定版本<br/>(优先级最高)"]
+P -- "不存在" --> R["使用 versions.json 中的版本"]
 
-L --> P["执行 MVS 算法"]
-N --> P
-O --> P
+N --> S["执行 MVS 算法"]
+Q --> S
+R --> S
 
-P --> Q["生成 BuildList"]
-Q --> R["执行构建"]
-R --> S["生成/更新 versions-lock.json<br/>记录精确版本 + Hash"]
+S --> T["生成 BuildList"]
+T --> U["执行构建"]
+U --> V["生成/更新 versions-lock.json<br/>记录精确版本 + Hash"]
 
 style E stroke:#FF8C00,stroke-width:3px
 style G stroke:#9370DB,stroke-width:3px
-style L stroke:#4169E1,stroke-width:3px
-style M stroke:#4169E1,stroke-width:3px
-style N stroke:#DC143C,stroke-width:3px
-style S stroke:#32CD32,stroke-width:3px
+style K stroke:#9370DB,stroke-width:3px
+style L stroke:#32CD32,stroke-width:3px
+style M stroke:#FFA500,stroke-width:3px
+style N stroke:#4169E1,stroke-width:3px
+style Q stroke:#DC143C,stroke-width:3px
+style V stroke:#32CD32,stroke-width:3px
 ```
 
 ### 3.2 版本选择优先级
@@ -380,9 +409,11 @@ type VersionLockFile struct {
 - 上游 GitHub 仓库发布了新版本 `1.3.0`
 - 配方中的 `onVersions` 函数会从 GitHub API 获取所有 tags
 - 当其他包依赖 `madler/zlib` 且使用版本范围 `>=1.2.0 <2.0.0` 时
-- 系统自动调用 `onVersions` 获取版本列表 `["1.2.11", "1.2.13", "1.3.0"]`
-- 系统过滤出符合范围的版本并选择最大版本 `1.3.0`
-- 用户无需手动更新配方即可获得最新版本
+- 系统自动调用 `onVersions` 获取版本列表 `["1.2.0", "1.2.11", "1.2.13", "1.3.0"]`
+- 系统过滤出符合范围的版本：
+  - **默认模式**: 选择最小版本 `1.2.0` (已测试，稳定)
+  - **升级模式 (-u)**: 选择最大版本 `1.3.0` (可能未测试)
+- 用户可灵活选择稳定版本或最新版本
 
 #### 6.1.2 调用时机
 
@@ -395,14 +426,20 @@ C --> E["调用 onVersions"]
 E --> F["获取所有可用版本"]
 F --> G["过滤版本范围"]
 G --> H["使用 Compare 排序"]
-H --> I["选择最大版本"]
-I --> J["记录到 versions.json"]
-J --> K["继续 MVS 算法"]
-D --> K
+H --> I{"是否使用 -u?"}
+I -- "否" --> J["选择最小版本"]
+I -- "是" --> K["选择最大版本"]
+J --> L["记录到 versions.json"]
+K --> L
+L --> M["继续 MVS 算法"]
+D --> M
 
 style C stroke:#FF8C00,stroke-width:3px
 style D stroke:#4169E1,stroke-width:3px
-style J stroke:#4169E1,stroke-width:3px
+style I stroke:#9370DB,stroke-width:3px
+style J stroke:#32CD32,stroke-width:3px
+style K stroke:#FFA500,stroke-width:3px
+style L stroke:#4169E1,stroke-width:3px
 ```
 
 ### 6.2 onRequire 回调函数（可选）
@@ -422,7 +459,9 @@ style J stroke:#4169E1,stroke-width:3px
 - onSource 已下载源码到临时目录
 - onRequire 解析 CMakeLists.txt，提取依赖 `re2c >= 2.0`
 - 通过 `resolve("re2c")` 将库名转换为完整 packageName `skvadrik/re2c`
-- 通过 `versionsOf(packageName).filter(">=2.0").max` 选择最大版本
+- 通过 `versionsOf(packageName).filter(">=2.0")` 过滤版本，然后：
+  - **默认**: 使用 `.min` 选择最小版本 (已测试)
+  - **升级 (-u)**: 使用 `.max` 选择最大版本 (可能未测试)
 - 填入精确版本到依赖图
 - 当上游包更新 CMakeLists.txt 依赖时，配方无需修改即可自动适配
 
@@ -437,24 +476,30 @@ D --> E["解析构建系统文件<br/>(CMakeLists.txt等)"]
 E --> F["提取依赖及版本约束"]
 F --> G["resolve(libraryName)"]
 G --> H["versionsOf(packageName)"]
-H --> I[".filter().max"]
-I --> J["deps.require(精确版本)"]
+H --> I[".filter(约束)"]
+I --> J{"-u 参数?"}
+J -- "否" --> K[".min 选择最小版本"]
+J -- "是" --> L[".max 选择最大版本"]
+K --> M["deps.require(精确版本)"]
+L --> M
 
-B -- "否" --> K["读取 versions.json"]
-K --> L{"版本在<br/>versions.json?"}
-L -- "是" --> M["返回 versions.json 中的依赖"]
-L -- "否" --> N["读取 deps.json"]
-N --> O["返回 deps.json 中的依赖"]
+B -- "否" --> N["读取 versions.json"]
+N --> O{"版本在<br/>versions.json?"}
+O -- "是" --> P["返回 versions.json 中的依赖"]
+O -- "否" --> Q["读取 deps.json"]
+Q --> R["返回 deps.json 中的依赖"]
 
-J --> P["MVS 继续处理"]
-M --> P
-O --> P
+M --> S["MVS 继续处理"]
+P --> S
+R --> S
 
 style B stroke:#9370DB,stroke-width:3px
 style D stroke:#DC143C,stroke-width:3px
-style I stroke:#32CD32,stroke-width:3px
-style K stroke:#4169E1,stroke-width:3px
-style N stroke:#FF8C00,stroke-width:3px
+style J stroke:#9370DB,stroke-width:3px
+style K stroke:#32CD32,stroke-width:3px
+style L stroke:#FFA500,stroke-width:3px
+style N stroke:#4169E1,stroke-width:3px
+style Q stroke:#FF8C00,stroke-width:3px
 ```
 
 #### 6.2.3 系统提供的接口
@@ -471,7 +516,8 @@ style N stroke:#FF8C00,stroke-width:3px
 - `versionList.filter(constraint string) VersionList`: 根据版本约束过滤版本
   - 内部调用配方的 `Compare()` 方法进行版本比较
 
-- `versionList.max`: XGo 自动属性，获取最大版本（编译为 `.Max()`）
+- `versionList.min`: XGo 自动属性，获取最小版本（编译为 `.Min()`）**[默认推荐]**
+- `versionList.max`: XGo 自动属性，获取最大版本（编译为 `.Max()`）**[升级模式]**
 
 - `readFile(path string) string`: 读取文件内容
 
@@ -509,8 +555,10 @@ onRequire deps => {
         // 3. 解析库名为完整 packageName
         packageName := resolve("re2c")  // "skvadrik/re2c"
 
-        // 4. 获取版本列表、过滤并选择最大版本
-        selectedVersion := versionsOf(packageName).filter(">=2.0").max
+        // 4. 获取版本列表、过滤并选择版本
+        // 默认使用 .min 选择最小版本（已测试）
+        // 升级模式使用 .max 选择最大版本
+        selectedVersion := versionsOf(packageName).filter(">=2.0").min
 
         // 5. 填入精确版本
         deps.require("ninja-build/ninja", [{
@@ -549,7 +597,9 @@ onRequire deps => {
 
 **注意**:
 - 如果未实现 onRequire，系统会回退到使用 versions.json 或 deps.json
-- onRequire 内部需要将版本约束转换为精确版本，通过 `versionsOf().filter().max` 完成
+- onRequire 内部需要将版本约束转换为精确版本：
+  - **默认**: 通过 `versionsOf().filter().min` 选择最小版本（已测试）
+  - **升级 (-u)**: 通过 `versionsOf().filter().max` 选择最大版本
 - 配方之间不直接依赖，通过 `versionsOf()` 获取版本信息
 
 ### 6.3 回调函数流程对比
@@ -563,8 +613,13 @@ sequenceDiagram
 
     Note over S: 版本范围解析阶段
     S->>V: 调用 onVersions()
-    V-->>S: ["1.2.11", "1.2.13", "1.3.0"]
-    S->>S: 过滤 + 排序 + 选择最大版本
+    V-->>S: ["1.2.0", "1.2.11", "1.2.13", "1.3.0"]
+    S->>S: 过滤 + 排序
+    alt 默认模式
+        S->>S: 选择最小版本 (1.2.0)
+    else 升级模式 (-u)
+        S->>S: 选择最大版本 (1.3.0)
+    end
     S->>S: 生成 versions.json
 
     Note over S: MVS 算法阶段
@@ -583,16 +638,16 @@ sequenceDiagram
 
 ## 7. 示例场景
 
-### 7.1 场景一:配方更新不及时，系统自动选择最新版本
+### 7.1 场景一：默认模式选择稳定版本
 
-**问题**:
-- 包 A 1.0.0 依赖包 B 1.0.0 (固定版本)
-- B 推出修复版本 1.2.0
-- 配方仓库未及时更新
+**背景**:
+- 包 A 1.0.0 在 deps.json 中依赖包 B `>=1.0.0 <2.0.0`
+- B 的可用版本: 1.0.0 (配方测试通过), 1.1.0, 1.2.0 (最新，未测试)
+- 配方仓库在提交时测试了 B 1.0.0
 
-**解决方案（三层架构）**:
+**解决方案（默认模式 - 保守策略）**:
 
-**步骤1**: 配方维护者在 deps.json 中使用大范围约束
+**步骤1**: 配方维护者在 deps.json 中使用版本范围
 ```json
 {
     "name": "A",
@@ -605,11 +660,11 @@ sequenceDiagram
 }
 ```
 
-**步骤2**: 用户首次构建时，系统自动生成 versions.json
+**步骤2**: 用户首次构建时（默认模式），系统生成 versions.json
 - 系统读取 deps.json 中的版本范围 `>=1.0.0 <2.0.0`
 - 调用 B 的 `onVersions` 获取所有可用版本
 - 获取到 `[1.0.0, 1.1.0, 1.2.0]`
-- 自动选择最大版本 1.2.0
+- **默认选择最小版本 1.0.0**（配方提交时已测试，稳定可靠）
 - 生成 versions.json:
 
 ```json
@@ -619,12 +674,19 @@ sequenceDiagram
         "1.0.0": [
             {
                 "name": "B",
-                "version": "1.2.0"
+                "version": "1.0.0"
             }
         ]
     }
 }
 ```
+
+**步骤2b**: 如果用户想升级到最新版本（升级模式）
+```bash
+llar install -u A@1.0.0
+```
+- 使用 `-u` 参数时，选择最大版本 1.2.0
+- 生成的 versions.json 会包含 B@1.2.0
 
 **步骤3**: 构建完成后生成 versions-lock.json
 ```json
@@ -634,7 +696,7 @@ sequenceDiagram
         "1.0.0": [
             {
                 "name": "B",
-                "version": "1.2.0",
+                "version": "1.0.0",
                 "sourceHash": "b095afb551dd4efb...",
                 "formulaHash": "abc123def456"
             }
@@ -644,9 +706,11 @@ sequenceDiagram
 ```
 
 **结果**:
-- 用户无需等待配方更新，即可自动使用 B 1.2.0
+- **默认模式**: 使用 B 1.0.0（已测试，稳定可靠）
+- **升级模式 (-u)**: 使用 B 1.2.0（最新版本，可能未测试）
 - versions.json 记录了用户项目使用的确切版本
-- versions-lock.json 确保构建可重现
+- versions-lock.json 记录构建快照，确保可重现
+- 用户可根据需求灵活选择稳定版本或最新版本
 
 ### 7.2 场景二:用户手动固定版本（使用 replace）
 
