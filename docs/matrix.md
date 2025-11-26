@@ -169,45 +169,47 @@ matrix {
         "ssl": ["sslON", "sslOFF"],
         "debug": ["debugON", "debugOFF"]
     },
-    Default: {
-        "arch": ["x86_64", "arm64"],    // 默认测试两个主流架构
-        "lang": ["c"],                   // 默认只测试 C 语言
-        "os": ["linux"],                 // 默认只测试 Linux
-        "zlib": ["zlibOFF"],            // 默认只测试关闭状态
+    DefaultOptions: {
+        "zlib": ["zlibOFF"],    // 默认只测试关闭状态
         "ssl": ["sslOFF"],
         "debug": ["debugOFF"]
     }
 }
 ```
 
-**Default 字段说明**：
-- 采用与 Require/Options 相同的数组结构，但组合数量有限
-- 定义最常用、最稳定的配置组合子集
-- 上例中 Default 组合数：2 × 1 × 1 × 1 × 1 × 1 = **2 种组合**
-  - `x86_64-c-linux|zlibOFF-sslOFF-debugOFF`
-  - `arm64-c-linux|zlibOFF-sslOFF-debugOFF`
+**DefaultOptions 字段说明**：
+- 只包含 Options 字段的子集，定义需要全量测试的默认 options 组合
+- **Require 字段的所有组合默认都会参与测试**
+- DefaultOptions 采用与 Options 相同的数组结构，但组合数量有限
+- 上例中：
+  - Require 全量组合：2 × 2 × 2 = **8 种组合**（arch × lang × os）
+  - DefaultOptions 组合：1 × 1 × 1 = **1 种组合**（全部 OFF）
+  - 默认矩阵总组合数：8 × 1 = **8 种组合**
 - 这些默认组合始终进行**全量测试**，确保核心功能稳定
-- 其他非默认组合的测试策略：
-  - 完整矩阵 < 5000 种：全量测试
-  - 完整矩阵 ≥ 5000 种：配对测试
 
 **测试策略**：
 
 1. **默认组合（Full Testing）**：
    ```
-   默认矩阵组合（2 种）：
+   默认矩阵组合（8 种）：
    - x86_64-c-linux|zlibOFF-sslOFF-debugOFF
+   - x86_64-c-darwin|zlibOFF-sslOFF-debugOFF
+   - x86_64-cpp-linux|zlibOFF-sslOFF-debugOFF
+   - x86_64-cpp-darwin|zlibOFF-sslOFF-debugOFF
    - arm64-c-linux|zlibOFF-sslOFF-debugOFF
+   - arm64-c-darwin|zlibOFF-sslOFF-debugOFF
+   - arm64-cpp-linux|zlibOFF-sslOFF-debugOFF
+   - arm64-cpp-darwin|zlibOFF-sslOFF-debugOFF
    ```
    对所有默认组合进行完整的功能测试、集成测试、性能测试。
 
-2. **非默认组合测试策略**：
+2. **非默认 Options 组合测试策略**：
 
-   完整矩阵组合数：2 × 2 × 2 × 2 × 2 × 2 = **64 种组合**
-   默认矩阵组合数：2 × 1 × 1 × 1 × 1 × 1 = **2 种组合**（全量测试）
-   剩余组合：**62 种组合**
+   完整矩阵组合数：(2 × 2 × 2) × (2 × 2 × 2) = 8 × 8 = **64 种组合**
+   默认矩阵组合数：8 × 1 = **8 种组合**（全量测试）
+   剩余 Options 组合：8 × 7 = **56 种组合**
 
-   **判断**：62 < 5000，对剩余 62 种组合进行**全量测试**
+   **判断**：56 < 5000，对剩余 56 种组合进行**全量测试**
 
    总测试数：**64 种组合**（全部全量测试）
 
@@ -283,18 +285,18 @@ matrix {
 
 ```
 (arch, os) 的 4 种组合：
-  ✓ (x86_64, linux)  → 组合1, 5
-  ✓ (x86_64, darwin) → 组合2
-  ✓ (arm64, linux)   → 组合3, 6
-  ✓ (arm64, darwin)  → 组合4
+  (x86_64, linux)  → 组合1, 5
+  (x86_64, darwin) → 组合2
+  (arm64, linux)   → 组合3, 6
+  (arm64, darwin)  → 组合4
 
 (arch, zlib) 的 4 种组合：
-  ✓ (x86_64, ON)     → 组合1
-  ✓ (x86_64, OFF)    → 组合2, 5
-  ✓ (arm64, ON)      → 组合4, 6
-  ✓ (arm64, OFF)     → 组合3
+  (x86_64, ON)     → 组合1
+  (x86_64, OFF)    → 组合2, 5
+  (arm64, ON)      → 组合4, 6
+  (arm64, OFF)     → 组合3
 
-... 其他 4 种配对同理，全部覆盖 ✓
+... 其他 4 种配对同理，全部覆盖
 ```
 
 **效果对比**：
@@ -329,10 +331,7 @@ matrix {
         "filesystem": ["ON", "OFF"]
         // ... 共 10 个 options
     },
-    Default: {
-        "arch": ["x86_64", "arm64"],
-        "os": ["linux"],
-        "compiler": ["gcc"],
+    DefaultOptions: {
         "shared": ["static"],
         "zlib": ["OFF"],
         "bzip2": ["OFF"],
@@ -346,8 +345,10 @@ matrix {
     }
 }
 
-完整矩阵：3 × 3 × 3 × 2^10 = 27 × 1024 = 27,648 种组合
-默认矩阵：2 × 1 × 1 × 1^10 = 2 种组合
+完整矩阵：(3 × 3 × 3) × 2^10 = 27 × 1024 = 27,648 种组合
+Require 全量组合：3 × 3 × 3 = 27 种
+DefaultOptions 组合：1^10 = 1 种
+默认矩阵：27 × 1 = 27 种组合
 ```
 
 **测试策略**：
@@ -355,15 +356,18 @@ matrix {
 完整矩阵组合数：27,648 种
 判断：27,648 > 5000，需要采用配对测试
 
-默认组合（全量测试）：2 个组合
+默认组合（全量测试）：27 个组合
   - x86_64-linux-gcc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
-  - arm64-linux-gcc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - x86_64-linux-clang|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - x86_64-linux-msvc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - x86_64-darwin-gcc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - ... （共 27 种 Require 组合）
 
-非默认组合（配对测试）：27,646 种组合
+非默认 Options 组合（配对测试）：27 × (1024 - 1) = 27,621 种组合
   配对测试只需：约 100-150 个组合
 
-总测试数：约 102-152 个组合
-节省比例：(27,648 - 152) / 27,648 = 99.45%
+总测试数：27 + 100-150 = 127-177 个组合
+节省比例：(27,648 - 177) / 27,648 = 99.36%
 ```
 
 **配对测试工具**：
@@ -871,6 +875,123 @@ onBuild matrix => {
     return artifact, nil
 }
 ```
+
+#### 过滤无效矩阵组合
+
+在某些情况下，矩阵的笛卡尔积会产生一些无效的组合，需要将其剔除。
+
+**典型场景**：
+
+某些架构和操作系统的组合是不支持的：
+- `os: darwin, arch: mips` 无效（macOS 不支持 MIPS 架构）
+- `os: linux, arch: mips` 有效（Linux 支持 MIPS 架构）
+- `os: windows, arch: riscv` 无效（Windows 不支持 RISC-V 架构）
+
+**定义 filter 函数**：
+
+```javascript
+matrix {
+    Require: {
+        "arch": ["x86_64", "arm64", "mips", "riscv"],
+        "os": ["linux", "darwin", "windows"]
+    },
+    Options: {
+        "shared": ["static", "dynamic"]
+    }
+}
+
+// 过滤无效的矩阵组合
+filter matrix => {
+    // macOS 不支持 MIPS 和 RISC-V
+    if matrix["os"] == "darwin" && (matrix["arch"] == "mips" || matrix["arch"] == "riscv") {
+        return false  // 剔除该组合
+    }
+
+    // Windows 不支持 RISC-V
+    if matrix["os"] == "windows" && matrix["arch"] == "riscv" {
+        return false
+    }
+
+    // 其他组合都是有效的
+    return true  // 保留该组合
+}
+```
+
+**Filter 语义**：
+- `return true`：保留该矩阵组合
+- `return false`：剔除该矩阵组合
+- filter 函数接收 `matrix` 参数，包含当前组合的所有字段值
+- filter 在矩阵组合生成后、测试策略应用前执行
+
+**组合生成流程**：
+
+```
+1. 生成笛卡尔积
+   原始组合数：4 × 3 × 2 = 24 种
+
+2. 应用 filter 过滤
+   过滤掉的组合：
+   - darwin-mips-*（2 种）
+   - darwin-riscv-*（2 种）
+   - windows-riscv-*（2 种）
+
+   剩余有效组合：24 - 6 = 18 种
+
+3. 应用测试策略
+   根据剩余 18 种组合应用全量测试或配对测试
+```
+
+**完整示例**：
+
+```javascript
+matrix {
+    Require: {
+        "arch": ["x86_64", "arm64", "mips"],
+        "os": ["linux", "darwin", "windows"],
+        "compiler": ["gcc", "clang", "msvc"]
+    },
+    Options: {
+        "shared": ["static", "dynamic"]
+    },
+    DefaultOptions: {
+        "shared": ["static"]
+    }
+}
+
+filter matrix => {
+    // macOS 不支持 MIPS
+    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
+        return false
+    }
+
+    // Windows 只支持 MSVC 编译器
+    if matrix["os"] == "windows" && (matrix["compiler"] == "gcc" || matrix["compiler"] == "clang") {
+        return false
+    }
+
+    // Linux 不支持 MSVC
+    if matrix["os"] == "linux" && matrix["compiler"] == "msvc" {
+        return false
+    }
+
+    return true
+}
+
+// 组合计算：
+// 原始组合：3 × 3 × 3 × 2 = 54 种
+// 过滤后剔除：
+//   - darwin-mips-* 剔除 6 种（3 种 compiler × 2 种 options）
+//   - windows-gcc-* 剔除 6 种
+//   - windows-clang-* 剔除 6 种
+//   - linux-msvc-* 剔除 6 种
+// 有效组合：54 - 24 = 30 种
+```
+
+**最佳实践**：
+- Filter 应该只过滤确实无法构建的组合
+- 避免过度过滤，除非确认该组合在技术上不可行
+- Filter 逻辑应该清晰明确，便于维护
+- Filter 中可以访问 Require 和 Options 的所有字段
 
 ### 8.3 矩阵访问接口
 

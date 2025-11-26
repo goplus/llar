@@ -9,6 +9,7 @@
 **配方的作用**：
 - 定义包的基本信息（名称、版本、描述、主页）
 - 声明构建矩阵（build matrix）
+- 实现矩阵过滤逻辑（过滤无效组合）
 - 实现源码下载逻辑
 - 实现依赖管理逻辑
 - 实现构建执行逻辑
@@ -173,6 +174,10 @@ func (f *FormulaApp) OnRequire(fn func(deps.Graph))
 // OnBuild - 注册构建回调
 // 参数: func() (*Artifact, error)
 func (f *FormulaApp) OnBuild(fn func() (*Artifact, error))
+
+// Filter - 注册矩阵过滤回调
+// 参数: func(matrix map[string]string) bool
+func (f *FormulaApp) Filter(fn func(matrix map[string]string) bool)
 ```
 
 ### 3.3 XGO Classfile 中的使用
@@ -198,6 +203,10 @@ onSource (ver, lockSourceHash) => {
 
 onRequire deps => {
     // 实现依赖管理逻辑（可选）
+}
+
+filter matrix => {
+    // 实现矩阵过滤逻辑（可选）
 }
 
 onBuild => {
@@ -398,6 +407,156 @@ type Graph interface {
 - 处理多种工具链（GCC、Clang、MSVC）
 - 生成不同类型的产物（静态库、动态库、Header-Only）
 
+### 4.4 filter - 过滤无效矩阵组合（可选）
+
+**功能**: 过滤掉矩阵笛卡尔积中无效的组合
+
+**是否必需**: **可选**。如果未实现，系统将使用全部矩阵组合
+
+**签名**: `filter matrix => { return true/false }`
+
+**必要性**：
+在某些情况下，矩阵的笛卡尔积会产生一些无效的组合，需要将其剔除。
+
+**典型场景**：
+
+某些架构和操作系统的组合是不支持的：
+- `os: darwin, arch: mips` 无效（macOS 不支持 MIPS 架构）
+- `os: linux, arch: mips` 有效（Linux 支持 MIPS 架构）
+- `os: windows, arch: riscv` 无效（Windows 不支持 RISC-V 架构）
+
+**基本示例**：
+
+```javascript
+matrix {
+    Require: {
+        "arch": ["x86_64", "arm64", "mips", "riscv"],
+        "os": ["linux", "darwin", "windows"]
+    },
+    Options: {
+        "shared": ["static", "dynamic"]
+    }
+}
+
+// 过滤无效的矩阵组合
+filter matrix => {
+    // macOS 不支持 MIPS 和 RISC-V
+    if matrix["os"] == "darwin" && (matrix["arch"] == "mips" || matrix["arch"] == "riscv") {
+        return false  // 剔除该组合
+    }
+
+    // Windows 不支持 RISC-V
+    if matrix["os"] == "windows" && matrix["arch"] == "riscv" {
+        return false
+    }
+
+    // 其他组合都是有效的
+    return true  // 保留该组合
+}
+```
+
+**Filter 语义**：
+- `return true`：保留该矩阵组合
+- `return false`：剔除该矩阵组合
+- filter 函数接收 `matrix` 参数，包含当前组合的所有字段值
+- filter 在矩阵组合生成后、测试策略应用前执行
+
+**组合生成流程**：
+
+```
+1. 生成笛卡尔积
+   原始组合数：4 × 3 × 2 = 24 种
+
+2. 应用 filter 过滤
+   过滤掉的组合：
+   - darwin-mips-* (2 种)
+   - darwin-riscv-* (2 种)
+   - windows-riscv-* (2 种)
+
+   剩余有效组合：24 - 6 = 18 种
+
+3. 应用测试策略
+   根据剩余 18 种组合应用全量测试或配对测试
+```
+
+**完整配方示例**：
+
+```javascript
+packageName "example/cross-platform-lib"
+fromVersion "1.0.0"
+desc "A cross-platform library"
+homepage "https://github.com/example/lib"
+
+// 声明构建矩阵
+matrix {
+    Require: {
+        "arch": ["x86_64", "arm64", "mips"],
+        "os": ["linux", "darwin", "windows"],
+        "compiler": ["gcc", "clang", "msvc"]
+    },
+    Options: {
+        "shared": ["static", "dynamic"]
+    }
+}
+
+// 过滤无效组合
+filter matrix => {
+    // macOS 不支持 MIPS
+    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
+        return false
+    }
+
+    // Windows 只支持 MSVC 编译器
+    if matrix["os"] == "windows" && (matrix["compiler"] == "gcc" || matrix["compiler"] == "clang") {
+        return false
+    }
+
+    // Linux 不支持 MSVC
+    if matrix["os"] == "linux" && matrix["compiler"] == "msvc" {
+        return false
+    }
+
+    return true
+}
+
+// 源码下载
+onSource (ver, lockSourceHash) => {
+    download("https://github.com/example/lib/v${ver.Version}.tar.gz")!
+    actualHash := readHashFromFile("hash.txt")!
+
+    if lockSourceHash != "" && actualHash != lockSourceHash {
+        return "", errors.New("hash 不匹配")
+    }
+
+    return actualHash, nil
+}
+
+// 构建逻辑
+onBuild => {
+    args := []
+
+    // 根据 filter 后的有效矩阵组合进行构建
+    if matrix["compiler"] == "gcc" {
+        args <- "-DCMAKE_C_COMPILER=gcc"
+    } else if matrix["compiler"] == "clang" {
+        args <- "-DCMAKE_C_COMPILER=clang"
+    } else if matrix["compiler"] == "msvc" {
+        args <- "-DCMAKE_C_COMPILER=cl"
+    }
+
+    cmake args
+    cmake "--build" "."
+
+    return artifact, nil
+}
+```
+
+**最佳实践**：
+- Filter 应该只过滤确实无法构建的组合
+- 避免过度过滤，除非确认该组合在技术上不可行
+- Filter 逻辑应该清晰明确，便于维护
+- Filter 中可以访问 Require 和 Options 的所有字段
+
 ## 5. 回调函数调用流程
 
 ### 5.1 完整调用时序
@@ -425,8 +584,15 @@ sequenceDiagram
 
     E->>E: MVS算法生成 BuildList
 
-    Note over E,FS: 阶段2: 构建执行（BuildList顺序）
+    Note over E,FS: 阶段2: 矩阵生成与过滤
     loop 每个包（glibc -> zlib -> cJSON）
+        E->>E: 生成矩阵笛卡尔积
+        E->>F: 调用 filter(matrix)
+        F-->>E: 返回有效矩阵组合
+    end
+
+    Note over E,FS: 阶段3: 构建执行（BuildList顺序 × 矩阵组合）
+    loop 每个包的每个矩阵组合
         E->>F: 调用 onBuild
         F->>FS: 在临时目录中构建
         F-->>E: 返回 Artifact（临时Dir）
@@ -954,7 +1120,7 @@ onBuild => {
 1. **文件分离**：
    - `{{repo}}_version.gox`: 轻量级，包含 onVersions 和 compare
    - `deps.json`: 使用版本范围约束（如 `>=1.2.0 <2.0.0`）
-   - `{{repo}}_llar.gox`: 重量级，包含 onSource、onRequire（可选）、onBuild
+   - `{{repo}}_llar.gox`: 重量级，包含 onSource、onRequire（可选）、filter（可选）、onBuild
 
 2. **基本信息声明**：使用 `packageName`、`desc`、`homepage`、`fromVersion` 声明包信息
 
@@ -964,6 +1130,7 @@ onBuild => {
    - `onVersions`（{{repo}}_version.gox）：从上游获取所有可用版本
    - `onSource`（{{repo}}_llar.gox）：下载并验证源码
    - `onRequire`（{{repo}}_llar.gox，可选）：动态解析依赖
+   - `filter`（{{repo}}_llar.gox，可选）：过滤无效矩阵组合
    - `onBuild`（{{repo}}_llar.gox）：执行构建并返回 Artifact
 
 5. **版本范围解析**：
@@ -1028,7 +1195,149 @@ onBuild => {
 }
 ```
 
-### 10.3 错误处理
+### 10.3 过滤无效矩阵组合
+
+在某些情况下，矩阵的笛卡尔积会产生一些无效的组合，需要使用 `filter` 函数将其剔除。
+
+**典型场景**：
+
+某些架构和操作系统的组合是不支持的：
+- `os: darwin, arch: mips` 无效（macOS 不支持 MIPS 架构）
+- `os: linux, arch: mips` 有效（Linux 支持 MIPS 架构）
+
+**定义 filter 函数**：
+
+```javascript
+// 声明构建矩阵
+matrix {
+    Require: {
+        "arch": ["x86_64", "arm64", "mips", "riscv"],
+        "os": ["linux", "darwin", "windows"]
+    },
+    Options: {
+        "shared": ["static", "dynamic"]
+    }
+}
+
+// 过滤无效的矩阵组合
+filter matrix => {
+    // macOS 不支持 MIPS 和 RISC-V
+    if matrix["os"] == "darwin" && (matrix["arch"] == "mips" || matrix["arch"] == "riscv") {
+        return false  // 剔除该组合
+    }
+
+    // Windows 不支持 RISC-V
+    if matrix["os"] == "windows" && matrix["arch"] == "riscv" {
+        return false
+    }
+
+    // 其他组合都是有效的
+    return true  // 保留该组合
+}
+```
+
+**Filter 语义**：
+- `return true`：保留该矩阵组合
+- `return false`：剔除该矩阵组合
+- filter 函数接收 `matrix` 参数，包含当前组合的所有字段值
+
+**组合生成流程**：
+
+```
+1. 生成笛卡尔积
+   原始组合数：4 × 3 × 2 = 24 种
+
+2. 应用 filter 过滤
+   过滤掉的组合：
+   - darwin-mips-* (2 种)
+   - darwin-riscv-* (2 种)
+   - windows-riscv-* (2 种)
+
+   剩余有效组合：24 - 6 = 18 种
+
+3. 应用测试策略
+   根据剩余 18 种组合应用全量测试或配对测试
+```
+
+**完整示例**：
+
+```javascript
+packageName "example/cross-platform-lib"
+fromVersion "1.0.0"
+desc "A cross-platform library"
+homepage "https://github.com/example/lib"
+
+// 声明构建矩阵
+matrix {
+    Require: {
+        "arch": ["x86_64", "arm64", "mips"],
+        "os": ["linux", "darwin", "windows"],
+        "compiler": ["gcc", "clang", "msvc"]
+    },
+    Options: {
+        "shared": ["static", "dynamic"]
+    }
+}
+
+// 过滤无效组合
+filter matrix => {
+    // macOS 不支持 MIPS
+    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
+        return false
+    }
+
+    // Windows 只支持 MSVC 编译器
+    if matrix["os"] == "windows" && (matrix["compiler"] == "gcc" || matrix["compiler"] == "clang") {
+        return false
+    }
+
+    // Linux 不支持 MSVC
+    if matrix["os"] == "linux" && matrix["compiler"] == "msvc" {
+        return false
+    }
+
+    return true
+}
+
+// 源码下载
+onSource (ver, lockSourceHash) => {
+    download("https://github.com/example/lib/v${ver.Version}.tar.gz")!
+    actualHash := readHashFromFile("hash.txt")!
+
+    if lockSourceHash != "" && actualHash != lockSourceHash {
+        return "", errors.New("hash 不匹配")
+    }
+
+    return actualHash, nil
+}
+
+// 构建逻辑
+onBuild => {
+    args := []
+
+    // 根据 filter 后的有效矩阵组合进行构建
+    if matrix["compiler"] == "gcc" {
+        args <- "-DCMAKE_C_COMPILER=gcc"
+    } else if matrix["compiler"] == "clang" {
+        args <- "-DCMAKE_C_COMPILER=clang"
+    } else if matrix["compiler"] == "msvc" {
+        args <- "-DCMAKE_C_COMPILER=cl"
+    }
+
+    cmake args
+    cmake "--build" "."
+
+    return artifact, nil
+}
+```
+
+**最佳实践**：
+- Filter 应该只过滤确实无法构建的组合
+- 避免过度过滤，除非确认该组合在技术上不可行
+- Filter 逻辑应该清晰明确，便于维护
+- Filter 中可以访问 Require 和 Options 的所有字段
+
+### 10.4 错误处理
 
 **使用 `!` 操作符处理错误**：
 ```javascript
@@ -1048,7 +1357,7 @@ onSource (ver, lockSourceHash) => {
 }
 ```
 
-### 10.4 版本管理
+### 10.5 版本管理
 
 **遵循 fromVersion 规范**：
 - 使用通配符版本号作为目录名（如 `1.x`, `2.x`）
@@ -1069,7 +1378,9 @@ D --> E
 E --> F[执行onSource: 下载源码]
 F --> G[执行onRequire: 解析依赖]
 G --> H[MVS算法生成BuildList]
-H --> I{本地是否有构建缓存?}
+H --> H1[生成矩阵笛卡尔积]
+H1 --> H2[执行filter: 过滤无效组合]
+H2 --> I{本地是否有构建缓存?}
 I -- 是 --> J[返回缓存产物]
 I -- 否 --> K{云端是否有预构建包?}
 K -- 是 --> L[下载云端产物]
@@ -1086,8 +1397,9 @@ J --> P[返回构建信息给用户]
 1. **配方获取阶段**：自动从中心化仓库克隆或更新配方
 2. **版本选择阶段**：根据 `fromVersion` 选择适配的配方
 3. **依赖解析阶段**：按自顶向下顺序（广度优先遍历）执行 `onSource` 和 `onRequire`，先执行根节点才能知道依赖关系
-4. **构建执行阶段**：按 BuildList 拓扑顺序执行 `onBuild`
-5. **产物缓存阶段**：将构建产物移动到最终位置并生成缓存信息
+4. **矩阵过滤阶段**：生成矩阵笛卡尔积后，执行 `filter` 过滤无效组合
+5. **构建执行阶段**：按 BuildList 拓扑顺序对每个有效矩阵组合执行 `onBuild`
+6. **产物缓存阶段**：将构建产物移动到最终位置并生成缓存信息
 
 ---
 
