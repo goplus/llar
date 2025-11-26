@@ -118,7 +118,7 @@ type FormulaApp struct {
 
     onRequireFn func(deps.Graph)
     onBuildFn   func() (result *Artifact, err error)
-    onSourceFn  func(ver version.Version) (sourceDir string, err error)
+    onSourceFn  func(ver version.Version, lockSourceHash string) (sourceHash string, err error)
     onVersionFn func() []version.Version
 }
 ```
@@ -163,8 +163,8 @@ XGO Classfile 的 `onXxx` 事件处理器在 Go 层面通过回调注册实现�
 
 ```go
 // OnSource - 注册源码下载回调
-// 参数: func(ver version.Version) (sourceDir string, err error)
-func (f *FormulaApp) OnSource(fn func(ver version.Version) (sourceDir string, err error))
+// 参数: func(ver version.Version, lockSourceHash string) (sourceHash string, err error)
+func (f *FormulaApp) OnSource(fn func(ver version.Version, lockSourceHash string) (sourceHash string, err error))
 
 // OnRequire - 注册依赖管理回调
 // 参数: func(deps.Graph)
@@ -192,7 +192,7 @@ echo packageName  // 自动调用 PackageName__0()
 fromVersion "1.0.0"
 
 // 事件处理器（自动注册为回调函数）
-onSource ver => {
+onSource (ver, lockSourceHash) => {
     // 实现源码下载逻辑
 }
 
@@ -205,182 +205,27 @@ onBuild => {
 }
 ```
 
-## 4. 三层版本管理架构
+## 4. 配方回调函数详解
 
-LLAR 采用三层版本管理架构，分离配方仓库（只读）和用户项目（可修改）的职责。
-
-### 4.1 架构概览
-
-| 文件 | 位置 | 权限 | 维护者 | 版本约束 | 上传远程 | 类比 |
-|------|------|------|--------|----------|----------|------|
-| **deps.json** | 配方仓库 | 只读 | 配方维护者 | 大范围（>=1.0 <2.0） | 是 | - |
-| **versions.json** | 用户本地 | 可修改 | 用户 | 确切版本（1.2.3） | 否（.gitignore） | go.mod |
-| **versions-lock.json** | 用户本地 | 自动生成 | 系统 | 精确版本 + Hash | 否（.gitignore） | go.sum |
-
-### 4.2 三层职责说明
-
-**deps.json（配方仓库，只读）**:
-- 配方维护者编写，用户只读，无法修改
-- 使用**版本范围约束**（如 `>=1.2.0 <2.0.0`），减少维护工作量
-- 当上游包发布新版本时，无需更新配方，系统自动选择最新版本
-- 与配方代码一起版本控制
-
-**versions.json（用户本地，可修改）**:
-- 首次构建时从 deps.json 解析生成，记录**精确版本号**
-- 用户可修改，支持 `replace` 字段强制替换依赖版本
-- 不上传到远程仓库（添加到 .gitignore）
-- 类似 Go 的 go.mod
-
-**versions-lock.json（用户本地，自动生成）**:
-- 构建完成后自动生成或更新
-- 记录精确版本 + sourceHash + **formulaHash**（配方 git commit hash）
-- 确保构建可重现：通过 formulaHash 还原配方快照
-- 不上传到远程仓库（添加到 .gitignore）
-- 类似 Go 的 go.sum
-
-### 4.3 版本选择优先级
-
-当系统解析依赖时，按以下优先级选择版本：
-
-1. **优先级最高**: versions.json 的 `replace` 字段
-2. **优先级中等**: versions.json 中记录的确切版本
-3. **优先级最低**: deps.json 的版本范围解析（调用 onVersions）
-
-### 4.4 工作流程
-
-```mermaid
-graph TD
-A["用户首次构建"] --> B{"versions.json<br/>存在?"}
-B -- "否" --> C["读取配方仓库的 deps.json"]
-C --> D["发现版本范围约束<br/>如: >=1.2.0 <2.0.0"]
-D --> E["调用依赖包的 onVersions"]
-E --> F["从上游获取所有版本"]
-F --> G["过滤 + 选择最大版本"]
-G --> H["生成 versions.json"]
-
-B -- "是" --> I["读取 versions.json"]
-I --> J{"检查 replace?"}
-J -- "是" --> K["使用 replace 版本"]
-J -- "否" --> L["使用 versions.json 版本"]
-
-H --> M["执行构建"]
-K --> M
-L --> M
-M --> N["生成 versions-lock.json<br/>记录版本 + Hash + formulaHash"]
-```
-
-### 4.5 示例场景
-
-**场景：配方更新不及时，系统自动选择最新版本**
-
-**配方仓库的 deps.json**（配方维护者编写）:
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "deps": {
-        "1.0.0": [{
-            "name": "madler/zlib",
-            "version": ">=1.2.0 <2.0.0"
-        }]
-    }
-}
-```
-
-**用户首次构建时**:
-1. 系统读取 deps.json 的版本范围 `>=1.2.0 <2.0.0`
-2. 调用 zlib 的 `onVersions` 获取所有可用版本
-3. 获取到 `[1.2.11, 1.2.13, 1.3.0]`
-4. 自动选择最大版本 `1.3.0`
-5. 生成 **versions.json**:
-
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "versions": {
-        "1.7.18": [
-            {
-                "name": "madler/zlib",
-                "version": "1.3.0"
-            }
-        ]
-    }
-}
-```
-
-6. 构建完成后生成 **versions-lock.json**:
-
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "versions": {
-        "1.7.18": [
-            {
-                "name": "madler/zlib",
-                "version": "1.3.0",
-                "sourceHash": "b095afb551dd4efb...",
-                "formulaHash": "abc123def456"
-            }
-        ]
-    }
-}
-```
-
-**结果**：用户无需等待配方维护者更新，即可自动使用 zlib 1.3.0
-
-## 5. 配方回调函数详解
-
-### 5.1 onVersions - 版本列表获取
-
-**功能**: 从上游获取所有可用版本列表，供版本范围解析使用
-
-**文件位置**: `{{repo}}_version.gox`（轻量级，独立加载）
-
-**调用时机**:
-- 版本范围解析阶段（首次构建，生成 versions.json 时）
-- 用户查询可用版本时
-- `versionsOf()` 函数内部调用
-
-**签名**: `onVersions => { ... }`
-
-**返回值**: `[]string` - 版本号列表
-
-**示例**：
-```javascript
-// ninja_version.gox - 版本管理文件
-
-// 从 GitHub 获取所有 tags
-onVersions => {
-    return fetchGitHubTags("ninja-build/ninja")
-}
-
-// 自定义版本比较（可选）
-compare (v1, v2) => {
-    // 返回: < 0 (v1 < v2), = 0 (v1 = v2), > 0 (v1 > v2)
-    // 如不实现，使用默认 GNU sort -V
-}
-```
-
-**工作流程**：
-```mermaid
-graph TD
-A["deps.json 中声明版本范围<br/>>=1.2.0 <2.0.0"] --> B["系统调用 onVersions"]
-B --> C["从上游获取所有版本<br/>[1.2.11, 1.2.13, 1.3.0]"]
-C --> D["根据版本范围过滤"]
-D --> E["使用 compare 排序"]
-E --> F["选择最大版本 1.3.0"]
-F --> G["记录到 versions.json"]
-```
-
-### 5.2 onSource - 源码下载
+### 4.1 onSource - 源码下载
 
 **功能**: 定义包的源码获取方式，并实现源码验证逻辑
 
-**签名**: `onSource ver => { ... }`
+**签名**: `onSource (ver, lockSourceHash) => { ... }`
+
+**参数**：
+- `ver`: 版本号
+- `lockSourceHash`: 来自 versions-lock.json 的锁定源码 hash，如果没有 version-lock 则为空字符串
+
+**返回值**：
+- `sourceHash`: 实际下载的源码 hash（当 lockSourceHash 为空时需要返回）
+- `err`: 错误信息
 
 **能力**：
 - 指定源码下载地址（从 GitHub releases、官方网站或其他源下载）
 - 实现源码验证（使用 Hash 校验确保源码完整性和安全性）
 - 支持多种下载方式（HTTP/HTTPS下载、Git克隆、本地文件等）
+- 支持可重现构建（通过 lockSourceHash 验证）
 
 **执行时机**: 在每个包的 `onRequire` **之前**执行
 
@@ -391,18 +236,26 @@ F --> G["记录到 versions.json"]
 
 **示例**：
 ```javascript
-onSource ver => {
+onSource (ver, lockSourceHash) => {
     // 从GitHub下载特定版本源码
-    sourceDir := download("https://github.com/DaveGamble/cJSON/archive/v${ver.Version}.tar.gz")!
+    download("https://github.com/DaveGamble/cJSON/archive/v${ver.Version}.tar.gz")!
 
-    // Hash校验确保源码未被篡改
-    err := hashDirAndCompare(sourceDir, "aaaabbbbccccddddeee")
+    // 读取源码包提供的 hash 文件
+    actualHash := readHashFromFile("hash.txt")!
 
-    return sourceDir, err
+    // 如果有锁定 hash，验证是否匹配
+    if lockSourceHash != "" {
+        if actualHash != lockSourceHash {
+            return "", errors.New("源码 hash 不匹配")
+        }
+    }
+
+    // 返回实际 hash（用于生成 versions-lock.json）
+    return actualHash, nil
 }
 ```
 
-### 5.3 onRequire - 自定义依赖管理（可选）
+### 4.2 onRequire - 自定义依赖管理（可选）
 
 **功能**: 从源码中的构建系统文件（如 CMakeLists.txt）动态解析依赖关系
 
@@ -517,7 +370,7 @@ type Graph interface {
 }
 ```
 
-### 5.4 onBuild - 构建执行
+### 4.3 onBuild - 构建执行
 
 **功能**: 定义包的具体构建步骤和产物输出
 
@@ -577,9 +430,9 @@ onBuild matrix => {
 }
 ```
 
-## 6. 回调函数调用流程
+## 5. 回调函数调用流程
 
-### 6.1 完整调用时序
+### 5.1 完整调用时序
 
 ```mermaid
 sequenceDiagram
@@ -615,7 +468,7 @@ sequenceDiagram
     E-->>U: 返回构建结果
 ```
 
-### 6.2 目录变化示例
+### 5.2 目录变化示例
 
 **onSource 执行时（临时目录）**：
 ```
@@ -642,29 +495,21 @@ sequenceDiagram
         └── cjson.pc
 ```
 
-## 7. 构建产物设计
+## 6. 构建产物设计
 
-### 7.1 Artifact 结构
+### 6.1 Artifact 结构
 
 **BasicFormula 接口定义**：
 ```go
 type BasicFormula interface {
     // 返回当前PackageName
-    PackageName__0() string
-    // 声明当前LLAR Package Name，格式为：owner/repo
-    PackageName__1(name string)
+    PackageName() string
     // 返回当前描述
-    Desc__0() string
-    // 添加Package描述
-    Desc__1(desc string)
+    Desc() string
     // 返回当前Package Homepage URL
-    Homepage__0() string
-    // 添加Package Homepage URL
-    Homepage__1(homepage string)
+    Homepage() string
     // 返回当前Package的构建矩阵
-    Matrix__0() matrix.Matrix
-    // 声明Package的构建矩阵
-    Matrix__1(mrx matrix.Matrix)
+    Matrix() matrix.Matrix
     // 返回当前Package的版本
     Version() version.Version
 }
@@ -673,10 +518,29 @@ type BasicFormula interface {
 **运行时结构**（配方中使用）：
 ```go
 type Artifact struct {
-    BasicFormula // 嵌入接口，包含包名、版本、矩阵等信息，构建时期自动填入
-    Dir  string // 产物输出目录，必填
-    Prev *Artifact // 上一个构建产物信息，选填，构建时期自动填入
-    Link func(compileArgs []string) []string // 链接回调函数，必填
+    // 配方需要填充的字段
+    Dir  string                                  // 产物输出目录，必填
+    Link func(compileArgs []string) []string    // 链接回调函数，必填
+
+    // 内部字段（系统自动填充）
+    formula      BasicFormula                    // 包的元信息，系统自动填入，只读
+    dependencies []*Artifact                     // 依赖的产物列表，系统自动填入
+}
+
+// Formula 方法 - 通过 XGO 自动属性访问
+// 配方中使用: artifact.formula （自动调用 Formula()）
+func (a *Artifact) Formula() BasicFormula {
+    return a.formula
+}
+
+// XGO 迭代器接口实现
+// 用法：for dep in artifact { ... }
+func (a *Artifact) Gop_Enum(callback func(*Artifact) bool) {
+    for _, dep := range a.dependencies {
+        if !callback(dep) {
+            break
+        }
+    }
 }
 ```
 
@@ -699,30 +563,111 @@ type ArtifactCache struct {
 ```
 
 **说明**：
-- `Artifact` 是运行时结构，`BasicFormula` 接口提供包的元信息
+- `Artifact` 是运行时结构，配方只需填充 `Dir` 和 `Link` 字段
+- `formula` 字段提供包的元信息（包名、版本、矩阵等），系统自动填入，只读
+- 通过 XGO 自动属性访问：`artifact.formula` 自动调用 `Formula()` 方法
+- `dependencies` 字段存储依赖的产物列表，系统根据 MVS BuildList 自动填入
+- 通过 XGO 迭代器语法 `for dep in artifact { ... }` 遍历依赖
 - `Link` 是动态函数，用于在运行时生成链接参数
 - `ArtifactCache` 是序列化结构，`linkArgs` 是预先计算好的字符串
 - 构建完成后，调用 `Link([]string{})` 生成 `linkArgs` 并保存到 `.cache.json`
 
-### 7.2 链接回调链机制
+### 6.2 配方中使用 Artifact
 
-构建信息由构建列表从上往下传递，每构建完一个产物，会自动将回调函数进行连接：
+#### 6.2.1 访问依赖的元信息
+
+通过 XGO 自动属性访问 BasicFormula：
+
+```javascript
+onBuild => {
+    // 遍历所有依赖
+    for dep in artifact {
+        // 使用 XGO 自动属性访问 BasicFormula
+        println "Dependency: ${dep.formula.packageName}"
+        println "Version: ${dep.formula.version}"
+        println "Matrix: ${dep.formula.matrix}"
+        println "Dir: ${dep.Dir}"
+    }
+
+    // 执行构建...
+    cmake "--build", "."
+
+    return &Artifact{
+        Dir: "/path/to/output",
+        Link: (args) => {
+            args <- "-L${Dir}/lib"
+            args <- "-lmylib"
+            return args
+        }
+    }, nil
+}
+```
+
+#### 6.2.2 构建链接回调链
+
+配方可以通过遍历依赖来构建链接回调链：
+
+```javascript
+// 包 B 的配方
+onBuild => {
+    return &Artifact{
+        Dir: "/path/to/B",
+        Link: (args) => {
+            args <- "-L/path/to/B/lib"
+            args <- "-lB"
+            return args
+        }
+    }, nil
+}
+
+// 包 A 的配方（依赖 B）
+onBuild => {
+    return &Artifact{
+        Dir: "/path/to/A",
+        Link: (args) => {
+            // 先添加 A 的链接参数
+            args <- "-L/path/to/A/lib"
+            args <- "-lA"
+
+            // 再调用依赖的 Link（形成链）
+            for dep in artifact {
+                args = dep.Link(args)
+            }
+
+            return args
+        }
+    }, nil
+}
+```
+
+### 6.3 链接回调链机制
+
+构建信息由构建列表从上往下传递，每构建完一个产物，系统会自动将依赖关系填入 `Artifact.dependencies`：
 
 ```
-B.Link() -> A.Link()
+构建顺序: B -> A
+A.dependencies = [B]
 ```
 
-最终形成回调链条：
-```
-N.Link() -> ... -> B.Link() -> A.Link()
+配方在 `onBuild` 中通过迭代器访问依赖，构建链接回调链：
+
+```javascript
+// A.Link([]string{}) 调用
+// 1. 添加 A 的参数
+args <- "-L/A/lib"
+args <- "-lA"
+// 结果: ["-L/A/lib", "-lA"]
+
+// 2. 遍历依赖调用 B.Link
+for dep in artifact {
+    args = dep.Link(args)
+}
+// 结果: ["-L/A/lib", "-lA", "-L/B/lib", "-lB"]
 ```
 
-最终调用：
-```
-N.Link([]string{}) // 结果: -Innn ... -Ibbb -Iaaa
-```
+最终结果：`-L/A/lib -lA -L/B/lib -lB`
 
-### 7.3 构建输出结构
+### 6.4 构建输出结构
 
 一般 C/C++ 语言输出：
 ```
@@ -733,7 +678,7 @@ project/
 └── bin/             // 可执行二进制（可选）
 ```
 
-### 7.4 构建可重现性与 formulaHash
+### 6.5 构建可重现性与 formulaHash
 
 **formulaHash 的作用**：
 - 记录配方仓库的 git commit hash
@@ -774,276 +719,9 @@ project/
 - 即使配方仓库后续更新，也能还原到历史版本
 - 确保团队成员使用完全相同的配方版本
 
-## 8. 版本管理设计
+## 7. 构建矩阵设计
 
-### 8.1 版本结构
-
-```go
-type PackageVersion {
-    Version string  // 原版本号，保持上游格式
-}
-```
-
-### 8.2 版本比较机制
-
-**默认比较算法**：
-LLAR 使用 GNU Coreutils 的 `sort -V` 算法（来源于 Debian 版本比较），这是一种尽可能通用的版本比较算法。
-
-**自定义比较**：
-对于有特殊版本规则的包，维护者可以通过 `_version.gox` 文件提供自定义比较逻辑。
-
-### 8.3 自定义版本比较
-
-#### 背景
-
-由于 C/C++ 并无明确版本规范，GNU 的算法仅仅是竭尽所能去比较（Best Effort），并不适合所有情况。
-
-#### 文件位置
-
-版本管理文件必须存在于当前包根目录下：
-
-```
-DaveGamble/
-└── cJSON/
-    ├── deps.json            # 依赖管理文件（放在根目录）
-    ├── cjson_version.gox    # 版本管理文件
-    ├── go.mod
-    ├── go.sum
-    ├── 1.x/
-    │   └── cjson_llar.gox
-    └── 2.x/
-        └── cjson_llar.gox
-```
-
-#### 接口定义
-
-```go
-type ComparableVersion interface {
-    // 当 a > b，返回 1, a == b, 返回 0， a < b，返回 -1
-    Compare(comparator func (a, b PackageVersion) int)
-}
-```
-
-#### 比较示例
-
-```javascript
-import (
-    semver "github.com/Masterminds/semver/v3"
-)
-
-compare (a, b) => {
-    v1 := semver.NewVersion(a.Ver)!
-    v2 := semver.NewVersion(b.Ver)!
-    return v1.Compare(v2)
-}
-```
-
-### 8.4 配方版本选择
-
-#### 选择流程
-
-用户需要 `DaveGamble/cJSON` 的 1.7.18 版本时：
-
-```mermaid
-graph TD
-A[DaveGamble/cJSON 1.7.18] --> B{查找 fromVersion <= 1.7.18 配方}
-B -- 找到配方 --> C[调用 onSource: 下载源码]
-B -- 否 --> D[报错退出]
-C --> E[调用 onRequire: 解析依赖]
-E --> F[解析 deps.json 或从构建系统读取]
-F --> G[发现依赖 madler/zlib]
-G --> H{查找 madler/zlib 配方}
-H -- 找到配方 --> I[调用 zlib 的 onSource + onRequire]
-H -- 否 --> J[报错退出]
-I --> K[... 完成依赖有向图构建]
-```
-
-#### 选择算法
-
-假设目录结构：
-```
-DaveGamble/
-└── cJSON/
-    ├── deps.json
-    ├── cjson_version.gox
-    ├── go.mod
-    ├── go.sum
-    ├── 1.0.x/                    # fromVersion: 1.0.0
-    │   └── cjson_llar.gox
-    ├── 1.5.x/                    # fromVersion: 1.5.0
-    │   └── cjson_llar.gox
-    └── 2.x/                      # fromVersion: 2.0.0
-        └── cjson_llar.gox
-```
-
-选择过程：
-1. 遍历所有配方目录
-2. 找到所有 `fromVersion <= 目标版本` 的配方
-3. 选择其中 `fromVersion` 最大的配方
-
-## 9. 依赖管理设计
-
-### 9.1 deps.json 格式（配方仓库）
-
-**deps.json** 位于配方仓库，使用**版本范围约束**：
-
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "deps": {
-        "1.0.0": [{
-            "name": "madler/zlib",
-            "version": ">=1.2.1 <1.3.0"
-        }],
-        "1.2.0": [{
-            "name": "madler/zlib",
-            "version": ">=1.2.8 <2.0.0"
-        }]
-    }
-}
-```
-
-**说明**：
-- deps.json 位于**配方仓库**，用户只读
-- `deps` 对象的 key 值（如 `"1.0.0"`, `"1.2.0"`）表示 `fromVersion`，即**从该版本开始**使用对应的依赖配置
-- 查询某个版本的依赖时，会选择小于等于该版本的最大 `fromVersion` 对应的依赖列表
-- 例如：查询版本 `1.1.5` 时，会使用 `fromVersion = "1.0.0"` 的依赖配置；查询版本 `1.5.0` 时，会使用 `fromVersion = "1.2.0"` 的依赖配置
-- `version` 字段使用**版本范围表达式**（如 `>=1.2.0 <2.0.0`，空格分隔），而非固定版本
-
-### 9.2 版本范围语法
-
-版本范围采用基于比较操作符的约束语法（参考 npm，使用空格分隔）:
-
-```
-1.2.3            # 精确版本
->=1.2.3          # 大于等于 1.2.3
->1.2.3           # 大于 1.2.3
-<=1.2.3          # 小于等于 1.2.3
-<1.2.3           # 小于 1.2.3
->=1.2.3 <2.0.0   # 版本范围组合 (AND，空格分隔)
-```
-
-**说明**:
-- LLAR 不基于 semver，因此不支持 `^` 和 `~` 等 semver 特有的语法
-- 不支持 `*`（任意版本）和通配符语法
-- 版本比较依赖包的自定义 Compare 方法或默认的 GNU sort -V 算法
-- 使用**空格分隔**多个约束条件，表示 AND 关系（参考 npm）
-
-### 9.3 versions.json 格式（用户本地）
-
-**versions.json** 位于用户本地，记录**精确版本**：
-
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "versions": {
-        "1.7.18": [
-            {
-                "name": "madler/zlib",
-                "version": "1.2.13"
-            }
-        ]
-    },
-    "replace": {
-        "madler/zlib": "1.2.11"
-    }
-}
-```
-
-**说明**：
-- versions.json 位于**用户本地**，用户可修改
-- 首次构建时从 deps.json 解析生成，记录精确版本号
-- `replace` 字段在顶层，允许用户替代特定依赖的版本（优先级最高）
-- 不上传到远程仓库（应添加到 .gitignore）
-
-### 9.4 versions-lock.json 格式（构建锁定）
-
-**versions-lock.json** 位于用户本地，记录**精确版本 + Hash**：
-
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "versions": {
-        "1.7.18": [
-            {
-                "name": "madler/zlib",
-                "version": "1.2.13",
-                "sourceHash": "b095afb551dd4efb...",
-                "formulaHash": "abc123def456"
-            }
-        ]
-    }
-}
-```
-
-**说明**：
-- versions-lock.json 位于**用户本地**，自动生成
-- 记录精确版本 + sourceHash（源码哈希）+ formulaHash（配方 git commit hash）
-- 确保构建可重现：通过 formulaHash 还原配方快照
-- 不上传到远程仓库（应添加到 .gitignore）
-
-### 9.5 结构化定义
-
-**deps.json（配方仓库）**:
-```go
-type Dependency struct {
-    PackageName    string `json:"name"`
-    VersionRange   string `json:"version"`  // 版本范围（空格分隔）
-}
-
-type PackageDependencies struct {
-    PackageName  string                        `json:"name"`
-    Dependencies map[string][]Dependency       `json:"deps"`     // key: fromVersion（起始版本号）
-}
-```
-
-**versions.json（用户本地）**:
-```go
-type Dependency struct {
-    PackageName    string `json:"name"`
-    Version        string `json:"version"`  // 精确版本号
-}
-
-type VersionsFile struct {
-    PackageName   string                   `json:"name"`
-    Versions      map[string][]Dependency  `json:"versions"` // key: 包版本号, value: 依赖数组
-    Replace       map[string]string        `json:"replace,omitempty"` // key: PackageName, value: 精确版本号
-}
-```
-
-**versions-lock.json（构建锁定）**:
-```go
-type DependencyLock struct {
-    PackageName   string `json:"name"`           // 包名
-    Version       string `json:"version"`        // 锁定的版本号
-    SourceHash    string `json:"sourceHash"`     // 源码 Hash (sha256)
-    FormulaHash   string `json:"formulaHash"`    // 配方 Git Commit Hash
-}
-
-type VersionLockFile struct {
-    PackageName   string                      `json:"name"`
-    Versions      map[string][]DependencyLock `json:"versions"` // key: 包版本号, value: 依赖数组（有序）
-}
-```
-
-### 9.6 依赖声明方式
-
-#### 静态依赖（通过 deps.json）
-
-在 `deps.json` 中声明依赖关系，这是最常见的方式。
-
-#### 动态依赖（通过 onRequire 回调）
-
-详见 [5.3 onRequire - 自定义依赖管理](#53-onrequire---自定义依赖管理可选)
-
-**应用场景**：
-- 上游包使用 CMake/Conan/Meson 等构建系统，包含依赖信息
-- 依赖关系经常变化，手动维护 deps.json 成本高
-- 希望自动跟随上游依赖更新
-
-## 10. 构建矩阵设计
-
-### 10.1 基本概念
+### 7.1 基本概念
 
 构建矩阵用于表达一个包在不同构建配置下的所有可能产物组合。
 
@@ -1051,7 +729,7 @@ type VersionLockFile struct {
 - **require**：必需的编译参数，会向下传播给依赖包（类似 Conan 的 settings）
 - **options**：可选的编译参数，仅限于当前包，不向下传播（类似 Conan 的 options）
 
-### 10.2 矩阵结构
+### 7.2 矩阵结构
 
 ```json
 {
@@ -1076,17 +754,17 @@ type PackageMatrix struct {
 }
 ```
 
-### 10.3 必需字段
+### 7.3 必需字段
 
 - **arch**：编译平台（如 x86_64, arm64）
 - **lang**：包的语言（如 c, cpp, py）
 
-### 10.4 可选字段
+### 7.4 可选字段
 
 - **os**：操作系统（如 linux, darwin, windows）
 - **toolchain**：工具链（如 gcc, clang, msvc）
 
-### 10.5 矩阵组合表示
+### 7.5 矩阵组合表示
 
 矩阵组合通过按字母排序的 key 值，用 `-` 连接：
 - `require` 组合：`x86_64-c-linux`
@@ -1111,7 +789,7 @@ x86_64-c-linux|zlibOFF
 ...
 ```
 
-### 10.6 矩阵传播规则
+### 7.6 矩阵传播规则
 
 ```mermaid
 graph TD
@@ -1125,9 +803,9 @@ C --> D["依赖D: x86_64-c-linux"]
 - `options` 字段仅在声明了该 option 的包中生效
 - 如果依赖包的 `require` 不是入口包的交集，系统会终止并报错
 
-## 11. 配方存储与管理
+## 8. 配方存储与管理
 
-### 11.1 本地存储位置
+### 8.1 本地存储位置
 
 **配方存放目录**：`{{UserCacheDir}}/.llar/formulas/`
 
@@ -1141,7 +819,7 @@ C --> D["依赖D: x86_64-c-linux"]
 | Linux | `~/.cache` | `/home/user/.cache/.llar/` |
 | Windows | `%LocalAppData%` | `C:\Users\user\AppData\Local\.llar\` |
 
-### 11.2 配方目录结构
+### 8.2 配方目录结构
 
 ```
 {{UserCacheDir}}/.llar/
@@ -1164,7 +842,7 @@ C --> D["依赖D: x86_64-c-linux"]
             └── zlib_llar.gox
 ```
 
-### 11.3 产物存储结构
+### 8.3 产物存储结构
 
 **位置**：`{{UserCacheDir}}/.llar/formulas/{{owner}}/{{repo}}/build/{{Version}}/{{Matrix}}/`
 
@@ -1196,7 +874,7 @@ C --> D["依赖D: x86_64-c-linux"]
         └── lib/
 ```
 
-### 11.4 配方自动更新
+### 8.4 配方自动更新
 
 LLAR 自动管理配方仓库的 Git 操作，用户无需手动执行任何 Git 命令。
 
@@ -1220,56 +898,9 @@ D --> F[执行用户命令]
 E --> F
 ```
 
-## 12. 完整配方示例
+## 9. 完整配方示例
 
-### 12.1 版本管理文件示例
-
-**cjson_version.gox** (DaveGamble/cJSON):
-
-```javascript
-// cjson_version.gox - 版本管理文件
-
-// onVersions 回调 - 从 GitHub 获取所有可用版本
-onVersions => {
-    return fetchGitHubTags("DaveGamble/cJSON")
-}
-
-// compare 回调 - 自定义版本比较（可选）
-// 如不实现，使用默认 GNU sort -V
-compare (v1, v2) => {
-    // 对于 cJSON，使用 semver 比较
-    semver1 := parseSemver(v1)!
-    semver2 := parseSemver(v2)!
-    return semver1.Compare(semver2)
-}
-```
-
-### 12.2 依赖管理文件示例
-
-**deps.json** (DaveGamble/cJSON):
-
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "deps": {
-        "1.0.0": [{
-            "name": "madler/zlib",
-            "version": ">=1.2.0 <2.0.0"
-        }],
-        "1.5.0": [{
-            "name": "madler/zlib",
-            "version": ">=1.2.8 <2.0.0"
-        }]
-    }
-}
-```
-
-**说明**:
-- `deps` 的 key 是 fromVersion（如 `"1.0.0"`、`"1.5.0"`）
-- `version` 字段使用版本范围（如 `>=1.2.0 <2.0.0`）
-- 当上游 zlib 发布新版本时，系统自动选择最新的满足约束的版本
-
-### 12.3 配方文件示例
+### 9.1 配方文件示例
 
 **cjson_llar.gox** (DaveGamble/cJSON):
 
@@ -1310,18 +941,23 @@ matrix {
 // 3. 事件处理器：源码下载
 // ============================================
 
-onSource ver => {
+onSource (ver, lockSourceHash) => {
     // 从 GitHub 下载特定版本的源码
     url := "https://github.com/DaveGamble/cJSON/archive/v${ver.ver}.tar.gz"
-    sourceDir := download(url)!
+    download(url)!
 
-    // Hash 校验确保源码完整性（推荐）
-    err := hashDirAndCompare(sourceDir, "aaaabbbbccccddddeee")
-    if err != nil {
-        return "", err
+    // 读取源码包提供的 hash 文件
+    actualHash := readHashFromFile("hash.txt")!
+
+    // 如果有锁定 hash，验证是否匹配
+    if lockSourceHash != "" {
+        if actualHash != lockSourceHash {
+            return "", errors.New("源码 hash 不匹配")
+        }
     }
 
-    return sourceDir, nil
+    // 返回实际 hash（用于生成 versions-lock.json）
+    return actualHash, nil
 }
 
 // ============================================
@@ -1448,55 +1084,30 @@ onBuild => {
 
 7. **链接回调链**：通过 `lastArtifact.Link()` 形成回调链，自动传递编译参数
 
-## 13. 配方编写最佳实践
+## 10. 配方编写最佳实践
 
-### 13.1 版本范围管理
-
-**使用版本范围而非固定版本**：
-```json
-{
-    "name": "DaveGamble/cJSON",
-    "deps": {
-        "1.0.0": [{
-            "name": "madler/zlib",
-            "version": ">=1.2.0 <2.0.0"
-        }]
-    }
-}
-```
-
-**优势**：
-- 减少配方维护工作量
-- 当上游包发布新版本时，系统自动选择最新版本
-- 用户无需等待配方更新
-
-### 13.2 文件分离最佳实践
-
-**{{repo}}_version.gox**（轻量级）：
-- 仅包含 onVersions 和 compare（可选）
-- 在版本范围解析阶段加载
-- 保持简单，避免复杂逻辑
-
-**{{repo}}_llar.gox**（重量级）：
-- 包含 onSource、onRequire（可选）、onBuild
-- 仅在构建时加载
-- 可以包含复杂的构建逻辑
-
-### 13.3 源码验证
+### 10.1 源码验证
 
 **总是使用 Hash 校验**：
 ```javascript
-onSource ver => {
-    sourceDir := download("https://github.com/owner/repo/archive/v${ver.Version}.tar.gz")!
+onSource (ver, lockSourceHash) => {
+    download("https://github.com/owner/repo/archive/v${ver.Version}.tar.gz")!
 
-    // 使用 SHA256 校验
-    err := hashDirAndCompare(sourceDir, "预期的hash值")
+    // 读取源码包提供的 hash 文件
+    actualHash := readHashFromFile("hash.txt")!
 
-    return sourceDir, err
+    // 如果有锁定 hash，验证是否匹配
+    if lockSourceHash != "" {
+        if actualHash != lockSourceHash {
+            return "", errors.New("源码 hash 不匹配")
+        }
+    }
+
+    return actualHash, nil
 }
 ```
 
-### 13.4 构建矩阵处理
+### 10.2 构建矩阵处理
 
 **根据矩阵参数条件编译**：
 ```javascript
@@ -1525,31 +1136,36 @@ onBuild matrix => {
 }
 ```
 
-### 13.5 错误处理
+### 10.3 错误处理
 
 **使用 `!` 操作符处理错误**：
 ```javascript
-onSource ver => {
+onSource (ver, lockSourceHash) => {
     // 下载失败会自动返回错误
-    sourceDir := download("https://...")!
+    download("https://...")!
 
-    // Hash 校验失败会自动返回错误
-    err := hashDirAndCompare(sourceDir, "hash")
+    // 读取 hash 文件失败会自动返回错误
+    actualHash := readHashFromFile("hash.txt")!
 
-    return sourceDir, err
+    // hash 验证
+    if lockSourceHash != "" && actualHash != lockSourceHash {
+        return "", errors.New("hash 不匹配")
+    }
+
+    return actualHash, nil
 }
 ```
 
-### 13.6 版本管理
+### 10.4 版本管理
 
 **遵循 fromVersion 规范**：
 - 使用通配符版本号作为目录名（如 `1.x`, `2.x`）
 - 在配方中明确声明 `fromVersion`
 - 确保版本覆盖范围连续无间隙
 
-## 14. 配方生命周期
+## 11. 配方生命周期
 
-### 14.1 完整生命周期
+### 11.1 完整生命周期
 
 ```mermaid
 graph TD
@@ -1573,7 +1189,7 @@ L --> J
 J --> P[返回构建信息给用户]
 ```
 
-### 14.2 关键阶段说明
+### 11.2 关键阶段说明
 
 1. **配方获取阶段**：自动从中心化仓库克隆或更新配方
 2. **版本选择阶段**：根据 `fromVersion` 选择适配的配方
