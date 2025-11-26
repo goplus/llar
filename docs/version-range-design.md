@@ -192,36 +192,10 @@ sequenceDiagram
 
 4. **验证一致性**：构建完成后验证生成的 Hash 与锁定文件中的一致
 
-**示例场景**：
-
-```
-场景：团队协作，确保所有成员使用相同配方
-
-开发者 A:
-1. 首次构建 cJSON@1.7.18
-2. 生成 versions-lock.json:
-   {
-       "name": "madler/zlib",
-       "version": "1.2.13",
-       "sourceHash": "b095afb551dd...",
-       "formulaHash": "abc123def456"  # 配方 commit hash
-   }
-3. 提交 versions-lock.json 到项目仓库
-
-开发者 B:
-1. 拉取项目代码（包含 versions-lock.json）
-2. 执行 llar install cJSON@1.7.18
-3. LLAR 读取 formulaHash = "abc123def456"
-4. LLAR 执行: git checkout abc123def456
-5. 使用相同的配方版本构建
-6. 得到完全相同的构建结果
-```
-
 **关键点**：
 - **formulaHash** 是配方仓库的 git commit hash
 - 通过 git 机制实现配方版本的精确控制
 - 确保不同时间、不同环境的构建结果一致
-- 即使配方仓库后续更新，也能还原到历史版本
 
 ## 4. 文件结构定义
 
@@ -238,7 +212,8 @@ sequenceDiagram
         }],
         "1.2.0": [{
             "name": "madler/zlib",
-            "version": ">=1.2.3 <2.0.0"
+            "version": ">=1.2.3 <2.0.0",
+            "propagate": true
         }]
     }
 }
@@ -248,7 +223,8 @@ sequenceDiagram
 ```go
 type Dependency struct {
     PackageName    string `json:"name"`
-    VersionRange   string `json:"version"`  // 版本范围（空格分隔，参考 npm）
+    VersionRange   string `json:"version"`              // 版本范围（空格分隔，参考 npm）
+    Propagate      bool   `json:"propagate,omitempty"`  // 是否传递依赖，默认 false（可省略）
 }
 
 type PackageDependencies struct {
@@ -264,7 +240,54 @@ type PackageDependencies struct {
 - `deps` 的 key 是 **fromVersion**（单一版本号），表示从该版本开始使用此依赖配置
 - 查询时选择 `fromVersion <= 目标版本` 的最大 fromVersion
 - `deps` 的 `version` 字段使用版本范围表达式（如 `>=1.2.0 <2.0.0`，空格分隔）
+- `propagate` 字段控制是否传递依赖（**可省略**，默认 `false`）：
+  - `false` 或省略: 依赖不传递，仅当前包使用
+  - `true`: 依赖传递给所有依赖当前包的包（间接依赖变为直接依赖）
 - 不包含 `replace` 字段
+
+#### propagate 字段详解
+
+**用途**: 控制依赖是否向上传递到依赖链中
+
+**示例场景**:
+```
+包 A 依赖 B (propagate: true)
+包 B 依赖 C
+
+当 propagate: true 时:
+  - A 的实际依赖: [B, C]  (C 被传递)
+
+当 propagate: false 时:
+  - A 的实际依赖: [B]     (C 不传递)
+```
+
+**使用场景**:
+- **propagate: true**: 用于必须暴露给依赖方的库（如头文件依赖、接口依赖）
+- **propagate: false**: 用于内部实现依赖（如静态链接库、运行时依赖）
+
+**示例**:
+```json
+{
+    "name": "mylib",
+    "deps": {
+        "1.0.0": [
+            {
+                "name": "openssl",
+                "version": ">=1.1.0",
+                "propagate": true
+            },
+            {
+                "name": "zlib",
+                "version": ">=1.2.0"
+            }
+        ]
+    }
+}
+```
+
+在此例中：
+- `openssl` 的依赖会传递给使用 `mylib` 的包
+- `zlib` 的依赖不会传递，仅 `mylib` 内部使用
 
 ### 4.2 versions.json（用户本地）
 
@@ -638,16 +661,9 @@ sequenceDiagram
 
 ## 7. 示例场景
 
-### 7.1 场景一：默认模式选择稳定版本
+### 7.1 场景：版本范围使用示例
 
-**背景**:
-- 包 A 1.0.0 在 deps.json 中依赖包 B `>=1.0.0 <2.0.0`
-- B 的可用版本: 1.0.0 (配方测试通过), 1.1.0, 1.2.0 (最新，未测试)
-- 配方仓库在提交时测试了 B 1.0.0
-
-**解决方案（默认模式 - 保守策略）**:
-
-**步骤1**: 配方维护者在 deps.json 中使用版本范围
+**deps.json 配置**:
 ```json
 {
     "name": "A",
@@ -660,74 +676,22 @@ sequenceDiagram
 }
 ```
 
-**步骤2**: 用户首次构建时（默认模式），系统生成 versions.json
-- 系统读取 deps.json 中的版本范围 `>=1.0.0 <2.0.0`
-- 调用 B 的 `onVersions` 获取所有可用版本
-- 获取到 `[1.0.0, 1.1.0, 1.2.0]`
-- **默认选择最小版本 1.0.0**（配方提交时已测试，稳定可靠）
-- 生成 versions.json:
+**构建流程**:
+- B 的可用版本: `[1.0.0, 1.1.0, 1.2.0]`
+- **默认模式**: 选择最小版本 1.0.0（已测试，稳定）
+- **升级模式 (-u)**: 选择最大版本 1.2.0（最新）
+- 生成 versions.json 记录确切版本
+- 生成 versions-lock.json 记录构建快照
 
+### 7.2 场景：使用 replace 固定版本
+
+**versions.json 配置**:
 ```json
 {
     "name": "A",
     "versions": {
         "1.0.0": [
-            {
-                "name": "B",
-                "version": "1.0.0"
-            }
-        ]
-    }
-}
-```
-
-**步骤2b**: 如果用户想升级到最新版本（升级模式）
-```bash
-llar install -u A@1.0.0
-```
-- 使用 `-u` 参数时，选择最大版本 1.2.0
-- 生成的 versions.json 会包含 B@1.2.0
-
-**步骤3**: 构建完成后生成 versions-lock.json
-```json
-{
-    "name": "A",
-    "versions": {
-        "1.0.0": [
-            {
-                "name": "B",
-                "version": "1.0.0",
-                "sourceHash": "b095afb551dd4efb...",
-                "formulaHash": "abc123def456"
-            }
-        ]
-    }
-}
-```
-
-**结果**:
-- **默认模式**: 使用 B 1.0.0（已测试，稳定可靠）
-- **升级模式 (-u)**: 使用 B 1.2.0（最新版本，可能未测试）
-- versions.json 记录了用户项目使用的确切版本
-- versions-lock.json 记录构建快照，确保可重现
-- 用户可根据需求灵活选择稳定版本或最新版本
-
-### 7.2 场景二:用户手动固定版本（使用 replace）
-
-**需求**:用户发现 B 1.2.0 有问题，希望降级到 B 1.1.0
-
-**操作步骤**:
-
-**步骤1**: 用户手动编辑 versions.json，添加 replace 字段
-```json
-{
-    "name": "A",
-    "versions": {
-        "1.0.0": [
-            {
-                "name": "B",
-                "version": "1.2.0"
-            }
+            {"name": "B", "version": "1.2.0"}
         ]
     },
     "replace": {
@@ -736,29 +700,6 @@ llar install -u A@1.0.0
 }
 ```
 
-**步骤2**: 重新构建
-- 系统读取 versions.json
-- 发现 replace 字段，优先级最高
-- 使用 B 1.1.0 替代 B 1.2.0
-
-**步骤3**: 更新 versions-lock.json
-```json
-{
-    "name": "A",
-    "versions": {
-        "1.0.0": [
-            {
-                "name": "B",
-                "version": "1.1.0",
-                "sourceHash": "e3b0c44298fc1c14...",
-                "formulaHash": "fed456cba987321"
-            }
-        ]
-    }
-}
-```
-
-**结果**:
-- 用户通过 versions.json 的 replace 功能实现了版本降级
-- versions-lock.json 记录了实际构建使用的版本 1.1.0
-- replace 仅存在于 versions.json，不存在于 versions-lock.json
+**效果**:
+- replace 优先级最高，实际使用 B 1.1.0
+- versions-lock.json 记录实际版本 1.1.0

@@ -152,9 +152,48 @@ sequenceDiagram
 
 | 层级 | 文件 | 位置 | 维护者 | 内容 |
 |------|------|------|--------|------|
-| 1 | deps.json | 配方仓库 | 配方维护者 | 版本范围约束 |
+| 1 | deps.json | 配方仓库 | 配方维护者 | 版本范围约束 + propagate 标记 |
 | 2 | versions.json | 用户项目 | 用户 + MVS | 精确版本 + replace |
 | 3 | versions-lock.json | 用户项目 | 系统生成 | 精确版本 + Hash |
+
+### 4.1 deps.json 中的 propagate 字段
+
+**用途**: 控制依赖是否向上传递到依赖链
+
+```json
+{
+    "name": "mylib",
+    "deps": {
+        "1.0.0": [
+            {
+                "name": "openssl",
+                "version": ">=1.1.0",
+                "propagate": true
+            },
+            {
+                "name": "zlib",
+                "version": ">=1.2.0"
+            }
+        ]
+    }
+}
+```
+
+**效果**:
+- `propagate: true` - 依赖的间接依赖会传递给当前包的依赖方
+- `propagate: false` 或省略 - 依赖仅限当前包使用（默认值）
+
+**示例**:
+```
+包 A 依赖 mylib
+mylib 依赖 openssl (propagate: true) 和 zlib (省略 propagate)
+openssl 依赖 crypto
+
+结果:
+- A 的实际依赖: [mylib, openssl, crypto]
+- zlib 不传递给 A（因为省略了 propagate，默认不传递）
+- crypto 通过 openssl 的 propagate 传递给 A
+```
 
 ## 5. 模块间接口
 

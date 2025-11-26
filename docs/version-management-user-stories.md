@@ -330,9 +330,8 @@ onRequire deps => {
 }
 
 // onBuild 回调 - 执行构建
-onBuild matrix => {
-    shell("cmake -Bbuild")?
-    shell("cmake --build build")?
+onBuild => {
+
 }
 ```
 
@@ -659,8 +658,6 @@ versions-lock.json
 
 ## 6. 典型工作流
 
-### 6.1 工作流 1: 首次使用依赖包
-
 ```mermaid
 sequenceDiagram
     participant U as 用户
@@ -668,131 +665,23 @@ sequenceDiagram
     participant D as deps.json
     participant VF as _version.gox
     participant V as versions.json
-    participant OR as onRequire(可选)
     participant MVS as MVS算法
     participant L as versions-lock.json
 
     U->>S: 执行构建
-    S->>S: 检测 versions.json 不存在
-
-    Note over S,VF: 阶段1：版本范围解析（轻量级）
     S->>D: 读取版本范围
-    D-->>S: >=1.0.0 <2.0.0
-    S->>VF: 加载 B/_version.gox
     S->>VF: 调用 onVersions
-    VF-->>S: [1.0.0, 1.1.0, 1.2.0]
-    S->>VF: 调用 compare 排序（如果有）
+    VF-->>S: 版本列表
     alt 默认模式
-        S->>S: 选择最小版本 1.0.0
+        S->>S: 选择最小版本
     else 升级模式 (-u)
-        S->>S: 选择最大版本 1.2.0
+        S->>S: 选择最大版本
     end
     S->>V: 生成 versions.json
-
-    Note over S,MVS: 阶段2：MVS依赖解析
     S->>MVS: 执行 MVS 算法
-
-    alt 配方实现了 onRequire
-        MVS->>OR: 调用 formula.gox/onRequire(deps)
-        OR->>OR: 读取构建系统文件<br/>(CMakeLists.txt等)
-        OR->>OR: resolve() + versionsOf()
-        Note over OR,VF: versionsOf() 内部加载 _version.gox
-        OR->>OR: filter + min/max 选择版本<br/>(默认min，-u时max)
-        OR-->>MVS: 填入精确依赖版本
-    else 配方未实现 onRequire
-        MVS->>V: 使用 versions.json 中的依赖
-    end
-
     MVS-->>S: BuildList
-
-    Note over S,L: 阶段3：构建执行
     S->>S: 执行构建
     S->>L: 生成 versions-lock.json
-    S-->>U: 构建完成
-```
-
-### 6.2 工作流 2: 升级特定依赖
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant V as versions.json
-    participant S as 系统
-    participant D as deps.json
-    participant VF as _version.gox
-    participant OR as onRequire(可选)
-    participant MVS as MVS算法
-
-    U->>V: 删除依赖项
-    U->>S: 执行构建
-
-    Note over S,VF: 阶段1：重新解析版本（轻量级）
-    S->>D: 重新读取版本范围
-    D-->>S: >=1.0.0 <2.0.0
-    S->>VF: 加载 B/_version.gox
-    S->>VF: 调用 onVersions
-    VF-->>S: [1.0.0, 1.1.0, 1.2.0, 1.3.0]
-    S->>S: 选择最新版本 1.3.0
-    S->>V: 更新 versions.json
-
-    Note over S,MVS: 阶段2：MVS依赖解析
-    S->>MVS: 执行 MVS 算法
-
-    alt 配方实现了 onRequire
-        MVS->>OR: 调用 formula.gox/onRequire(deps)
-        OR->>VF: versionsOf() 加载依赖的 _version.gox
-        OR->>VF: filter() + max 选择版本
-        OR-->>MVS: 填入精确依赖版本
-    else 配方未实现 onRequire
-        MVS->>V: 使用 versions.json 中的依赖
-    end
-
-    MVS-->>S: BuildList
-
-    Note over S: 阶段3：构建执行
-    S->>S: 执行构建
-    S-->>U: 构建完成
-```
-
-### 6.3 工作流 3: 降级或固定版本（使用 replace）
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant V as versions.json
-    participant S as 系统
-    participant VF as _version.gox
-    participant OR as onRequire(可选)
-    participant MVS as MVS算法
-    participant L as versions-lock.json
-
-    U->>V: 添加 replace 字段
-    Note right of V: replace: { B: "1.1.0" }
-    U->>S: 执行构建
-
-    Note over S,V: 阶段1：读取版本配置
-    S->>V: 读取 versions.json
-    S->>S: 检测到 replace（优先级最高）
-
-    Note over S,MVS: 阶段2：MVS依赖解析
-    S->>MVS: 执行 MVS 算法
-
-    alt 配方实现了 onRequire
-        MVS->>OR: 调用 formula.gox/onRequire(deps)
-        OR->>VF: versionsOf() 加载依赖的 _version.gox
-        OR->>VF: filter() + max 选择版本
-        OR-->>MVS: 填入依赖版本
-        Note over MVS: replace 会覆盖 onRequire 的结果
-    else 配方未实现 onRequire
-        MVS->>V: 使用 versions.json 中的依赖
-    end
-
-    MVS->>MVS: 应用 replace 规则<br/>强制使用 B@1.1.0
-    MVS-->>S: BuildList
-
-    Note over S,L: 阶段3：构建执行
-    S->>S: 使用 replace 指定版本构建
-    S->>L: 更新 versions-lock.json<br/>记录实际版本 1.1.0
     S-->>U: 构建完成
 ```
 
@@ -815,3 +704,233 @@ sequenceDiagram
 - Go 的 go.mod 会上传到远程，LLAR 的 versions.json 不上传
 - LLAR 有三层架构（deps.json + versions.json + versions-lock.json）
 - LLAR 不基于 semver，使用自定义比较
+
+## 8. propagate 依赖传递机制
+
+### 8.1 背景与动机
+
+**问题**: 在 C/C++ 构建中，某些依赖必须传递给上层使用者才能正确链接
+
+**场景**:
+- 库 A 在头文件中引用了库 B 的类型
+- 用户链接 A 时，也必须链接 B
+- 但默认情况下，依赖不传递，用户不知道需要 B
+
+### 8.2 propagate 字段设计
+
+在 deps.json 的依赖项中添加 `propagate` 布尔字段：
+
+```json
+{
+    "name": "mylib",
+    "deps": {
+        "1.0.0": [
+            {
+                "name": "openssl",
+                "version": ">=1.1.0",
+                "propagate": true
+            },
+            {
+                "name": "zlib",
+                "version": ">=1.2.0"
+            }
+        ]
+    }
+}
+```
+
+**字段说明**:
+- `propagate: true` - 依赖的构建信息会向下游传播（下游包可以访问该依赖）
+- `propagate: false` 或省略 - 依赖的构建信息不传播，仅当前包内部使用（默认值）
+
+### 8.2.1 何时使用 propagate
+
+| 场景 | propagate 值 | 原因 | 示例 |
+|------|-------------|------|------|
+| 头文件暴露了依赖的类型 | `true` | 下游编译需要访问依赖的头文件 | HTTP 库头文件中使用 `SSL*` 类型 |
+| 公开 API 返回依赖的对象 | `true` | 下游需要链接依赖库 | 数据库客户端返回 protobuf 消息 |
+| 模板库（header-only） | `true` | 下游编译需要访问依赖的模板定义 | 使用 Boost 模板库 |
+| 宏定义依赖 | `true` | 头文件中使用了依赖的宏 | 使用 OpenSSL 的编译宏 |
+| 静态链接的内部实现 | `false` | 依赖已经打包进库文件 | 图像库内部静态链接 zlib |
+| 动态加载的插件 | `false` | 运行时加载，无需编译时依赖 | 插件系统的动态库 |
+| 仅构建时使用的工具 | `false` | 运行时不需要 | 代码生成工具如 protoc |
+| 运行时依赖但不暴露接口 | `false` | 下游无需编译时知道 | 内部使用的数据库驱动 |
+
+**快速判断规则**:
+- 如果下游包**编译时**需要访问依赖的头文件或类型 → `propagate: true`
+- 如果下游包**链接时**需要链接该依赖库 → `propagate: true`
+- 如果依赖仅在当前包内部使用，下游完全无感知 → `propagate: false`
+
+### 8.3 用户故事
+
+#### 故事 8.1: 头文件依赖传递
+
+**作为** 配方维护者
+**我希望** 将头文件依赖标记为 propagate
+**以便** 使用我的库的用户也能访问依赖的头文件
+
+**验收标准**:
+- 可以在 deps.json 中为依赖添加 `propagate: true`
+- 标记为 propagate 的依赖会传递给上层包
+- 上层包的 BuildList 中包含传递的依赖
+
+**场景 1: HTTP 库依赖 OpenSSL**
+
+**为什么需要 propagate: true**:
+- myhttp 的头文件中暴露了 `SSL*` 等 OpenSSL 类型
+- 用户使用 myhttp 时，编译器需要找到 OpenSSL 的头文件
+- 链接时需要同时链接 openssl 和 crypto 库
+
+```mermaid
+graph TB
+A["用户应用 App"] --> B["HTTP 库<br/>myhttp<br/>propagate: true"]
+B --> C["OpenSSL<br/>propagate: true"]
+C --> D["crypto"]
+C --> A
+D --> A
+
+style B stroke:#4169E1,stroke-width:3px
+style C stroke:#DC143C,stroke-width:3px
+```
+
+**deps.json 配置**:
+```json
+{
+    "name": "myhttp",
+    "deps": {
+        "1.0.0": [{
+            "name": "openssl",
+            "version": ">=1.1.0",
+            "propagate": true
+        }]
+    }
+}
+```
+
+**效果**:
+```mermaid
+graph TD
+A["App 的实际依赖"] --> B["myhttp"]
+A --> C["openssl（传递）"]
+A --> D["crypto（传递）"]
+
+style B stroke:#4169E1,stroke-width:3px
+style C stroke:#FFA500,stroke-width:3px
+style D stroke:#FFA500,stroke-width:3px
+```
+
+- `propagate: true` 使得 openssl 及其依赖 crypto 都传递给 App
+- App 的 Artifact.dependencies 包含 `[myhttp, openssl, crypto]`
+- App 在 onBuild 中可以通过迭代器访问所有依赖
+
+#### 故事 8.2: 内部实现依赖不传递
+
+**作为** 配方维护者
+**我希望** 内部实现依赖不传递
+**以便** 减少上层包的依赖数量，避免版本冲突
+
+**验收标准**:
+- 可以在 deps.json 中为依赖设置 `propagate: false` 或省略该字段（默认值）
+- 未设置 propagate 或设置为 false 的依赖不传递给上层包
+- 上层包无法访问这些依赖
+
+**场景 2: 图像库的内部压缩**
+
+**为什么 propagate: false**:
+- libimage 内部使用 zlib 压缩图像数据
+- zlib 已经静态链接到 libimage.a 中
+- 用户链接 libimage 时不需要再链接 zlib
+- libimage 的头文件不暴露任何 zlib 类型
+
+```mermaid
+graph TB
+A["用户应用 App"] --> B["图像库<br/>libimage"]
+B --> C["zlib<br/>propagate: false"]
+
+style B stroke:#4169E1,stroke-width:3px
+style C stroke:#32CD32,stroke-width:3px
+```
+
+**deps.json 配置**:
+```json
+{
+    "name": "libimage",
+    "deps": {
+        "1.0.0": [{
+            "name": "zlib",
+            "version": ">=1.2.0",
+            "propagate": false
+        }]
+    }
+}
+```
+
+**效果**:
+```mermaid
+graph TD
+A["App 的实际依赖"] --> B["libimage"]
+
+style B stroke:#4169E1,stroke-width:3px
+```
+
+- `propagate: false` 使得 zlib 不传递给 App
+- App 的 Artifact.dependencies 只包含 `[libimage]`
+- zlib 仅在 libimage 内部使用（如静态链接）
+
+#### 故事 8.3: 混合场景 - 接口依赖传递，实现依赖不传递
+
+**作为** 配方维护者
+**我希望** 灵活控制哪些依赖传递
+**以便** 只暴露必要的依赖给上层
+
+**验收标准**:
+- 可以为不同依赖设置不同的 propagate 值
+- 系统正确处理混合传递场景
+
+**场景 3: 数据库客户端库**
+
+```mermaid
+graph TB
+A["用户应用 App"] --> B["数据库客户端<br/>dbclient"]
+B --> C["protobuf<br/>propagate: true<br/>（协议定义）"]
+B --> D["boost<br/>propagate: false<br/>（内部实现）"]
+
+style B stroke:#4169E1,stroke-width:3px
+style C stroke:#DC143C,stroke-width:3px
+style D stroke:#32CD32,stroke-width:3px
+```
+
+**deps.json 配置**:
+```json
+{
+    "name": "dbclient",
+    "deps": {
+        "1.0.0": [
+            {
+                "name": "protobuf",
+                "version": ">=3.0.0",
+                "propagate": true
+            },
+            {
+                "name": "boost",
+                "version": ">=1.70.0"
+            }
+        ]
+    }
+}
+```
+
+**效果**:
+```mermaid
+graph TD
+A["App 的实际依赖"] --> B["dbclient"]
+A --> C["protobuf（传递）"]
+
+style B stroke:#4169E1,stroke-width:3px
+style C stroke:#FFA500,stroke-width:3px
+```
+
+**解释**:
+- `protobuf` 传递：因为 App 需要使用 protobuf 生成的消息类型
+- `boost` 不传递：仅在 dbclient 内部使用，无需暴露
+
