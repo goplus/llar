@@ -292,22 +292,20 @@ onSource (ver, lockSourceHash) => {
    versionList := versionsOf("skvadrik/re2c")  // 内部加载 re2c_version.gox 并调用 onVersions
    ```
 
-3. **versionList.filter(constraint string) VersionList**: 根据版本约束过滤版本
+3. **versionList.filter(constraint string) version.Version**: 根据版本约束过滤并选择版本
    ```javascript
-   filtered := versionList.filter(">=2.0")  // 内部调用 compare 方法
+   // 系统根据 -u 参数自动选择：
+   // - 无 -u 参数：选择满足约束的最小版本（稳定优先）
+   // - 有 -u 参数：选择满足约束的最大版本（最新优先）
+   selectedVersion := versionList.filter(">=2.0")
    ```
 
-4. **versionList.max**: XGo 自动属性，获取最大版本
-   ```javascript
-   maxVersion := filtered.max  // 自动调用 .Max() 方法
-   ```
-
-5. **readFile(path string) string**: 读取文件内容
+4. **readFile(path string) string**: 读取文件内容
    ```javascript
    cmake := readFile("CMakeLists.txt")?
    ```
 
-6. **deps.require(packageName, dependencies)**: 填入依赖到依赖图
+5. **deps.require(packageName, dependencies)**: 填入依赖到依赖图
    ```javascript
    deps.require("ninja-build/ninja", [{
        name: packageName,
@@ -323,15 +321,21 @@ onRequire deps => {
     // 1. 读取 CMakeLists.txt（onSource 已下载）
     cmake := readFile("CMakeLists.txt")?
 
-    // 2. 解析依赖声明
-    if cmake.contains("find_package(re2c 2.0") {
-        // 3. 解析库名为完整 packageName
-        packageName := resolve("re2c")  // "skvadrik/re2c"
+    // 2. 解析 find_package 依赖声明（从构建系统文件中提取）
+    // 示例：从 "find_package(re2c 2.0 REQUIRED)" 解析出依赖信息
+    matches := parseFindPackage(cmake)  // 返回 [{name: "re2c", version: "2.0"}]
 
-        // 4. 获取版本列表、过滤并选择最大版本
-        selectedVersion := versionsOf(packageName).filter(">=2.0").max
+    // 3. 遍历解析出的依赖
+    for match in matches {
+        // 4. 解析库名为完整 packageName
+        packageName := resolve(match.name)  // "re2c" -> "skvadrik/re2c"
 
-        // 5. 填入精确版本
+        // 5. 过滤版本并选择
+        // 无 -u 参数：选择满足约束的最小版本（稳定优先）
+        // 有 -u 参数：选择满足约束的最大版本（最新优先）
+        selectedVersion := versionsOf(packageName).filter(">=" + match.version)
+
+        // 6. 填入精确版本到依赖图
         deps.require("ninja-build/ninja", [{
             name: packageName,
             version: selectedVersion
@@ -348,7 +352,9 @@ onRequire deps => {
 **onRequire 内部的版本处理**：
 - deps.json 使用版本范围（如 `>=1.2.0 <2.0.0`）
 - onRequire 内部需要转换为精确版本
-- 通过 `versionsOf().filter().max` 完成转换
+- 通过 `versionsOf().filter()` 完成转换，系统根据 `-u` 参数自动选择合适版本：
+  - 无 `-u` 参数：选择满足约束的最小版本（稳定优先）
+  - 有 `-u` 参数：选择满足约束的最大版本（最新优先）
 
 **deps.Graph 接口**：
 ```go
