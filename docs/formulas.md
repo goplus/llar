@@ -350,12 +350,6 @@ onRequire deps => {
 - onRequire 内部需要转换为精确版本
 - 通过 `versionsOf().filter().max` 完成转换
 
-**何时使用 onRequire**：
-- ✅ 适合：上游包有标准的构建系统文件（CMakeLists.txt、conanfile.txt 等）
-- ✅ 适合：依赖关系经常变化
-- ❌ 不适合：上游包没有构建系统文件
-- ❌ 不适合：依赖关系简单且稳定
-
 **deps.Graph 接口**：
 ```go
 type Graph interface {
@@ -374,7 +368,7 @@ type Graph interface {
 
 **功能**: 定义包的具体构建步骤和产物输出
 
-**签名**: `onBuild matrix => { ... }`
+**签名**: `onBuild => { ... }`
 
 **能力**：
 - 执行构建命令（调用 CMake、Make、编译器等构建工具）
@@ -396,39 +390,6 @@ type Graph interface {
 - 执行跨平台构建（Linux、macOS、Windows）
 - 处理多种工具链（GCC、Clang、MSVC）
 - 生成不同类型的产物（静态库、动态库、Header-Only）
-
-**示例**：
-```javascript
-onBuild matrix => {
-    args := []
-
-    // 根据构建矩阵选择工具链
-    if matrix["toolchain"].contains "clang" {
-        args <- "-DTOOLCHAIN=clang"
-    }
-
-    // 根据架构设置编译参数
-    if matrix["arch"] == "arm64" {
-        args <- "-DARCH=ARM64"
-    }
-
-    args <- "."
-
-    // 执行CMake配置和构建
-    cmake args
-    cmake "--build" "."
-
-    // 返回构建产物信息
-    return {
-        Info: {
-            BuildResults: [
-                {LDFlags, "-L/path/to/lib -lcjson"},
-                {CFlags, "-I/path/to/include"},
-            ]
-        }
-    }, nil
-}
-```
 
 ## 5. 回调函数调用流程
 
@@ -459,7 +420,7 @@ sequenceDiagram
 
     Note over E,FS: 阶段2: 构建执行（BuildList顺序）
     loop 每个包（glibc -> zlib -> cJSON）
-        E->>F: 调用 onBuild(matrix)
+        E->>F: 调用 onBuild
         F->>FS: 在临时目录中构建
         F-->>E: 返回 Artifact（临时Dir）
         E->>FS: 移动 Artifact.Dir 到配方 build 目录
@@ -519,29 +480,29 @@ type BasicFormula interface {
 ```go
 type Artifact struct {
     // 配方需要填充的字段
-    Dir  string                                  // 产物输出目录，必填
-    Link func(compileArgs []string) []string    // 链接回调函数，必填
+    Dir      string   // 产物输出目录，必填
+    LinkArgs []string // 链接参数，必填
 
     // 内部字段（系统自动填充）
-    formula      BasicFormula                    // 包的元信息，系统自动填入，只读
-    dependencies []*Artifact                     // 依赖的产物列表，系统自动填入
+    formula      BasicFormula  // 包的元信息，系统自动填入，只读
+    dependencies []*Artifact   // 依赖的产物列表，系统自动填入
 }
 
 // Formula 方法 - 通过 XGO 自动属性访问
 // 配方中使用: artifact.formula （自动调用 Formula()）
-func (a *Artifact) Formula() BasicFormula {
-    return a.formula
+func (a *Artifact) Formula() BasicFormula
+
+// ArtifactIter 迭代器
+type ArtifactIter struct {
+    // 迭代器内部字段
 }
 
-// XGO 迭代器接口实现
+// Next 实现迭代器接口
+func (iter *ArtifactIter) Next() (val *Artifact, ok bool)
+
+// Gop_Enum 返回迭代器
 // 用法：for dep in artifact { ... }
-func (a *Artifact) Gop_Enum(callback func(*Artifact) bool) {
-    for _, dep := range a.dependencies {
-        if !callback(dep) {
-            break
-        }
-    }
-}
+func (a *Artifact) Gop_Enum() *ArtifactIter
 ```
 
 **持久化结构**（.cache.json 中存储）：
@@ -554,8 +515,8 @@ type ArtifactCache struct {
     BuildTime      string            `json:"buildTime"`
     BuildDuration  string            `json:"buildDuration"`
     Outputs        struct {
-        Dir       string `json:"dir"`
-        LinkArgs  string `json:"linkArgs"` // 通过 Link() 回调生成
+        Dir      string   `json:"dir"`
+        LinkArgs []string `json:"linkArgs"`
     } `json:"outputs"`
     SourceHash     string `json:"sourceHash"`
     FormulaHash    string `json:"formulaHash"`
@@ -563,14 +524,13 @@ type ArtifactCache struct {
 ```
 
 **说明**：
-- `Artifact` 是运行时结构，配方只需填充 `Dir` 和 `Link` 字段
+- `Artifact` 是运行时结构，配方只需填充 `Dir` 和 `LinkArgs` 字段
 - `formula` 字段提供包的元信息（包名、版本、矩阵等），系统自动填入，只读
 - 通过 XGO 自动属性访问：`artifact.formula` 自动调用 `Formula()` 方法
 - `dependencies` 字段存储依赖的产物列表，系统根据 MVS BuildList 自动填入
 - 通过 XGO 迭代器语法 `for dep in artifact { ... }` 遍历依赖
-- `Link` 是动态函数，用于在运行时生成链接参数
-- `ArtifactCache` 是序列化结构，`linkArgs` 是预先计算好的字符串
-- 构建完成后，调用 `Link([]string{})` 生成 `linkArgs` 并保存到 `.cache.json`
+- `LinkArgs` 是字符串数组，包含编译链接所需的所有参数
+- `ArtifactCache` 是序列化结构，直接存储 `linkArgs` 数组
 
 ### 6.2 配方中使用 Artifact
 
@@ -592,82 +552,15 @@ onBuild => {
     // 执行构建...
     cmake "--build", "."
 
+    // 返回构建产物
     return &Artifact{
         Dir: "/path/to/output",
-        Link: (args) => {
-            args <- "-L${Dir}/lib"
-            args <- "-lmylib"
-            return args
-        }
+        LinkArgs: ["-L/path/to/output/lib", "-lmylib"]
     }, nil
 }
 ```
 
-#### 6.2.2 构建链接回调链
-
-配方可以通过遍历依赖来构建链接回调链：
-
-```javascript
-// 包 B 的配方
-onBuild => {
-    return &Artifact{
-        Dir: "/path/to/B",
-        Link: (args) => {
-            args <- "-L/path/to/B/lib"
-            args <- "-lB"
-            return args
-        }
-    }, nil
-}
-
-// 包 A 的配方（依赖 B）
-onBuild => {
-    return &Artifact{
-        Dir: "/path/to/A",
-        Link: (args) => {
-            // 先添加 A 的链接参数
-            args <- "-L/path/to/A/lib"
-            args <- "-lA"
-
-            // 再调用依赖的 Link（形成链）
-            for dep in artifact {
-                args = dep.Link(args)
-            }
-
-            return args
-        }
-    }, nil
-}
-```
-
-### 6.3 链接回调链机制
-
-构建信息由构建列表从上往下传递，每构建完一个产物，系统会自动将依赖关系填入 `Artifact.dependencies`：
-
-```
-构建顺序: B -> A
-A.dependencies = [B]
-```
-
-配方在 `onBuild` 中通过迭代器访问依赖，构建链接回调链：
-
-```javascript
-// A.Link([]string{}) 调用
-// 1. 添加 A 的参数
-args <- "-L/A/lib"
-args <- "-lA"
-// 结果: ["-L/A/lib", "-lA"]
-
-// 2. 遍历依赖调用 B.Link
-for dep in artifact {
-    args = dep.Link(args)
-}
-// 结果: ["-L/A/lib", "-lA", "-L/B/lib", "-lB"]
-```
-
-最终结果：`-L/A/lib -lA -L/B/lib -lB`
-
-### 6.4 构建输出结构
+### 6.3 构建输出结构
 
 一般 C/C++ 语言输出：
 ```
@@ -1027,32 +920,24 @@ onBuild => {
     // 执行安装
     cmake "--install", "."
 
-    // 定义链接回调函数
-    linkFn := func(compileArgs []string) []string {
-        result := compileArgs
+    // 构建链接参数
+    linkArgs := []
 
-        // 添加头文件路径
-        result <- "-I${installDir}/include"
+    // 添加头文件路径
+    linkArgs <- "-I${installDir}/include"
 
-        // 添加库文件路径
-        if m.options["shared"] == "ON" {
-            result <- "-L${installDir}/lib", "-lcjson"
-        } else {
-            result <- "${installDir}/lib/libcjson.a"
-        }
-
-        // 如果有上一个产物，调用其 Link 函数形成链接链
-        if lastArtifact != nil {
-            result = lastArtifact.Link(result)
-        }
-
-        return result
+    // 添加库文件路径
+    if m.options["shared"] == "ON" {
+        linkArgs <- "-L${installDir}/lib"
+        linkArgs <- "-lcjson"
+    } else {
+        linkArgs <- "${installDir}/lib/libcjson.a"
     }
 
     // 返回构建产物
     return &Artifact{
-        Dir:  installDir,      // 产物目录
-        Link: linkFn,          // 链接回调函数
+        Dir:      installDir,  // 产物目录
+        LinkArgs: linkArgs,    // 链接参数
     }, nil
 }
 ```
@@ -1082,7 +967,7 @@ onBuild => {
 
 6. **错误处理**：使用 XGO 的 `!` 和 `?` 操作符简化错误处理
 
-7. **链接回调链**：通过 `lastArtifact.Link()` 形成回调链，自动传递编译参数
+7. **链接参数**：直接构建 LinkArgs 数组，包含头文件路径和库文件路径
 
 ## 10. 配方编写最佳实践
 
@@ -1111,7 +996,7 @@ onSource (ver, lockSourceHash) => {
 
 **根据矩阵参数条件编译**：
 ```javascript
-onBuild matrix => {
+onBuild => {
     args := []
 
     // 处理架构
