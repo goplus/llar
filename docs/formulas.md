@@ -65,13 +65,13 @@ XGO Classfile 具有一切构建脚本需要的特性：
 
 **配方文件**:
 - 格式: `{{repo}}_llar.gox`
-- 示例: `DaveGamble/cJSON` → `cjson_llar.gox`
-- 说明: 使用 repo 名称（小写）+ `_llar.gox` 后缀
+- 示例: `DaveGamble/cJSON` → `cJSON_llar.gox`
+- 说明: 使用 repo 名称 + `_llar.gox` 后缀
 
 **版本管理文件**:
 - 格式: `{{repo}}_version.gox`
-- 示例: `DaveGamble/cJSON` → `cjson_version.gox`
-- 说明: 使用 repo 名称（小写）+ `_version.gox` 后缀
+- 示例: `DaveGamble/cJSON` → `cJSON_version.gox`
+- 说明: 使用 repo 名称 + `_version.gox` 后缀
 
 **依赖管理文件**:
 - 固定名称: `deps.json`
@@ -85,13 +85,13 @@ XGO Classfile 具有一切构建脚本需要的特性：
 DaveGamble/
 └── cJSON/
     ├── deps.json          # 依赖管理文件（版本范围约束）
-    ├── cjson_version.gox  # 版本管理文件（onVersions + compare）
+    ├── cJSON_version.gox  # 版本管理文件（onVersions + compare）
     ├── go.mod             # Go 模块文件（可选）
     ├── go.sum             # Go 校验文件（可选）
     ├── 1.x/
-    │   └── cjson_llar.gox # 配方文件（处理 1.x 版本）
+    │   └── cJSON_llar.gox # 配方文件（处理 1.x 版本）
     └── 2.x/
-        └── cjson_llar.gox # 配方文件（处理 2.x 版本）
+        └── cJSON_llar.gox # 配方文件（处理 2.x 版本）
 ```
 
 ## 3. FormulaApp 基础设计
@@ -828,13 +828,13 @@ C --> D["依赖D: x86_64-c-linux"]
     ├── DaveGamble/
     │   └── cJSON/
     │       ├── deps.json        # 依赖管理文件
-    │       ├── cjson_version.gox # 版本管理文件
+    │       ├── cJSON_version.gox # 版本管理文件
     │       ├── go.mod
     │       ├── go.sum
     │       ├── 1.x/
-    │       │   └── cjson_llar.gox
+    │       │   └── cJSON_llar.gox
     │       └── 2.x/
-    │           └── cjson_llar.gox
+    │           └── cJSON_llar.gox
     └── madler/
         └── zlib/
             ├── deps.json
@@ -902,7 +902,7 @@ E --> F
 
 ### 9.1 配方文件示例
 
-**cjson_llar.gox** (DaveGamble/cJSON):
+**cJSON_llar.gox** (DaveGamble/cJSON):
 
 ```javascript
 // ============================================
