@@ -274,16 +274,21 @@ deps.json 配置:
 
 ## 4. MVS 算法详细流程
 
-### 4.1 依赖收集
+### 4.1 依赖收集（广度优先）
+
+**重要**: 依赖收集采用**广度优先顺序**，从根节点（目标包）开始，逐层展开：
+1. 先调用根节点的 Require/onRequire，获取第一层依赖
+2. 再依次调用第一层依赖的 Require/onRequire，获取第二层依赖
+3. 以此类推，直到所有依赖收集完成
 
 ```mermaid
 graph TD
-A["开始: Target A@1.0.0"] --> B["初始化: list = [A@1.0.0]"]
-B --> C["取出队列首元素"]
-C --> D["调用 Require 获取依赖"]
-D --> E["遍历每个依赖"]
+A["开始: Target A@1.0.0"] --> B["初始化队列: [A@1.0.0]"]
+B --> C["从队列头取出元素"]
+C --> D["调用 Require 获取直接依赖"]
+D --> E["遍历每个直接依赖"]
 E --> F{"依赖已访问?"}
-F -- "否" --> G["加入 list"]
+F -- "否" --> G["加入队列尾部"]
 F -- "是" --> H["检查版本冲突"]
 G --> I{"队列为空?"}
 H --> I
@@ -291,7 +296,23 @@ I -- "否" --> C
 I -- "是" --> J["依赖收集完成"]
 
 style A stroke:#FF8C00,stroke-width:3px
+style B stroke:#4169E1,stroke-width:3px
+style C stroke:#9370DB,stroke-width:3px
 style J stroke:#32CD32,stroke-width:3px
+```
+
+**示例**:
+```
+cJSON (根节点)
+├── zlib
+└── openssl
+    └── crypto
+
+收集顺序（广度优先）:
+1. 调用 cJSON 的 Require → 得到 [zlib, openssl]
+2. 调用 zlib 的 Require → 得到它的依赖
+3. 调用 openssl 的 Require → 得到 [crypto]
+4. 调用 crypto 的 Require → 得到它的依赖
 ```
 
 ### 4.2 版本冲突解决
@@ -317,7 +338,9 @@ style E stroke:#32CD32,stroke-width:3px
 4. 验证最大版本满足所有约束
 ```
 
-### 4.3 拓扑排序
+### 4.3 拓扑排序（构建顺序）
+
+**目的**: 确保依赖在使用者之前构建（从叶子节点到根节点）
 
 ```mermaid
 graph TD
@@ -334,23 +357,28 @@ style A stroke:#4169E1,stroke-width:3px
 style H stroke:#32CD32,stroke-width:3px
 ```
 
-**目的**: 确保依赖在使用者之前构建
-
 **示例**:
 ```
 依赖关系:
-A → B
-A → C
-C → B
+cJSON (根节点)
+├── zlib
+└── openssl
+    └── crypto
 
-拓扑排序结果:
-[B, C, A]
+构建顺序（拓扑排序，从下到上）:
+BuildList = [crypto, zlib, openssl, cJSON]
 
-构建顺序:
-1. 先构建 B
-2. 再构建 C（C 依赖 B）
-3. 最后构建 A（A 依赖 B 和 C）
+1. 先构建 crypto（叶子节点，无依赖）
+2. 再构建 zlib（叶子节点，无依赖）
+3. 然后构建 openssl（依赖 crypto，crypto 已构建）
+4. 最后构建 cJSON（依赖 zlib 和 openssl，都已构建）
 ```
+
+**重要对比**:
+- **依赖收集顺序**（调用 Require/onRequire）: 广度优先，从上到下
+  - `cJSON → zlib → openssl → crypto`
+- **构建执行顺序**（BuildList）: 拓扑排序，从下到上
+  - `crypto → zlib → openssl → cJSON`
 
 ## 5. MVS 作为依赖解析器
 
