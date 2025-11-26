@@ -272,8 +272,9 @@ onSource (ver, lockSourceHash) => {
 
 **执行时机**: 在 `onSource` **之后**执行（因为需要读取源码中的构建系统文件）
 
-**执行顺序**: 按照依赖树的**自底向上顺序**（深度优先后序遍历）
-- 示例：假设 `cJSON` 依赖 `zlib`，`zlib` 依赖 `glibc`，则执行顺序为 `glibc -> zlib -> cJSON`（从最底层依赖开始）
+**执行顺序**: 按照依赖树的**自顶向下顺序**（广度优先遍历）
+- 示例：假设 `cJSON` 依赖 `zlib`，`zlib` 依赖 `glibc`，则执行顺序为 `cJSON -> zlib -> glibc`
+- 原因：必须先执行 cJSON 的 onRequire 才能知道它依赖 zlib，然后才能执行 zlib 的 onRequire
 
 **应用场景**：
 - 上游包使用 CMake/Conan/Meson 等构建系统，包含依赖信息
@@ -410,8 +411,8 @@ sequenceDiagram
 
     U->>E: 请求构建 Package@Version
 
-    Note over E,FS: 阶段1: 依赖解析（自底向上）
-    loop 每个包（glibc -> zlib -> cJSON）
+    Note over E,FS: 阶段1: 依赖解析（自顶向下，广度优先）
+    loop 每个包（cJSON -> zlib -> glibc）
         E->>FS: 创建临时工作目录
         E->>F: 调用 onSource(version)
         F->>FS: 下载源码到临时目录
@@ -1084,7 +1085,7 @@ J --> P[返回构建信息给用户]
 
 1. **配方获取阶段**：自动从中心化仓库克隆或更新配方
 2. **版本选择阶段**：根据 `fromVersion` 选择适配的配方
-3. **依赖解析阶段**：按自底向上顺序（从最底层依赖开始）执行 `onSource` 和 `onRequire`
+3. **依赖解析阶段**：按自顶向下顺序（广度优先遍历）执行 `onSource` 和 `onRequire`，先执行根节点才能知道依赖关系
 4. **构建执行阶段**：按 BuildList 拓扑顺序执行 `onBuild`
 5. **产物缓存阶段**：将构建产物移动到最终位置并生成缓存信息
 
