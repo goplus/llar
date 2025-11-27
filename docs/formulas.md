@@ -151,6 +151,10 @@ func (f *FormulaApp) Homepage__1(homepage string)   // 设置Homepage URL
 func (f *FormulaApp) Matrix__0() matrix.Matrix      // 返回当前构建矩阵
 func (f *FormulaApp) Matrix__1(mrx matrix.Matrix)   // 声明构建矩阵
 
+// DynamicLibrary - 支持重载
+func (f *FormulaApp) DynamicLibrary__0() bool       // 返回是否允许动态库
+func (f *FormulaApp) DynamicLibrary__1(allow bool)  // 设置是否允许动态库
+
 // Version - 返回当前包的版本
 func (f *FormulaApp) Version() version.Version
 
@@ -195,6 +199,9 @@ echo packageName  // 自动调用 PackageName__0()
 
 // 声明版本起始点
 fromVersion "1.0.0"
+
+// 声明是否允许动态库（可选，默认 false）
+dynamicLibrary false  // 或 true（用于 Python 扩展等特殊场景）
 
 // 事件处理器（自动注册为回调函数）
 onSource (ver, lockSourceHash) => {
@@ -762,7 +769,9 @@ project/
 
 ### 6.4 静态链接要求
 
-**重要限制**：LLAR 配方**只能输出静态库（.a 文件）**，不支持动态库（.so/.dylib/.dll）。
+**重要限制**：LLAR 配方**默认只能输出静态库（.a 文件）**，不支持动态库（.so/.dylib/.dll）。
+
+**例外情况**：对于 Python、Lua、Ruby 等需要动态加载插件的运行时环境，必须使用动态库，此时需要显式声明 `dynamicLibrary: true`。
 
 **设计原因**：
 
@@ -789,7 +798,114 @@ LLAR 需要提供一个**完全隔离的构建环境**，确保构建可重现�
    - 当只存在静态库（.a）时，链接器会自动选择静态链接
    - 这是编译器的标准行为，无需特殊指定
 
-**配方编写要求**：
+**动态库的例外情况**：
+
+对于**运行时动态加载插件**的特殊场景（如 Python、Lua、Ruby），必须允许动态库：
+
+1. **典型场景**：
+   - Python C 扩展模块（.so）
+   - Lua 模块（.so）
+   - Ruby 扩展（.so）
+   - 插件系统（通过 `dlopen` 加载）
+
+2. **问题**：
+   - 这些运行时通过 `dlopen` 动态加载共享库
+   - 静态库无法被 `dlopen` 加载
+   - 必须使用动态库才能工作
+
+3. **`dynamicLibrary: true` 的行为**：
+
+   当设置 `dynamicLibrary: true` 时，LLAR 会**在底层使用系统环境**：
+
+   - **底层系统库使用系统的**：
+     - 不使用 LLAR 提供的 glibc，改用系统的 glibc
+     - 不使用 LLAR 提供的其他系统库（libm、libpthread、libdl 等）
+     - 链接时会链接到系统的基础库
+
+   - **依赖构建行为**：
+     - **仍然构建用户声明的依赖**：deps.json 和 onRequire 中的依赖会正常构建
+     - **依赖使用 LLAR 环境**：这些依赖仍然使用 LLAR 提供的 glibc 和构建环境
+     - **只有当前包链接系统库**：只有声明了 `dynamicLibrary: true` 的包本身才链接到系统的 glibc
+     - **原因**：这是由于 ld.so（动态链接器）的特殊性，动态库必须与系统的 libc 兼容
+
+   - **链接行为**：
+     - 链接器使用系统的 `ld.so`
+     - 动态库搜索路径使用系统默认路径
+     - `RPATH`/`RUNPATH` 指向系统库目录
+
+   - **输出产物**：
+     - 生成动态库（.so/.dylib/.dll）而不是静态库（.a）
+
+4. **代价**：
+   - **依赖系统基础库**：不同系统的 glibc 版本可能不同
+   - **符号冲突风险**：系统 glibc 版本可能与预期不一致，导致 ABI 不兼容
+   - **可重现性降低**：无法保证在不同机器上构建出完全相同的产物
+   - **破坏隔离性**：底层依赖系统环境，不再完全隔离
+   - **不推荐使用**：除非绝对必要（如 Python 扩展），否则应避免
+
+5. **声明方式**：
+
+在配方中显式声明 `dynamicLibrary: true`：
+
+```javascript
+packageName "org/python-numpy"
+fromVersion "1.0.0"
+desc "Python NumPy library"
+homepage "https://numpy.org"
+
+// 显式声明使用动态库（底层使用系统 glibc）
+dynamicLibrary true
+
+matrix {
+    Require: {
+        "os": ["linux", "darwin"],
+        "arch": ["x86_64", "arm64"],
+        "lang": ["c"]
+    }
+}
+
+// deps.json 中的依赖仍然会构建，且使用 LLAR 环境
+// 只有当前包（python-numpy）才链接到系统的 glibc，这是因为 ld.so 特殊性
+
+onBuild => {
+    args := []
+
+    // 必须构建动态库（用于 Python 加载）
+    args <- "-DBUILD_SHARED_LIBS=ON"
+    args <- "."
+
+    cmake args
+    cmake "--build" "."
+    cmake "--install" "."
+
+    return {
+        Dir: "./install",
+        LinkArgs: [
+            "-I./install/include",
+            "-L./install/lib",
+            "-lnumpy"
+        ]
+    }, nil
+}
+```
+
+**注意事项**：
+
+- `dynamicLibrary: true` 会在构建日志中显示**明显警告**
+- 底层系统库（glibc、libm 等）使用系统的，而不是 LLAR 提供的
+- deps.json 和 onRequire 中的依赖**仍然会构建**，但会链接到系统库
+- 构建结果**可重现性降低**，不同系统的 glibc 版本可能不同
+- 可能出现 glibc 版本不兼容的问题（如在新系统构建，旧系统运行）
+- 尽可能避免使用，优先寻找静态链接的替代方案
+
+**适用场景**：
+
+仅适用于以下情况：
+- Python/Lua/Ruby C 扩展模块（必须是 .so）
+- 必须通过 `dlopen` 动态加载的插件
+- 无法通过静态链接实现的场景
+
+**配方编写要求（默认情况）**：
 
 ```javascript
 onBuild => {
