@@ -323,7 +323,7 @@ onSource (ver, lockSourceHash) => {
    }])
    ```
 
-**示例：Ninja 包的 onRequire**：
+**示例：从 CMake 解析依赖**：
 ```javascript
 // ninja_llar.gox - 配方文件
 
@@ -331,40 +331,56 @@ onRequire deps => {
     // 1. 读取 CMakeLists.txt（onSource 已下载）
     cmake := readFile("CMakeLists.txt")?
 
-    // 2. 解析 find_package 依赖声明（从构建系统文件中提取）
-    // 示例：从 "find_package(re2c 2.0 REQUIRED)" 解析出依赖信息
-    matches := parseFindPackage(cmake)  // 返回 [{name: "re2c", version: "2.0"}]
+    // 2. 解析所有 find_package 依赖声明（从构建系统文件中提取）
+    // 这是一个黑盒过程，从 CMake/Conan 等构建系统解析依赖和版本
+    // 示例：
+    //   find_package(re2c 2.0 REQUIRED)  -> {name: "re2c", version: "2.0"}
+    //   find_package(zlib REQUIRED)      -> {name: "zlib", version: ""}
+    matches := parseFindPackage(cmake)  // 返回 [{name: "re2c", version: "2.0"}, {name: "zlib", version: ""}]
 
-    // 3. 遍历解析出的依赖
+    // 3. 构建依赖列表
+    dependencies := []
     for match in matches {
-        // 4. 解析库名为完整 packageName
+        // 4. 将库名解析为完整的 packageName
         packageName := resolve(match.name)  // "re2c" -> "skvadrik/re2c"
 
-        // 5. 过滤版本并选择
-        // 无 -u 参数：选择满足约束的最小版本（稳定优先）
-        // 有 -u 参数：选择满足约束的最大版本（最新优先）
-        selectedVersion := versionsOf(packageName).filter(">=" + match.version)
-
-        // 6. 填入精确版本到依赖图
-        deps.require("ninja-build/ninja", [{
-            name: packageName,
-            version: selectedVersion
-        }])
+        // 5. 处理版本约束
+        if match.version != "" {
+            // 如果解析出了版本，使用解析出的版本约束
+            selectedVersion := versionsOf(packageName).filter(">=" + match.version)
+            dependencies <- {name: packageName, version: selectedVersion}
+        } else {
+            // 如果没有解析出版本，回退到 deps.json
+            // 系统会从 deps.json 读取版本约束并自动选择版本
+            dependencies <- {name: packageName}
+        }
     }
+
+    // 6. 填入依赖到依赖图
+    deps.require(packageName, dependencies)
 }
 ```
+
+**说明**：
+- onRequire 从第三方构建系统（CMake/Conan/Meson）**解析出依赖库名和版本约束**
+- **如果解析出版本**：使用解析出的版本约束，通过 `versionsOf().filter()` 选择版本
+- **如果没有解析出版本**：回退到 deps.json，系统自动读取版本约束并选择版本
+- 版本选择根据 `-u` 参数决定：
+  - 无 `-u`：选择满足约束的最小版本（稳定优先）
+  - 有 `-u`：选择满足约束的最大版本（最新优先）
 
 **配方之间的隔离**：
 - Classfile 之间不直接依赖
 - 通过 `versionsOf()` 获取其他包的版本信息
 - 通过 `resolve()` 将库名转换为 packageName
 
-**onRequire 内部的版本处理**：
-- deps.json 使用版本范围（如 `>=1.2.0 <2.0.0`）
-- onRequire 内部需要转换为精确版本
-- 通过 `versionsOf().filter()` 完成转换，系统根据 `-u` 参数自动选择合适版本：
+**onRequire 版本处理机制**：
+- **解析出版本**：使用 `versionsOf().filter()` 根据解析出的版本约束选择精确版本
+- **未解析出版本**：回退到 deps.json，系统自动读取版本约束并选择版本
+- 版本选择策略（通过 `-u` 参数控制）：
   - 无 `-u` 参数：选择满足约束的最小版本（稳定优先）
   - 有 `-u` 参数：选择满足约束的最大版本（最新优先）
+- **首次构建**时会生成 `versions.json`，记录选定的精确版本
 
 **deps.Graph 接口**：
 ```go
@@ -1030,24 +1046,48 @@ onRequire deps => {
     // 读取 CMakeLists.txt 检查依赖
     cmake := readFile("CMakeLists.txt")?
 
-    // 如果检测到需要 zlib
-    if cmake.contains("find_package(ZLIB") {
+    // 解析 find_package 依赖声明
+    // 示例：find_package(ZLIB 1.2 REQUIRED) -> {name: "ZLIB", version: "1.2"}
+    //       find_package(BZip2 REQUIRED)     -> {name: "BZip2", version: ""}
+    matches := parseFindPackage(cmake)
+
+    // 构建依赖列表
+    dependencies := []
+    for match in matches {
         // 解析库名为完整 packageName
-        zlibPkg := resolve("zlib")  // "madler/zlib"
+        pkgName := resolve(match.name)  // "ZLIB" -> "madler/zlib"
 
-        // 获取符合条件的版本
-        zlibVersion := versionsOf(zlibPkg).filter(">=1.2.0").max
-
-        // 添加依赖
-        deps.require(packageName, [{
-            name: zlibPkg,
-            version: zlibVersion
-        }])
+        // 处理版本约束
+        if match.version != "" {
+            // 如果解析出版本，使用解析出的版本约束
+            selectedVersion := versionsOf(pkgName).filter(">=" + match.version)
+            dependencies <- {name: pkgName, version: selectedVersion}
+        } else {
+            // 如果没有解析出版本，回退到 deps.json
+            dependencies <- {name: pkgName}
+        }
     }
+
+    // 填入依赖到依赖图
+    deps.require(packageName, dependencies)
 }
 
 // ============================================
-// 5. 事件处理器：构建执行
+// 5. 事件处理器：矩阵过滤（可选）
+// ============================================
+
+filter matrix => {
+    // 过滤掉无效的矩阵组合
+    // 例如：某些架构在某些操作系统上不支持
+    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
+        return false  // 剔除 macOS + MIPS 组合
+    }
+
+    return true  // 保留其他组合
+}
+
+// ============================================
+// 6. 事件处理器：构建执行
 // ============================================
 
 onBuild => {
@@ -1125,7 +1165,7 @@ onBuild => {
 4. **事件处理器**：
    - `onVersions`（{{repo}}_version.gox）：从上游获取所有可用版本
    - `onSource`（{{repo}}_llar.gox）：下载并验证源码
-   - `onRequire`（{{repo}}_llar.gox，可选）：动态解析依赖
+   - `onRequire`（{{repo}}_llar.gox，可选）：从第三方构建系统动态解析依赖，支持版本回退到 deps.json
    - `filter`（{{repo}}_llar.gox，可选）：过滤无效矩阵组合
    - `onBuild`（{{repo}}_llar.gox）：执行构建并返回 Artifact
 
