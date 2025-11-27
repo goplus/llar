@@ -755,10 +755,72 @@ onBuild => {
 ```
 project/
 ├── include/         // 头文件
-├── lib/             // 库文件
+├── lib/             // 库文件（仅静态库 .a）
 │   └── pkgconfig/   // PC文件
 └── bin/             // 可执行二进制（可选）
 ```
+
+### 6.4 静态链接要求
+
+**重要限制**：LLAR 配方**只能输出静态库（.a 文件）**，不支持动态库（.so/.dylib/.dll）。
+
+**设计原因**：
+
+LLAR 需要提供一个**完全隔离的构建环境**，确保构建可重现性。为了实现这一目标：
+
+1. **LLAR 提供完整的系统库**：
+   - LLAR 会提供 glibc 等基础 libc 库
+   - 所有依赖都由 LLAR 管理，与系统环境隔离
+
+2. **动态链接的问题**：
+   - **符号查找失败**：`ld.so` 动态链接器在运行时查找符号，容易因路径、版本不匹配导致失败
+   - **版本冲突**：系统 glibc 与 LLAR 提供的 glibc 版本不一致，导致 ABI 不兼容
+   - **环境依赖**：动态库依赖 `LD_LIBRARY_PATH`、`RPATH` 等环境变量，破坏隔离性
+   - **不可重现**：不同机器上的系统库版本不同，无法保证构建可重现性
+
+3. **静态链接的优势**：
+   - **完全隔离**：所有符号在编译时解析，不依赖运行时环境
+   - **可重现性**：构建产物包含所有依赖代码，在任何环境下都能运行
+   - **无版本冲突**：不会与系统库产生版本冲突
+   - **可移植性**：静态链接的二进制可以在不同系统上运行（相同架构）
+
+4. **链接方式**：
+   - 使用标准的 `-L` 和 `-l` 参数进行链接
+   - 当只存在静态库（.a）时，链接器会自动选择静态链接
+   - 这是编译器的标准行为，无需特殊指定
+
+**配方编写要求**：
+
+```javascript
+onBuild => {
+    args := []
+
+    // 强制静态库构建
+    args <- "-DBUILD_SHARED_LIBS=OFF"  // CMake 方式
+    args <- "--enable-static"          // Autotools 方式
+    args <- "--disable-shared"         // 禁用动态库
+
+    cmake args
+    cmake "--build" "."
+    cmake "--install" "."
+
+    // 返回静态库路径（使用标准链接参数）
+    return {
+        Dir: "./install",
+        LinkArgs: [
+            "-I./install/include",
+            "-L./install/lib",
+            "-lmylib"
+        ]
+    }, nil
+}
+```
+
+**注意事项**：
+
+- 使用标准的 `-L` 和 `-l` 链接参数，编译器会自动优先选择静态库（.a）
+- 确保上游构建系统配置为只生成静态库，避免生成动态库（.so/.dylib/.dll）
+- 当只有静态库存在时，链接器自然会链接静态库
 
 ### 6.5 构建可重现性与 formulaHash
 
@@ -1016,7 +1078,7 @@ matrix {
         "lang": ["c"]
     },
     Options: {
-        "shared": ["ON", "OFF"]
+        "tests": ["ON", "OFF"]
     }
 }
 
@@ -1134,19 +1196,15 @@ onBuild => {
     // 执行安装
     cmake "--install", "."
 
-    // 构建链接参数
+    // 构建链接参数（使用标准链接方式）
     linkArgs := []
 
     // 添加头文件路径
     linkArgs <- "-I${installDir}/include"
 
-    // 添加库文件路径
-    if m.options["shared"] == "ON" {
-        linkArgs <- "-L${installDir}/lib"
-        linkArgs <- "-lcjson"
-    } else {
-        linkArgs <- "${installDir}/lib/libcjson.a"
-    }
+    // 添加库路径和库名（编译器会自动选择 .a 文件）
+    linkArgs <- "-L${installDir}/lib"
+    linkArgs <- "-lcjson"
 
     // 返回构建产物（返回值类型）
     return {
