@@ -850,8 +850,13 @@ onBuild matrix => {
     // 执行CMake配置和构建
     cmake args
     cmake "--build" "."
+    cmake "--install" "."
 
-    return artifact, nil
+    // 返回构建产物
+    return {
+        Dir: "./install",
+        LinkArgs: ["-I./install/include", "-L./install/lib", "-lmylib"]
+    }, nil
 }
 ```
 
@@ -1257,8 +1262,13 @@ onBuild matrix => {
 
     cmake args
     cmake "--build" "." "--config" "Release"
+    cmake "--install" "."
 
-    return artifact, nil
+    // 返回构建产物
+    return {
+        Dir: "./install",
+        LinkArgs: ["-I./install/include", "-L./install/lib", "-lcomplex"]
+    }, nil
 }
 ```
 
@@ -1346,8 +1356,13 @@ onBuild matrix => {
 
     cmake args
     cmake "--build" "."
+    cmake "--install" "."
 
-    return artifact, nil
+    // 返回构建产物
+    return {
+        Dir: "./install",
+        LinkArgs: ["-I./install/include", "-L./install/lib", "-lmylib"]
+    }, nil
 }
 ```
 

@@ -118,7 +118,7 @@ type FormulaApp struct {
     internalFromVersion version.Version
 
     onRequireFn func(deps.Graph)
-    onBuildFn   func() (result *Artifact, err error)
+    onBuildFn   func() (result Artifact, err error)
     onSourceFn  func(ver version.Version, lockSourceHash string) (sourceHash string, err error)
     onVersionFn func() []version.Version
 }
@@ -172,8 +172,8 @@ func (f *FormulaApp) OnSource(fn func(ver version.Version, lockSourceHash string
 func (f *FormulaApp) OnRequire(fn func(deps.Graph))
 
 // OnBuild - 注册构建回调
-// 参数: func() (*Artifact, error)
-func (f *FormulaApp) OnBuild(fn func() (*Artifact, error))
+// 参数: func() (Artifact, error)
+func (f *FormulaApp) OnBuild(fn func() (Artifact, error))
 
 // Filter - 注册矩阵过滤回调
 // 参数: func(matrix map[string]string) bool
@@ -557,8 +557,13 @@ onBuild => {
 
     cmake args
     cmake "--build" "."
+    cmake "--install" "."
 
-    return artifact, nil
+    // 返回构建产物（直接返回值类型）
+    return {
+        Dir: "./install",
+        LinkArgs: ["-I./install/include", "-L./install/lib", "-llib"]
+    }, nil
 }
 ```
 
@@ -736,8 +741,8 @@ onBuild => {
     // 执行构建...
     cmake "--build", "."
 
-    // 返回构建产物
-    return &Artifact{
+    // 返回构建产物（直接返回值类型）
+    return {
         Dir: "/path/to/output",
         LinkArgs: ["-L/path/to/output/lib", "-lmylib"]
     }, nil
@@ -1143,8 +1148,8 @@ onBuild => {
         linkArgs <- "${installDir}/lib/libcjson.a"
     }
 
-    // 返回构建产物
-    return &Artifact{
+    // 返回构建产物（返回值类型）
+    return {
         Dir:      installDir,  // 产物目录
         LinkArgs: linkArgs,    // 链接参数
     }, nil
@@ -1226,8 +1231,13 @@ onBuild => {
 
     cmake args
     cmake "--build" "."
+    cmake "--install" "."
 
-    return artifact, nil
+    // 返回构建产物
+    return {
+        Dir: "./install",
+        LinkArgs: ["-I./install/include", "-L./install/lib", "-lmylib"]
+    }, nil
 }
 ```
 
@@ -1357,8 +1367,13 @@ onBuild => {
 
     cmake args
     cmake "--build" "."
+    cmake "--install" "."
 
-    return artifact, nil
+    // 返回构建产物（直接返回值类型）
+    return {
+        Dir: "./install",
+        LinkArgs: ["-I./install/include", "-L./install/lib", "-llib"]
+    }, nil
 }
 ```
 
