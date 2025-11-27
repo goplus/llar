@@ -492,7 +492,7 @@ matrix {
     Require: {
         "arch": ["x86_64", "arm64", "mips"],
         "os": ["linux", "darwin", "windows"],
-        "compiler": ["gcc", "clang", "msvc"]
+        "lang": ["c"]
     },
     Options: {
         "shared": ["static", "dynamic"]
@@ -506,13 +506,8 @@ filter matrix => {
         return false
     }
 
-    // Windows 只支持 MSVC 编译器
-    if matrix["os"] == "windows" && (matrix["compiler"] == "gcc" || matrix["compiler"] == "clang") {
-        return false
-    }
-
-    // Linux 不支持 MSVC
-    if matrix["os"] == "linux" && matrix["compiler"] == "msvc" {
+    // Windows 不支持 MIPS（示例）
+    if matrix["os"] == "windows" && matrix["arch"] == "mips" {
         return false
     }
 
@@ -536,12 +531,12 @@ onBuild => {
     args := []
 
     // 根据 filter 后的有效矩阵组合进行构建
-    if matrix["compiler"] == "gcc" {
-        args <- "-DCMAKE_C_COMPILER=gcc"
-    } else if matrix["compiler"] == "clang" {
-        args <- "-DCMAKE_C_COMPILER=clang"
-    } else if matrix["compiler"] == "msvc" {
-        args <- "-DCMAKE_C_COMPILER=cl"
+    if matrix["os"] == "darwin" {
+        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix["arch"]}"
+    }
+
+    if matrix["shared"] == "dynamic" {
+        args <- "-DBUILD_SHARED_LIBS=ON"
     }
 
     cmake args
@@ -828,7 +823,8 @@ type PackageMatrix struct {
 ### 7.4 可选字段
 
 - **os**：操作系统（如 linux, darwin, windows）
-- **toolchain**：工具链（如 gcc, clang, msvc）
+
+**注意**：工具链（toolchain）不属于构建矩阵系统，而是作为独立的系统进行管理。工具链涉及版本号管理（如 gcc-9, gcc-10, clang-12），需要独立的下载、安装、配置机制。
 
 ### 7.5 矩阵组合表示
 
@@ -1178,9 +1174,9 @@ onBuild => {
         args <- "-DARCH=ARM64"
     }
 
-    // 处理工具链
-    if matrix["toolchain"] == "clang" {
-        args <- "-DCMAKE_C_COMPILER=clang"
+    // 处理操作系统
+    if matrix["os"] == "darwin" {
+        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix["arch"]}"
     }
 
     // 处理可选配置
@@ -1272,7 +1268,7 @@ matrix {
     Require: {
         "arch": ["x86_64", "arm64", "mips"],
         "os": ["linux", "darwin", "windows"],
-        "compiler": ["gcc", "clang", "msvc"]
+        "lang": ["c"]
     },
     Options: {
         "shared": ["static", "dynamic"]
@@ -1286,13 +1282,8 @@ filter matrix => {
         return false
     }
 
-    // Windows 只支持 MSVC 编译器
-    if matrix["os"] == "windows" && (matrix["compiler"] == "gcc" || matrix["compiler"] == "clang") {
-        return false
-    }
-
-    // Linux 不支持 MSVC
-    if matrix["os"] == "linux" && matrix["compiler"] == "msvc" {
+    // Windows 不支持 MIPS（示例）
+    if matrix["os"] == "windows" && matrix["arch"] == "mips" {
         return false
     }
 
@@ -1316,12 +1307,12 @@ onBuild => {
     args := []
 
     // 根据 filter 后的有效矩阵组合进行构建
-    if matrix["compiler"] == "gcc" {
-        args <- "-DCMAKE_C_COMPILER=gcc"
-    } else if matrix["compiler"] == "clang" {
-        args <- "-DCMAKE_C_COMPILER=clang"
-    } else if matrix["compiler"] == "msvc" {
-        args <- "-DCMAKE_C_COMPILER=cl"
+    if matrix["os"] == "darwin" {
+        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix["arch"]}"
+    }
+
+    if matrix["shared"] == "dynamic" {
+        args <- "-DBUILD_SHARED_LIBS=ON"
     }
 
     cmake args

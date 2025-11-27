@@ -316,7 +316,7 @@ matrix {
     Require: {
         "arch": ["x86_64", "arm64", "x86"],
         "os": ["linux", "darwin", "windows"],
-        "compiler": ["gcc", "clang", "msvc"]
+        "lang": ["cpp"]
     },
     Options: {
         "shared": ["static", "dynamic"],
@@ -345,29 +345,29 @@ matrix {
     }
 }
 
-完整矩阵：(3 × 3 × 3) × 2^10 = 27 × 1024 = 27,648 种组合
-Require 全量组合：3 × 3 × 3 = 27 种
+完整矩阵：(3 × 3 × 1) × 2^10 = 9 × 1024 = 9,216 种组合
+Require 全量组合：3 × 3 × 1 = 9 种
 DefaultOptions 组合：1^10 = 1 种
-默认矩阵：27 × 1 = 27 种组合
+默认矩阵：9 × 1 = 9 种组合
 ```
 
 **测试策略**：
 ```
-完整矩阵组合数：27,648 种
-判断：27,648 > 5000，需要采用配对测试
+完整矩阵组合数：9,216 种
+判断：9,216 > 5000，需要采用配对测试
 
-默认组合（全量测试）：27 个组合
-  - x86_64-linux-gcc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
-  - x86_64-linux-clang|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
-  - x86_64-linux-msvc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
-  - x86_64-darwin-gcc|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
-  - ... （共 27 种 Require 组合）
+默认组合（全量测试）：9 个组合
+  - x86_64-cpp-linux|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - x86_64-cpp-darwin|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - x86_64-cpp-windows|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - arm64-cpp-linux|static-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF-OFF
+  - ... （共 9 种 Require 组合）
 
-非默认 Options 组合（配对测试）：27 × (1024 - 1) = 27,621 种组合
+非默认 Options 组合（配对测试）：9 × (1024 - 1) = 9,207 种组合
   配对测试只需：约 100-150 个组合
 
-总测试数：27 + 100-150 = 127-177 个组合
-节省比例：(27,648 - 177) / 27,648 = 99.36%
+总测试数：9 + 100-150 = 109-159 个组合
+节省比例：(9,216 - 159) / 9,216 = 98.27%
 ```
 
 **配对测试工具**：
@@ -602,23 +602,7 @@ matrix {
 }
 ```
 
-#### toolchain（工具链）
-
-**说明**：代表编译工具链
-
-**常见取值**：
-- `gcc`：GNU Compiler Collection
-- `clang`：LLVM Clang
-- `msvc`：Microsoft Visual C++
-
-**示例**：
-```go
-matrix {
-    Require: {
-        "toolchain": ["gcc", "clang"]
-    }
-}
-```
+**注意**：工具链（toolchain）不属于构建矩阵系统，而是作为独立的系统进行管理。工具链涉及版本号管理（如 gcc-9, gcc-10, clang-12），需要独立的下载、安装、配置机制。
 
 ### 5.3 自定义字段
 
@@ -846,11 +830,6 @@ matrix {
 onBuild matrix => {
     args := []
 
-    // 根据构建矩阵选择工具链
-    if matrix["toolchain"].contains "clang" {
-        args <- "-DTOOLCHAIN=clang"
-    }
-
     // 根据架构设置编译参数
     if matrix["arch"] == "arm64" {
         args <- "-DARCH=ARM64"
@@ -948,7 +927,7 @@ matrix {
     Require: {
         "arch": ["x86_64", "arm64", "mips"],
         "os": ["linux", "darwin", "windows"],
-        "compiler": ["gcc", "clang", "msvc"]
+        "lang": ["c"]
     },
     Options: {
         "shared": ["static", "dynamic"]
@@ -964,13 +943,8 @@ filter matrix => {
         return false
     }
 
-    // Windows 只支持 MSVC 编译器
-    if matrix["os"] == "windows" && (matrix["compiler"] == "gcc" || matrix["compiler"] == "clang") {
-        return false
-    }
-
-    // Linux 不支持 MSVC
-    if matrix["os"] == "linux" && matrix["compiler"] == "msvc" {
+    // Windows 不支持 MIPS（示例）
+    if matrix["os"] == "windows" && matrix["arch"] == "mips" {
         return false
     }
 
@@ -978,13 +952,11 @@ filter matrix => {
 }
 
 // 组合计算：
-// 原始组合：3 × 3 × 3 × 2 = 54 种
+// 原始组合：3 × 3 × 1 × 2 = 18 种
 // 过滤后剔除：
-//   - darwin-mips-* 剔除 6 种（3 种 compiler × 2 种 options）
-//   - windows-gcc-* 剔除 6 种
-//   - windows-clang-* 剔除 6 种
-//   - linux-msvc-* 剔除 6 种
-// 有效组合：54 - 24 = 30 种
+//   - darwin-mips-* 剔除 2 种（2 种 options）
+//   - windows-mips-* 剔除 2 种（2 种 options）
+// 有效组合：18 - 4 = 14 种
 ```
 
 **最佳实践**：
@@ -1006,8 +978,8 @@ matrix.require["arch"]  // 明确从 require 获取
 matrix["zlib"]          // 返回 "zlibON" 或 "zlibOFF"
 matrix.options["zlib"]  // 明确从 options 获取
 
-// 检查是否包含某个值
-matrix["toolchain"].contains "clang"  // 返回 true/false
+// 检查是否包含某个值（用于数组值）
+matrix["feature"].contains "value"  // 返回 true/false
 
 // 判断相等
 matrix["arch"] == "arm64"
@@ -1215,8 +1187,7 @@ matrix {
     Require: {
         "os": ["linux", "darwin", "windows"],
         "arch": ["x86_64", "arm64", "x86"],
-        "lang": ["cpp"],
-        "toolchain": ["gcc", "clang", "msvc"]
+        "lang": ["cpp"]
     },
     Options: {
         "debug": ["on", "off"],
@@ -1247,19 +1218,6 @@ onBuild matrix => {
             args <- "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
         case "x86":
             args <- "-DCMAKE_SYSTEM_PROCESSOR=i686"
-    }
-
-    // 处理工具链
-    switch matrix.require["toolchain"] {
-        case "gcc":
-            args <- "-DCMAKE_C_COMPILER=gcc"
-            args <- "-DCMAKE_CXX_COMPILER=g++"
-        case "clang":
-            args <- "-DCMAKE_C_COMPILER=clang"
-            args <- "-DCMAKE_CXX_COMPILER=clang++"
-        case "msvc":
-            args <- "-DCMAKE_C_COMPILER=cl"
-            args <- "-DCMAKE_CXX_COMPILER=cl"
     }
 
     // 处理调试选项
