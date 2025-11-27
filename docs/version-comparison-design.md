@@ -89,11 +89,19 @@ onVersions => {
 - `= 0`: v1 等于 v2
 - `> 0`: v1 大于 v2
 
+**特殊版本处理**：
+- `system` 版本的优先级**高于所有其他版本**
+- 比较规则：
+  - `compare("system", any_version)` → 返回 `> 0`（system 更大）
+  - `compare(any_version, "system")` → 返回 `< 0`（system 更大）
+  - `compare("system", "system")` → 返回 `= 0`（相等）
+
 **默认算法**：GNU sort -V
 - 来源于 Debian 版本比较
 - 数字部分按数值比较
 - 非数字部分按字典序比较
 - 适用于大多数标准版本号
+- 自动处理 `system` 特殊版本
 
 ## 3. 调用流程
 
