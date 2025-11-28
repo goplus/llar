@@ -30,59 +30,14 @@ LLAR 的出发点是为了解决构建产物难题，即当构建配置无限进
 
 **真实案例：Conan 的 Boost 库**
 
-Boost 是 C++ 中最常用的库之一，在 Conan 中配置了 **59 个 options**：
+Boost 在 Conan 中配置了 **59 个布尔类型 options**，加上 require 参数（arch、os、compiler），理论组合数达到：
 
 ```
-Boost Conan Package 的部分 options：
-- fPIC: [True, False]
-- shared: [True, False]
-- header_only: [True, False]
-- multithreading: [True, False]
-- lzma: [True, False]
-- zlib: [True, False]
-- bzip2: [True, False]
-- zstd: [True, False]
-- without_filesystem: [True, False]
-- without_thread: [True, False]
-- without_regex: [True, False]
-- without_test: [True, False]
-- without_log: [True, False]
-- without_locale: [True, False]
-- without_python: [True, False]
-- without_iostreams: [True, False]
-- without_serialization: [True, False]
-- without_coroutine: [True, False]
-- without_program_options: [True, False]
-... 还有 40 个类似的 options
+总组合数 ≈ 27 (require) × 2^59 (options) ≈ 1556 万亿亿种组合
+测试时间 ≈ 1480 亿年（是宇宙年龄的 10.7 倍）
 ```
 
-**组合爆炸计算**：
-
-假设：
-- require: arch [3] × os [3] × compiler [3] = 27 种
-- options: 59 个选项，大部分是布尔值（True/False）
-
-```
-options 组合数 = 2^59 = 576,460,752,303,423,488
-                       （约 576 千万亿种组合）
-
-总组合数 = 27 × 2^59 = 15,564,440,312,192,434,176
-                        （约 1556 万亿亿种组合）
-```
-
-**测试时间估算**（假设每个组合构建+测试需要 5 分钟）：
-
-```
-总时间 = 15,564,440,312,192,434,176 × 5 分钟
-      = 77,822,201,560,962,170,880 分钟
-      ≈ 147,985,050,000 年
-      ≈ 1480 亿年（是宇宙年龄 138 亿年的 10.7 倍）
-```
-
-**问题严重性**：
-- 即使动用全人类的所有计算资源和财富
-- 也无法在宇宙寿命内完成 Boost 的全量测试
-- **必须采用配对测试等策略减少测试组合数**
+**结论**：必须采用配对测试等策略减少测试组合数。
 
 #### 问题2：预构建产物趋于无限（已解决）
 
@@ -433,6 +388,7 @@ LLAR 系统可以集成现有的配对测试工具生成测试组合：
 - 由于一个包可能只存在一种配方
 - 但这一种配方因为外部需求的变化会导致多种产物
 - 为了代表这类变化，我们使用一个构建矩阵表达
+- 矩阵通过**笛卡尔积**生成所有可能的配置组合
 
 **示例**：
 ```
@@ -442,7 +398,8 @@ LLAR 系统可以集成现有的配对测试工具生成测试组合：
 - 多个编译器：GCC, Clang, MSVC
 - 多个可选特性：zlib 支持开启/关闭
 
-这些组合会产生数十甚至上百种不同的构建产物
+通过笛卡尔积：2 (平台) × 3 (系统) × 3 (编译器) × 2 (zlib)
+= 36 种不同的构建产物组合
 ```
 
 ### 3.2 require 和 options 的概念
@@ -630,13 +587,25 @@ matrix {
 
 ### 6.1 组合生成规则
 
-由于 JSON Object 在 RFC 规范中定义是无序组合，因此我们需要对其 Object key 进行按字母排序，然后从排序顺序前至后进行排序组合。
+矩阵组合采用 **笛卡尔积（Cartesian Product）** 算法生成所有可能的构建配置组合。
+
+**笛卡尔积定义**：
+- 对于 n 个集合 A₁, A₂, ..., Aₙ，它们的笛卡尔积是所有可能的有序元组 (a₁, a₂, ..., aₙ) 的集合
+- 其中 a₁ ∈ A₁, a₂ ∈ A₂, ..., aₙ ∈ Aₙ
+- 笛卡尔积的大小为：|A₁| × |A₂| × ... × |Aₙ|
+
+**LLAR 矩阵组合**：
+- `require` 字段的所有值进行笛卡尔积
+- `options` 字段的所有值进行笛卡尔积
+- 最终组合数 = (require 笛卡尔积) × (options 笛卡尔积)
+
+由于 JSON Object 在 RFC 规范中定义是无序组合，因此我们需要对其 Object key 进行按字母排序，然后从排序顺序前至后进行笛卡尔积组合。
 
 **算法步骤**：
 1. 对 `require` 的所有 key 进行字母排序
-2. 按层序顺序进行组合（第一层和第二层组合，其结果再和第三层组合，依次递归）
+2. 按层序顺序进行笛卡尔积组合（第一层和第二层组合，其结果再和第三层组合，依次递归）
 3. 用 `-` 连接 `require` 的值
-4. 如果存在 `options`，用 `|` 连接 `options` 的值
+4. 如果存在 `options`，对其进行笛卡尔积组合，用 `|` 连接 `options` 的值
 
 ### 6.2 组合生成示例
 
@@ -655,11 +624,12 @@ matrix {
 }
 ```
 
-**计算过程**：
+**计算过程（笛卡尔积）**：
 1. 排序得到 key 顺序：`arch`, `lang`, `os`
-2. 进行组合：
-   - `arch` 与 `lang` 组合：`x86_64-c`, `arm64-c`, `x86_64-cpp`, `arm64-cpp`
-   - 其结果与 `os` 组合得到完整结果
+2. 进行笛卡尔积组合：
+   - `arch` × `lang`：`x86_64-c`, `arm64-c`, `x86_64-cpp`, `arm64-cpp`
+   - 结果 × `os`：得到完整的笛卡尔积
+3. 总组合数：2 (arch) × 2 (lang) × 2 (os) = **8 种组合**
 
 **输出**：
 ```
@@ -691,15 +661,20 @@ arm64-cpp-darwin
 }
 ```
 
-**计算过程**：
-1. 先完成 `require` 字段组合：
+**计算过程（笛卡尔积）**：
+1. 先完成 `require` 字段的笛卡尔积：
    ```
+   2 (arch) × 1 (lang) × 2 (os) = 4 种 require 组合
+
    x86_64-c-linux
    x86_64-c-darwin
    arm64-c-linux
    arm64-c-darwin
    ```
-2. 再进行 `options` 组合（用 `|` 连接）
+2. 再与 `options` 进行笛卡尔积（用 `|` 连接）：
+   ```
+   4 (require 组合) × 2 (zlib 选项) = 8 种最终组合
+   ```
 
 **输出**：
 ```
@@ -827,21 +802,21 @@ matrix {
 #### 在 onBuild 中使用矩阵
 
 ```javascript
-onBuild matrix => {
+onBuild => {
     args := []
 
     // 根据架构设置编译参数
-    if matrix["arch"] == "arm64" {
+    if matrix.require["arch"] == "arm64" {
         args <- "-DARCH=ARM64"
     }
 
     // 根据操作系统设置编译参数
-    if matrix["os"] == "darwin" {
+    if matrix.require["os"] == "darwin" {
         args <- "-DCMAKE_OSX_ARCHITECTURES=arm64"
     }
 
     // 处理可选配置
-    if matrix["zlib"] == "zlibON" {
+    if matrix.options["zlib"] == "zlibON" {
         args <- "-DWITH_ZLIB=ON"
     }
 
@@ -862,7 +837,12 @@ onBuild matrix => {
 
 #### 过滤无效矩阵组合
 
-在某些情况下，矩阵的笛卡尔积会产生一些无效的组合，需要将其剔除。
+在某些情况下，矩阵的**笛卡尔积**会产生一些无效的组合，需要将其剔除。
+
+**为什么需要过滤**：
+- 笛卡尔积会生成所有可能的组合，包括技术上不可行的组合
+- 例如：某些操作系统不支持特定的硬件架构
+- 过滤器允许我们在笛卡尔积生成后，剔除这些无效组合
 
 **典型场景**：
 
@@ -887,12 +867,12 @@ matrix {
 // 过滤无效的矩阵组合
 filter matrix => {
     // macOS 不支持 MIPS 和 RISC-V
-    if matrix["os"] == "darwin" && (matrix["arch"] == "mips" || matrix["arch"] == "riscv") {
+    if matrix.require["os"] == "darwin" && (matrix.require["arch"] == "mips" || matrix.require["arch"] == "riscv") {
         return false  // 剔除该组合
     }
 
     // Windows 不支持 RISC-V
-    if matrix["os"] == "windows" && matrix["arch"] == "riscv" {
+    if matrix.require["os"] == "windows" && matrix.require["arch"] == "riscv" {
         return false
     }
 
@@ -910,10 +890,10 @@ filter matrix => {
 **组合生成流程**：
 
 ```
-1. 生成笛卡尔积
-   原始组合数：4 × 3 × 2 = 24 种
+1. 生成完整笛卡尔积
+   原始组合数（笛卡尔积）：4 (arch) × 3 (os) × 2 (shared) = 24 种
 
-2. 应用 filter 过滤
+2. 应用 filter 过滤无效组合
    过滤掉的组合：
    - darwin-mips-*（2 种）
    - darwin-riscv-*（2 种）
@@ -922,8 +902,10 @@ filter matrix => {
    剩余有效组合：24 - 6 = 18 种
 
 3. 应用测试策略
-   根据剩余 18 种组合应用全量测试或配对测试
+   根据剩余 18 种有效组合应用全量测试或配对测试
 ```
+
+**总结**：Filter 不改变笛卡尔积的生成算法，只是在笛卡尔积生成后进行后处理，剔除不合法的组合。
 
 **完整示例**：
 
@@ -944,12 +926,12 @@ matrix {
 
 filter matrix => {
     // macOS 不支持 MIPS
-    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
+    if matrix.require["os"] == "darwin" && matrix.require["arch"] == "mips" {
         return false
     }
 
     // Windows 不支持 MIPS（示例）
-    if matrix["os"] == "windows" && matrix["arch"] == "mips" {
+    if matrix.require["os"] == "windows" && matrix.require["arch"] == "mips" {
         return false
     }
 
@@ -976,89 +958,22 @@ filter matrix => {
 
 ```go
 // 获取 require 字段的值
-matrix["arch"]          // 返回 "x86_64" 或 "arm64"
-matrix.require["arch"]  // 明确从 require 获取
+matrix.require["arch"]  // 返回 "x86_64" 或 "arm64"
+matrix.require["os"]    // 返回 "linux" 或 "darwin"
+matrix.require["lang"]  // 返回 "c" 或 "cpp"
 
 // 获取 options 字段的值
-matrix["zlib"]          // 返回 "zlibON" 或 "zlibOFF"
-matrix.options["zlib"]  // 明确从 options 获取
-
-// 检查是否包含某个值（用于数组值）
-matrix["feature"].contains "value"  // 返回 true/false
+matrix.options["zlib"]  // 返回 "zlibON" 或 "zlibOFF"
+matrix.options["debug"] // 返回 "on" 或 "off"
 
 // 判断相等
-matrix["arch"] == "arm64"
+matrix.require["arch"] == "arm64"
+matrix.options["zlib"] == "zlibON"
 ```
 
-## 9. 产物存储与矩阵
+## 9. 矩阵冲突检测
 
-### 9.1 产物目录结构
-
-产物按照矩阵组合进行存储：
-
-**路径格式**：
-```
-{{UserCacheDir}}/.llar/formulas/{{owner}}/{{repo}}/build/{{Version}}/{{Matrix}}/
-```
-
-**目录示例**：
-```
-{{UserCacheDir}}/.llar/formulas/DaveGamble/cJSON/build/
-├── 1.7.18/                      # 版本号目录
-│   ├── x86_64-c-darwin/         # 矩阵组合1
-│   │   ├── .cache.json
-│   │   ├── include/
-│   │   └── lib/
-│   ├── arm64-c-darwin/          # 矩阵组合2
-│   │   ├── .cache.json
-│   │   ├── include/
-│   │   └── lib/
-│   ├── x86_64-c-linux/          # 矩阵组合3
-│   │   ├── .cache.json
-│   │   ├── include/
-│   │   └── lib/
-│   └── x86_64-c-linux|zlibON/   # 矩阵组合4（包含options）
-│       ├── .cache.json
-│       ├── include/
-│       └── lib/
-└── 1.7.17/
-    └── x86_64-c-darwin/
-        ├── .cache.json
-        ├── include/
-        └── lib/
-```
-
-### 9.2 缓存信息中的矩阵
-
-**.cache.json 示例**：
-```json
-{
-    "packageName": "DaveGamble/cJSON",
-    "version": "1.7.18",
-    "matrix": "x86_64-c-darwin",
-    "matrixDetails": {
-        "arch": "x86_64",
-        "lang": "c",
-        "os": "darwin"
-    },
-    "buildTime": "2025-01-17T10:30:00Z",
-    "buildDuration": "45.2s",
-    "outputs": {
-        "dir": "/Users/user/Library/Caches/.llar/formulas/DaveGamble/cJSON/build/1.7.18/x86_64-c-darwin",
-        "linkArgs": "-L.../lib -lcjson -I.../include"
-    },
-    "sourceHash": "sha256:aaaabbbbccccdddd...",
-    "formulaHash": "sha256:1111222233334444..."
-}
-```
-
-**字段说明**：
-- `matrix`：矩阵组合字符串（如 `x86_64-c-darwin`）
-- `matrixDetails`：矩阵详细信息，拆分成各个字段
-
-## 10. 矩阵冲突检测
-
-### 10.1 冲突场景
+### 9.1 冲突场景
 
 当依赖包的 `require` 不是入口包的交集时，会产生矩阵冲突。
 
@@ -1070,7 +985,7 @@ matrix["arch"] == "arm64"
 冲突：arch 字段不匹配（x86_64 vs arm64）
 ```
 
-### 10.2 冲突检测流程
+### 9.2 冲突检测流程
 
 ```mermaid
 graph TD
@@ -1082,7 +997,7 @@ E --> F[显示冲突的字段]
 F --> G[终止构建]
 ```
 
-### 10.3 错误信息示例
+### 9.3 错误信息示例
 
 ```
 Error: Build matrix conflict detected
@@ -1103,178 +1018,13 @@ The dependency cannot be built for the target platform.
 Please check the build matrix configuration.
 ```
 
-## 11. 完整配方示例
+## 10. 矩阵设计最佳实践
 
-### 11.1 基本配方
+> **完整配方示例参见**：[formulas.md 第 9 章 - 完整配方示例](formulas.md#9-完整配方示例)
+>
+> formulas.md 中包含了完整的配方示例，涵盖所有回调函数（onSource、onRequire、filter、onBuild）和矩阵使用方法。
 
-```javascript
-// 声明相关信息
-fromVersion "1.0.0"
-packageName "DaveGamble/cJSON"
-desc "Ultralightweight JSON parser in ANSI C"
-homepage "https://github.com/DaveGamble/cJSON"
-
-// 声明构建矩阵
-matrix {
-    Require: {
-        "os": ["linux", "darwin"],
-        "arch": ["amd64", "arm64"],
-        "lang": ["c"]
-    },
-    Options: {
-        "zlib": ["zlibON", "zlibOFF"]
-    }
-}
-
-// 构建回调
-onBuild matrix => {
-    args := []
-
-    // 根据语言选择工具链
-    if matrix.require["lang"] == "c" {
-        args <- "-DTOOLCHAIN=clang"
-    }
-
-    // 根据架构设置编译参数
-    if matrix.require["arch"] == "arm64" {
-        args <- "-DARCH=ARM64"
-    }
-
-    // 根据操作系统设置编译参数
-    if matrix.require["os"] == "darwin" {
-        args <- "-DCMAKE_SYSTEM_NAME=Darwin"
-    }
-
-    // 处理可选配置
-    if matrix.options["zlib"] == "zlibON" {
-        args <- "-DWITH_ZLIB=ON"
-    }
-
-    args <- "."
-
-    cmake args
-    cmake "--build" "."
-
-    return {
-        Info: {
-            BuildResults: [
-                {LDFlags, "/xxx/cjson.so"},
-                {CFlags, "-I/xxx/cjson/include"},
-            ]
-        }
-    }, nil
-}
-
-// 源码下载回调
-onSource ver => {
-    sourceDir := download("https://github.com/DaveGamble/cJSON/releases/tag/v${ver.Version}")!
-    err := hashDirAndCompare(sourceDir, "aaaabbbbccccddddeee")
-    return sourceDir, err
-}
-
-// 版本列表回调
-onVersions => {
-    tags := fetchTagsFromGitHub("DaveGamble/cJSON")!
-    return githubTagsToVersion("v1", tags)
-}
-```
-
-### 11.2 复杂矩阵配方
-
-```javascript
-fromVersion "2.0.0"
-packageName "example/complex-lib"
-desc "A complex library with multiple build options"
-homepage "https://github.com/example/complex-lib"
-
-// 声明复杂构建矩阵
-matrix {
-    Require: {
-        "os": ["linux", "darwin", "windows"],
-        "arch": ["x86_64", "arm64", "x86"],
-        "lang": ["cpp"]
-    },
-    Options: {
-        "debug": ["on", "off"],
-        "tests": ["enabled", "disabled"],
-        "shared": ["static", "dynamic"],
-        "simd": ["sse2", "avx2", "neon", "none"]
-    }
-}
-
-onBuild matrix => {
-    args := []
-
-    // 处理操作系统
-    switch matrix.require["os"] {
-        case "windows":
-            args <- "-G" "Visual Studio 16 2019"
-        case "darwin":
-            args <- "-G" "Xcode"
-        default:
-            args <- "-G" "Unix Makefiles"
-    }
-
-    // 处理架构
-    switch matrix.require["arch"] {
-        case "x86_64":
-            args <- "-DCMAKE_SYSTEM_PROCESSOR=x86_64"
-        case "arm64":
-            args <- "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
-        case "x86":
-            args <- "-DCMAKE_SYSTEM_PROCESSOR=i686"
-    }
-
-    // 处理调试选项
-    if matrix.options["debug"] == "on" {
-        args <- "-DCMAKE_BUILD_TYPE=Debug"
-    } else {
-        args <- "-DCMAKE_BUILD_TYPE=Release"
-    }
-
-    // 处理测试选项
-    if matrix.options["tests"] == "enabled" {
-        args <- "-DBUILD_TESTING=ON"
-    } else {
-        args <- "-DBUILD_TESTING=OFF"
-    }
-
-    // 处理库类型
-    if matrix.options["shared"] == "dynamic" {
-        args <- "-DBUILD_SHARED_LIBS=ON"
-    } else {
-        args <- "-DBUILD_SHARED_LIBS=OFF"
-    }
-
-    // 处理 SIMD 选项
-    switch matrix.options["simd"] {
-        case "sse2":
-            args <- "-DENABLE_SSE2=ON"
-        case "avx2":
-            args <- "-DENABLE_AVX2=ON"
-        case "neon":
-            args <- "-DENABLE_NEON=ON"
-        case "none":
-            args <- "-DENABLE_SIMD=OFF"
-    }
-
-    args <- "."
-
-    cmake args
-    cmake "--build" "." "--config" "Release"
-    cmake "--install" "."
-
-    // 返回构建产物
-    return {
-        Dir: "./install",
-        LinkArgs: ["-I./install/include", "-L./install/lib", "-lcomplex"]
-    }, nil
-}
-```
-
-## 12. 矩阵设计最佳实践
-
-### 12.1 配方维护者
+### 10.1 配方维护者
 
 #### 矩阵设计原则
 
@@ -1320,7 +1070,7 @@ onBuild matrix => {
 }
 ```
 
-### 12.2 矩阵冲突处理
+### 10.2 矩阵冲突处理
 
 **场景 1：依赖包需要特定架构**
 
@@ -1341,7 +1091,7 @@ matrix {
 根据矩阵参数条件编译：
 
 ```javascript
-onBuild matrix => {
+onBuild => {
     args := []
 
     // 只在 Linux 上启用某些特性
@@ -1366,7 +1116,7 @@ onBuild matrix => {
 }
 ```
 
-### 12.3 矩阵测试
+### 10.3 矩阵测试
 
 **测试策略**：
 
@@ -1382,17 +1132,20 @@ onBuild matrix => {
    - 主流平台组合（如 x86_64-linux, arm64-darwin）
    - 极端配置组合（如全部 options 开启/关闭）
 
-## 13. 惰性构建与矩阵
+## 11. 惰性构建与矩阵
 
-### 13.1 惰性构建的必要性
+### 11.1 惰性构建的必要性
 
 由于我们的出发点基于一个包存在巨额构建产物的前提之下，因此不可能一次性就能完成所有构建产物的构建。
 
 #### 矩阵组合爆炸问题
 
-**简单公式**：
+矩阵采用**笛卡尔积**算法生成所有可能的组合，导致组合数随参数数量呈指数级增长。
+
+**笛卡尔积公式**：
 ```
 总组合数 = 选项1个数 × 选项2个数 × 选项3个数 × ...
+         = |A₁| × |A₂| × |A₃| × ... × |Aₙ|（笛卡尔积大小）
 ```
 
 **例子**：假设有 50 个构建选项，每个选项 2 种可能
@@ -1413,7 +1166,7 @@ Lₙ = ∏ᵢ₌₁ⁿ |Vᵢ|
 - 预先构建所有组合需要巨大的计算和存储资源
 - 大部分组合可能永远不会被用户使用
 
-### 13.2 惰性构建机制
+### 11.2 惰性构建机制
 
 **构建策略**：
 
@@ -1452,7 +1205,7 @@ sequenceDiagram
     end
 ```
 
-### 13.3 矩阵分类
+### 11.3 矩阵分类
 
 **常用矩阵（预构建 + 抽样测试）**：
 - 主流平台：x86_64-linux、x86_64-darwin、arm64-linux、arm64-darwin
@@ -1469,9 +1222,9 @@ sequenceDiagram
 - 云端资源集中于常用组合
 - 冷门组合按需扩展缓存覆盖
 
-## 14. CLI 与矩阵
+## 12. CLI 与矩阵
 
-### 14.1 指定矩阵参数
+### 12.1 指定矩阵参数
 
 用户可以通过 CLI 参数指定构建矩阵：
 

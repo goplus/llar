@@ -176,8 +176,8 @@ func (f *FormulaApp) OnRequire(fn func(deps.Graph))
 func (f *FormulaApp) OnBuild(fn func() (Artifact, error))
 
 // Filter - 注册矩阵过滤回调
-// 参数: func(matrix map[string]string) bool
-func (f *FormulaApp) Filter(fn func(matrix map[string]string) bool)
+// 参数: func(matrix.Matrix) bool
+func (f *FormulaApp) Filter(fn func(m matrix.Matrix) bool)
 ```
 
 ### 3.3 XGO Classfile 中的使用
@@ -425,153 +425,37 @@ type Graph interface {
 
 ### 4.4 filter - 过滤无效矩阵组合（可选）
 
+> **详细设计参见**：[matrix.md 第 8.2 节 - 过滤无效矩阵组合](matrix.md#过滤无效矩阵组合)
+
 **功能**: 过滤掉矩阵笛卡尔积中无效的组合
 
 **是否必需**: **可选**。如果未实现，系统将使用全部矩阵组合
 
 **签名**: `filter matrix => { return true/false }`
 
-**必要性**：
-在某些情况下，矩阵的笛卡尔积会产生一些无效的组合，需要将其剔除。
-
-**典型场景**：
-
-某些架构和操作系统的组合是不支持的：
-- `os: darwin, arch: mips` 无效（macOS 不支持 MIPS 架构）
-- `os: linux, arch: mips` 有效（Linux 支持 MIPS 架构）
-- `os: windows, arch: riscv` 无效（Windows 不支持 RISC-V 架构）
-
 **基本示例**：
 
 ```javascript
 matrix {
     Require: {
-        "arch": ["x86_64", "arm64", "mips", "riscv"],
+        "arch": ["x86_64", "arm64", "mips"],
         "os": ["linux", "darwin", "windows"]
-    },
-    Options: {
-        "shared": ["static", "dynamic"]
     }
 }
 
 // 过滤无效的矩阵组合
 filter matrix => {
-    // macOS 不支持 MIPS 和 RISC-V
-    if matrix["os"] == "darwin" && (matrix["arch"] == "mips" || matrix["arch"] == "riscv") {
+    // macOS 不支持 MIPS
+    if matrix.require["os"] == "darwin" && matrix.require["arch"] == "mips" {
         return false  // 剔除该组合
     }
-
-    // Windows 不支持 RISC-V
-    if matrix["os"] == "windows" && matrix["arch"] == "riscv" {
-        return false
-    }
-
-    // 其他组合都是有效的
-    return true  // 保留该组合
+    return true  // 保留其他组合
 }
 ```
 
 **Filter 语义**：
 - `return true`：保留该矩阵组合
 - `return false`：剔除该矩阵组合
-- filter 函数接收 `matrix` 参数，包含当前组合的所有字段值
-- filter 在矩阵组合生成后、测试策略应用前执行
-
-**组合生成流程**：
-
-```
-1. 生成笛卡尔积
-   原始组合数：4 × 3 × 2 = 24 种
-
-2. 应用 filter 过滤
-   过滤掉的组合：
-   - darwin-mips-* (2 种)
-   - darwin-riscv-* (2 种)
-   - windows-riscv-* (2 种)
-
-   剩余有效组合：24 - 6 = 18 种
-
-3. 应用测试策略
-   根据剩余 18 种组合应用全量测试或配对测试
-```
-
-**完整配方示例**：
-
-```javascript
-packageName "example/cross-platform-lib"
-fromVersion "1.0.0"
-desc "A cross-platform library"
-homepage "https://github.com/example/lib"
-
-// 声明构建矩阵
-matrix {
-    Require: {
-        "arch": ["x86_64", "arm64", "mips"],
-        "os": ["linux", "darwin", "windows"],
-        "lang": ["c"]
-    },
-    Options: {
-        "shared": ["static", "dynamic"]
-    }
-}
-
-// 过滤无效组合
-filter matrix => {
-    // macOS 不支持 MIPS
-    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
-        return false
-    }
-
-    // Windows 不支持 MIPS（示例）
-    if matrix["os"] == "windows" && matrix["arch"] == "mips" {
-        return false
-    }
-
-    return true
-}
-
-// 源码下载
-onSource (ver, lockSourceHash) => {
-    download("https://github.com/example/lib/v${ver.Version}.tar.gz")!
-    actualHash := readHashFromFile("hash.txt")!
-
-    if lockSourceHash != "" && actualHash != lockSourceHash {
-        return "", errors.New("hash 不匹配")
-    }
-
-    return actualHash, nil
-}
-
-// 构建逻辑
-onBuild => {
-    args := []
-
-    // 根据 filter 后的有效矩阵组合进行构建
-    if matrix["os"] == "darwin" {
-        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix["arch"]}"
-    }
-
-    if matrix["shared"] == "dynamic" {
-        args <- "-DBUILD_SHARED_LIBS=ON"
-    }
-
-    cmake args
-    cmake "--build" "."
-    cmake "--install" "."
-
-    // 返回构建产物（直接返回值类型）
-    return {
-        Dir: "./install",
-        LinkArgs: ["-I./install/include", "-L./install/lib", "-llib"]
-    }, nil
-}
-```
-
-**最佳实践**：
-- Filter 应该只过滤确实无法构建的组合
-- 避免过度过滤，除非确认该组合在技术上不可行
-- Filter 逻辑应该清晰明确，便于维护
-- Filter 中可以访问 Require 和 Options 的所有字段
 
 ## 5. 回调函数调用流程
 
@@ -998,112 +882,32 @@ onBuild => {
    - 执行 `git checkout <formulaHash>` 还原配方代码
    - 使用还原后的配方执行构建
 
-**示例场景：团队协作**
-
-```
-开发者 A:
-1. 首次构建 cJSON@1.7.18
-2. 生成 versions-lock.json，记录 formulaHash = "abc123def456"
-3. 提交 versions-lock.json 到项目仓库
-
-开发者 B:
-1. 拉取项目代码（包含 versions-lock.json）
-2. 执行 llar install cJSON@1.7.18
-3. LLAR 读取 formulaHash = "abc123def456"
-4. LLAR 执行 git checkout abc123def456
-5. 使用相同的配方版本构建
-6. 得到完全相同的构建结果
-```
-
-**关键点**：
-- formulaHash 是配方仓库的 git commit hash，不是源码 hash
-- 即使配方仓库后续更新，也能还原到历史版本
-- 确保团队成员使用完全相同的配方版本
-
 ## 7. 构建矩阵设计
+
+> **详细设计参见**：[矩阵设计文档 (matrix.md)](matrix.md)
 
 ### 7.1 基本概念
 
 构建矩阵用于表达一个包在不同构建配置下的所有可能产物组合。
 
-矩阵由两部分组成：
-- **require**：必需的编译参数，会向下传播给依赖包（类似 Conan 的 settings）
-- **options**：可选的编译参数，仅限于当前包，不向下传播（类似 Conan 的 options）
-
-### 7.2 矩阵结构
-
-```json
-{
-    "matrix": {
-        "require": {
-            "arch": ["x86_64", "arm64"],
-            "lang": ["c", "cpp"],
-            "os": ["linux", "darwin"]
-        },
-        "options": {
-            "zlib": ["zlibON", "zlibOFF"]
-        }
-    }
-}
-```
-
-**结构化定义**：
+**矩阵结构**：
 ```go
 type PackageMatrix struct {
-    Require map[string][]string `json:"require"`
-    Options map[string][]string `json:"options"`
+    Require map[string][]string `json:"require"`  // 必需参数，向下传播
+    Options map[string][]string `json:"options"`  // 可选参数，仅限当前包
 }
 ```
 
-### 7.3 必需字段
+**核心特性**：
+- 矩阵通过**笛卡尔积**生成所有可能的配置组合
+- `require` 字段向下传播给依赖包
+- `options` 字段仅限于当前包，不传播
+- 组合格式：`x86_64-c-linux|zlibON`（require 用 `-` 连接，options 用 `|` 分隔）
 
-- **arch**：编译平台（如 x86_64, arm64）
-- **lang**：包的语言（如 c, cpp, py）
-
-### 7.4 可选字段
-
-- **os**：操作系统（如 linux, darwin, windows）
-
-**注意**：工具链（toolchain）不属于构建矩阵系统，而是作为独立的系统进行管理。工具链涉及版本号管理（如 gcc-9, gcc-10, clang-12），需要独立的下载、安装、配置机制。
-
-### 7.5 矩阵组合表示
-
-矩阵组合通过按字母排序的 key 值，用 `-` 连接：
-- `require` 组合：`x86_64-c-linux`
-- 加上 `options`：`x86_64-c-linux|zlibON`
-
-**示例**：上述矩阵将产生以下组合：
-```
-x86_64-c-linux
-x86_64-c-darwin
-arm64-c-linux
-arm64-c-darwin
-x86_64-cpp-linux
-x86_64-cpp-darwin
-arm64-cpp-linux
-arm64-cpp-darwin
-```
-
-如果包含 options 字段，每个组合会进一步扩展：
-```
-x86_64-c-linux|zlibON
-x86_64-c-linux|zlibOFF
-...
-```
-
-### 7.6 矩阵传播规则
-
-```mermaid
-graph TD
-A["Root: x86_64-c-linux|zlibON"] --> B["依赖B: x86_64-c-linux"]
-A --> C["依赖C: x86_64-c-linux|zlibON"]
-C --> D["依赖D: x86_64-c-linux"]
-```
-
-**说明**：
-- `require` 字段必须向下传播，所有依赖包的 `require` 必须是入口包的交集
-- `options` 字段仅在声明了该 option 的包中生效
-- 如果依赖包的 `require` 不是入口包的交集，系统会终止并报错
+**详细内容**：
+- 笛卡尔积算法、组合生成规则 → 参见 [matrix.md 第 6 章](matrix.md#6-矩阵组合算法)
+- 矩阵传播机制、冲突检测 → 参见 [matrix.md 第 7 章](matrix.md#7-矩阵传播机制)
+- 矩阵测试策略、配对测试法 → 参见 [matrix.md 第 1.3 章](matrix.md#13-矩阵爆炸问题)
 
 ## 8. 配方存储与管理
 
@@ -1303,7 +1107,7 @@ onRequire deps => {
 filter matrix => {
     // 过滤掉无效的矩阵组合
     // 例如：某些架构在某些操作系统上不支持
-    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
+    if matrix.require["os"] == "darwin" && matrix.require["arch"] == "mips" {
         return false  // 剔除 macOS + MIPS 组合
     }
 
@@ -1430,17 +1234,17 @@ onBuild => {
     args := []
 
     // 处理架构
-    if matrix["arch"] == "arm64" {
+    if matrix.require["arch"] == "arm64" {
         args <- "-DARCH=ARM64"
     }
 
     // 处理操作系统
-    if matrix["os"] == "darwin" {
-        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix["arch"]}"
+    if matrix.require["os"] == "darwin" {
+        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix.require["arch"]}"
     }
 
     // 处理可选配置
-    if matrix["zlib"] == "zlibON" {
+    if matrix.options["zlib"] == "zlibON" {
         args <- "-DWITH_ZLIB=ON"
     }
 
@@ -1458,145 +1262,9 @@ onBuild => {
 
 ### 10.3 过滤无效矩阵组合
 
-在某些情况下，矩阵的笛卡尔积会产生一些无效的组合，需要使用 `filter` 函数将其剔除。
+> **详细说明参见**：[matrix.md 第 8.2 节 - 过滤无效矩阵组合](matrix.md#过滤无效矩阵组合)
 
-**典型场景**：
-
-某些架构和操作系统的组合是不支持的：
-- `os: darwin, arch: mips` 无效（macOS 不支持 MIPS 架构）
-- `os: linux, arch: mips` 有效（Linux 支持 MIPS 架构）
-
-**定义 filter 函数**：
-
-```javascript
-// 声明构建矩阵
-matrix {
-    Require: {
-        "arch": ["x86_64", "arm64", "mips", "riscv"],
-        "os": ["linux", "darwin", "windows"]
-    },
-    Options: {
-        "shared": ["static", "dynamic"]
-    }
-}
-
-// 过滤无效的矩阵组合
-filter matrix => {
-    // macOS 不支持 MIPS 和 RISC-V
-    if matrix["os"] == "darwin" && (matrix["arch"] == "mips" || matrix["arch"] == "riscv") {
-        return false  // 剔除该组合
-    }
-
-    // Windows 不支持 RISC-V
-    if matrix["os"] == "windows" && matrix["arch"] == "riscv" {
-        return false
-    }
-
-    // 其他组合都是有效的
-    return true  // 保留该组合
-}
-```
-
-**Filter 语义**：
-- `return true`：保留该矩阵组合
-- `return false`：剔除该矩阵组合
-- filter 函数接收 `matrix` 参数，包含当前组合的所有字段值
-
-**组合生成流程**：
-
-```
-1. 生成笛卡尔积
-   原始组合数：4 × 3 × 2 = 24 种
-
-2. 应用 filter 过滤
-   过滤掉的组合：
-   - darwin-mips-* (2 种)
-   - darwin-riscv-* (2 种)
-   - windows-riscv-* (2 种)
-
-   剩余有效组合：24 - 6 = 18 种
-
-3. 应用测试策略
-   根据剩余 18 种组合应用全量测试或配对测试
-```
-
-**完整示例**：
-
-```javascript
-packageName "example/cross-platform-lib"
-fromVersion "1.0.0"
-desc "A cross-platform library"
-homepage "https://github.com/example/lib"
-
-// 声明构建矩阵
-matrix {
-    Require: {
-        "arch": ["x86_64", "arm64", "mips"],
-        "os": ["linux", "darwin", "windows"],
-        "lang": ["c"]
-    },
-    Options: {
-        "shared": ["static", "dynamic"]
-    }
-}
-
-// 过滤无效组合
-filter matrix => {
-    // macOS 不支持 MIPS
-    if matrix["os"] == "darwin" && matrix["arch"] == "mips" {
-        return false
-    }
-
-    // Windows 不支持 MIPS（示例）
-    if matrix["os"] == "windows" && matrix["arch"] == "mips" {
-        return false
-    }
-
-    return true
-}
-
-// 源码下载
-onSource (ver, lockSourceHash) => {
-    download("https://github.com/example/lib/v${ver.Version}.tar.gz")!
-    actualHash := readHashFromFile("hash.txt")!
-
-    if lockSourceHash != "" && actualHash != lockSourceHash {
-        return "", errors.New("hash 不匹配")
-    }
-
-    return actualHash, nil
-}
-
-// 构建逻辑
-onBuild => {
-    args := []
-
-    // 根据 filter 后的有效矩阵组合进行构建
-    if matrix["os"] == "darwin" {
-        args <- "-DCMAKE_OSX_ARCHITECTURES=${matrix["arch"]}"
-    }
-
-    if matrix["shared"] == "dynamic" {
-        args <- "-DBUILD_SHARED_LIBS=ON"
-    }
-
-    cmake args
-    cmake "--build" "."
-    cmake "--install" "."
-
-    // 返回构建产物（直接返回值类型）
-    return {
-        Dir: "./install",
-        LinkArgs: ["-I./install/include", "-L./install/lib", "-llib"]
-    }, nil
-}
-```
-
-**最佳实践**：
-- Filter 应该只过滤确实无法构建的组合
-- 避免过度过滤，除非确认该组合在技术上不可行
-- Filter 逻辑应该清晰明确，便于维护
-- Filter 中可以访问 Require 和 Options 的所有字段
+使用 `filter` 函数过滤掉笛卡尔积中无效的矩阵组合（如 macOS 不支持 MIPS 架构）。详见第 4.4 节。
 
 ### 10.4 错误处理
 
