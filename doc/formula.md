@@ -6,10 +6,6 @@ id "DaveGamble/cJSON"  # module id
 
 fromVer "v1.0.0"  # run formula from this version
 
-compareVer (a, b) => {  # version compare
-    ...
-}
-
 onRequire (proj, deps) => {  # abstract deps from this project
     cmake := proj.readFile("CMakeLists.txt")
 
