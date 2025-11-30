@@ -2,7 +2,7 @@ LLAR Formula
 ====
 
 ```coffee
-id "DaveGamble/cJSON"  # package id
+id "DaveGamble/cJSON"  # module id
 
 fromVer "v1.0.0"  # run formula from this version
 
