@@ -78,9 +78,25 @@ fromVer "v1.5.0"  // handles package versions >= 1.5.0
 Project is the build context, and its interface is implemented as follows:
 
 ```go
+type Version struct {
+    Version string
+}
+
+type Matrix struct {
+    Require map[string][]string `json:"require"`
+    Options map[string][]string `json:"options"`
+    DefaultOptions map[string][]string `json:"defaultOptions"`
+}
+
+type Dependency struct {
+    ID        string `json:"id"`
+    Version   string `json:"version"`
+}
+
 type Graph interface {
     // Require specifies a package dependency
     Require(id string, ver version.Version)
+    BuildList() []Dependency
 }
 
 type Project interface {
@@ -118,10 +134,10 @@ type Formula interface {
     Version() version.Version
 
     // OnRequire - registers dependency extraction callback (optional)
-    OnRequire(fn func(proj Project, deps deps.Graph))
+    OnRequire(fn func(proj Project, deps deps.Graph) error)
 
     // OnBuild - registers build execution callback (required)
-    OnBuild(fn func(proj Project, out Output))
+    OnBuild(fn func(proj Project, out Output) error)
 
     // Filter - registers matrix filter callback (optional)
     Filter(fn func(m matrix.Matrix) bool)
