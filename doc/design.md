@@ -55,149 +55,107 @@ LLAR is dedicated to creating a package manager that:
 
 ### 2.1 Package
 
-A package is an independent library unit in LLAR.
-
-**Package Components**:
-- **Build Formula**: How to build this package (written in XGo Classfile)
-- **Build Matrix**: Different build configurations (os, arch, lang, etc.)
-- **Version Management**: Version list automatically from VCS (GitHub/GitLab)
+A package represents a complete source library (e.g., `DaveGamble/cJSON`), containing:
+- **Formula**: Build instructions
+- **Matrix**: Supported configurations (os/arch/options)
+- **Versions**: Auto-retrieved from GitHub/GitLab
+- **Dependencies**: Required packages
 
 ### 2.2 Formula
 
-Formula defines how to build a package using XGo Classfile syntax.
+Formula defines how to build a package across versions and platforms.
 
-**Formula Files**:
-```
-{{owner}}/{{repo}}/
-├── {{repo}}_cmp.gox      # version comparison function
-├── versions.json         # dependency lookup table (optional)
-└── {{repo}}_llar.gox     # formula main file
-```
+**Structure**: `{{repo}}_cmp.gox` (version comparison) + `versions.json` (deps fallback) + `{{repo}}_llar.gox` (build logic)
 
-**Formula Structure**:
-```go
-id "owner/repo"              // module id
-fromVer "v1.0.0"             // starting version for this formula
+**Execution Flow**:
 
-onRequire (proj, deps) => {  // parse dependencies (optional)
-    cmake := proj.readFile("CMakeLists.txt")
-    matches := findDeps(cmake)
-
-    for m in matches {
-        deps.require(pkgID(m.Name), m.Version)
-    }
-}
-
-onBuild (proj, out) => {     // execute build
-    cmake "-DBUILD_SHARED_LIBS=OFF", "-DCMAKE_INSTALL_PREFIX=" + out.dir, "."
-    cmake "--build", "."
-    cmake "--install", "."
-
-    out.setLinkFlags("-I" + out.dir + "/include", "-L" + out.dir + "/lib", "-lmylib")
-}
-```
-
-**Callbacks**:
-- `onRequire`: Extract dependencies from source code (optional)
-- `onBuild`: Execute build and set link flags
-
-### 2.3 Build Matrix
-
-Build matrix represents all possible build configurations for a package.
-
-**Matrix Structure**:
-```go
-{
-    "require": {
-        "os": ["linux", "darwin"],
-        "arch": ["x86_64", "arm64"],
-        "lang": ["c"]
-    },
-    "options": {
-        "tests": ["ON", "OFF"]
-    }
-}
-```
-
-**Key Features**:
-- `require`: Propagates to dependencies
-- `options`: Local to current package only
-- Combination format: `x86_64-c-linux|testsON`
-- Cartesian product generates all combinations
-
-**DefaultOptions**:
-- LLAR only builds DefaultOptions matrix by default (not all options combinations)
-- DefaultOptions typically includes: `require` parameters only, with default `options` values
-- Non-default options trigger lazy build (server builds on demand)
-
-### 2.4 Lazy Build
-
-When pre-built package doesn't exist, LLAR uses lazy build mechanism.
-
-**Default Build Strategy**:
-- LLAR only builds DefaultOptions matrix by default, not all options combinations
-- Only non-LLAR pre-built packages use lazy build
-
-**Lazy Build Workflow**:
 ```mermaid
 sequenceDiagram
     participant User
-    participant LLAR
-    participant Cloud
+    participant Formula
+    participant Source
 
-    User->>LLAR: llar install package@version
-    LLAR->>LLAR: Check pre-built cache (DefaultOptions)
+    User->>Formula: Install cJSON@1.7.18
+    Formula->>Source: onRequire: Parse CMakeLists.txt
+    Source-->>Formula: Dependencies: re2c@2.0, zlib@1.2.13
+    Formula->>Source: onBuild: cmake + build
+    Source-->>Formula: Artifacts: libcjson.a
+    Formula-->>User: Link flags: -lcjson -I/include -L/lib
+```
 
-    alt Pre-built exists
-        LLAR->>User: Download and install (30s)
-    else Pre-built not exists (Non-LLAR pre-built)
-        LLAR->>Cloud: Trigger cloud build
-        LLAR->>User: Waiting for server build...
-        Cloud->>Cloud: Building...
-        Cloud-->>LLAR: Build complete
-        LLAR->>User: Download and install (2-5min)
+### 2.3 Build Matrix
+
+Matrix uses Cartesian product to generate all build combinations.
+
+**Components**:
+- **Require** (propagates to deps): os, arch, lang
+- **Options** (local only): zlib, ssl, debug
+- **DefaultOptions** (pre-built): Default option values
+
+**Example**: `2 os × 2 arch × 1 lang = 4 require combinations`, `2 zlib × 2 ssl × 2 debug = 8 option combinations`
+- **Full matrix**: 4 × 8 = 32 total combinations
+- **Default matrix**: 4 × 1 = 4 pre-built combinations (e.g., `x86_64-c-linux|zlibOFF-sslOFF-debugOFF`)
+
+**Propagation**: Require propagates to all deps, Options only to packages that declare them.
+
+### 2.4 Lazy Build
+
+**Current Implementation (v0.x)**: When pre-built artifact doesn't exist, users build locally.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Cache
+
+    User->>Cache: Request artifact
+    alt Cache Hit
+        Cache-->>User: Download (30s)
+    else Cache Miss (Current)
+        User->>User: Local build (5-10min)
+        Note over User: Build happens locally<br/>Not shared with other users
     end
 ```
 
-**Key Points**:
-- User waits for server to complete build (no local build)
-- Server build result is cached for future use
-- Build artifacts are shared globally
+**Future Plan (v1.0+)**: Server lazy build will be implemented.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Cache
+    participant Server
+
+    User->>Cache: Request artifact
+    alt Cache Hit
+        Cache-->>User: Download (30s)
+    else Cache Miss (Future)
+        Cache->>Server: Trigger server build
+        Server->>Cache: Upload artifact (2-5min)
+        Cache-->>User: Download (30s)
+        Note over Cache: Cached for future users
+    end
+```
+
+**Benefits of Future Lazy Build**:
+- No local build: Users wait for server instead
+- Shared cache: Once built, available to all users globally
+- DefaultOptions pre-built, non-default built on-demand
 
 ### 2.5 Version Management
 
-**Version Retrieval**: Automatically from VCS (GitHub/GitLab), no manual maintenance.
+**Auto-retrieval**: Versions fetched from GitHub/GitLab tags (e.g., v1.0.0, v1.7.18, v2.0.0)
 
-**Version Comparison**: Defined in `{{repo}}_cmp.gox`:
-```go
-compareVer (v1, v2) => {
-    // return: -1 (v1 < v2), 0 (v1 == v2), 1 (v1 > v2)
-    return semverCompare(v1, v2)
-}
-```
+**Formula Selection**: Select formula with max `fromVer <= target version`
+- Example: Installing v1.7.18 → selects formula with fromVer=v1.5.0 (not v2.0.0)
 
-**Version Selection**: Uses MVS (Minimal Version Selection) algorithm.
+**MVS Conflict Resolution**: When HTTP lib requires zlib ≥ 1.2.0 and Image lib requires zlib ≥ 1.2.8 → auto-select zlib 1.2.8
 
-### 2.6 versions.json
+### 2.6 Dependency Management
 
-Optional dependency lookup table (similar to go.mod), used when `onRequire` cannot parse dependencies.
+**Two-tier resolution**:
+1. **onRequire** (automatic): Parse CMakeLists.txt → extract dependencies
+2. **versions.json** (fallback): Manual lookup table when parsing fails or version unspecified
 
-**Format**:
-```json
-{
-    "versions": {
-        "v1.0.0": [],
-        "v1.10.0": [
-            {"name": "madler/zlib", "version": "1.2.13"},
-            {"name": "skvadrik/re2c", "version": "2.0.3"}
-        ]
-    }
-}
-```
-
-- Keys: Exact package versions
-- Values: Dependency arrays (preserves order)
-- Fallback when `onRequire` fails or dependency has no version
+**Example**: `ninja@1.11.0` → onRequire finds "need re2c" (no version) → fallback to `versions.json: v1.11.0 → re2c@2.0.3`
 
 ## 3. User Stories
 
@@ -237,57 +195,68 @@ sequenceDiagram
 - Server build completes: Upload to cache and download
 - Build artifacts are shared globally for future use
 
-### 3.2 Developer: Cross-Platform Build
+### 3.2 Developer: Consistent Dependency Versions
 
 **As** a developer
-**I want** to use same dependency configuration across platforms (Linux/macOS/Windows)
-**So that** I can simplify cross-platform development
+**I want** LLAR to use exact dependency versions from formula
+**So that** builds are reproducible and consistent
 
 **Workflow**:
 ```mermaid
 graph TD
-    A[Developer develops on macOS] --> B[llar install zlib]
-    B --> C[Generate versions.json]
-    C --> D[Commit to Git]
-    D --> E[CI/CD builds on Linux]
-    E --> F[Read versions.json]
-    F --> G[llar install]
-    G --> H{Pre-built exists?}
-    H -->|Yes| I[Download Linux version]
-    H -->|No| J[Trigger build]
-    I --> K[Build success]
-    J --> K
+    A[User: llar install cJSON@1.7.18] --> B[Load formula]
+    B --> C[Read versions.json from formula]
+    C --> D[Use exact versions specified]
+    D --> E[Install dependencies]
+    E --> F[Reproducible build]
 ```
 
 **Acceptance Criteria**:
-- versions.json is cross-platform (no platform-specific info)
-- LLAR automatically selects corresponding pre-built for current platform
-- Same configuration produces consistent dependency tree across platforms
+- versions.json maintained by formula maintainer
+- Users read versions.json from formula repository
+- Same formula version = same dependency versions
+- Users cannot modify versions.json
 
-### 3.3 Developer: Manage Dependency Versions
+### 3.3 Developer: List Available Versions
 
 **As** a developer
-**I want** to lock dependency versions
-**So that** team members have consistent builds
+**I want** to list all available versions of a package
+**So that** I can choose the right version
 
-**Workflow**:
-```mermaid
-graph TD
-    A[First llar install] --> B[Generate versions.json]
-    B --> C[Record exact versions]
-    C --> D[Commit to Git]
-    D --> E[Team member clones repo]
-    E --> F[llar install]
-    F --> G[Read same versions.json]
-    G --> H[Get consistent versions]
-```
+**Command**: `llar list <package>`
 
 **Acceptance Criteria**:
-- First build generates versions.json
-- versions.json records exact dependency versions
-- Team members get consistent builds using same versions.json
+- Display all versions sorted by time (newest first)
+- Auto-fetch from GitHub/GitLab tags
+- Support `--json` output format
 
-### 3.4 Maintainer: Submit New Formula
+### 3.4 Developer: View Package Information
+
+**As** a developer
+**I want** to view detailed package build information
+**So that** I can understand dependencies and build configuration
+
+**Command**: `llar info <package>[@version]`
+
+**Acceptance Criteria**:
+- Display package metadata (version, matrix, build time)
+- Show dependencies and link flags
+- Support `--json` output format
+
+### 3.5 Developer: Search Packages
+
+**As** a developer
+**I want** to search packages by keyword
+**So that** I can find libraries I need
+
+**Command**: `llar search <keyword>`
+
+**Acceptance Criteria**:
+- Search by package name and description
+- Display matching packages with descriptions
+- Support `--json` output format
+
+### 3.6 Maintainer: Submit New Formula
 
 **As** a formula maintainer
 **I want** to submit formula for new library
@@ -334,7 +303,7 @@ sequenceDiagram
 - Local test build succeeds
 - Pass PR review
 
-### 3.5 Maintainer: Use onRequire to Reduce Maintenance
+### 3.7 Maintainer: Use onRequire to Reduce Maintenance
 
 **As** a formula maintainer
 **I want** to implement onRequire to auto-parse dependencies
@@ -374,6 +343,58 @@ onRequire (proj, deps) => {
 - onRequire can read build system files
 - Auto-parse dependency names and versions
 - Fallback to versions.json when parse fails
+
+### 3.8 Maintainer: Initialize Formula Project
+
+**As** a formula maintainer
+**I want** to initialize a formula project
+**So that** I can start writing formula for a package
+
+**Command**: `llar init`
+
+**Acceptance Criteria**:
+- Create `versions.json` file
+- Initialize with empty dependency list
+- Ready to use `llar get` to add dependencies
+
+### 3.9 Maintainer: Add Formula Dependency
+
+**As** a formula maintainer
+**I want** to add dependencies to formula's versions.json
+**So that** I can declare package dependencies
+
+**Command**: `llar get <package>[@version]`
+
+**Workflow**:
+```mermaid
+sequenceDiagram
+    participant M as Maintainer
+    participant LLAR
+    participant File[versions.json]
+
+    M->>LLAR: llar get zlib@1.2.13
+    LLAR->>LLAR: Resolve with MVS
+    LLAR->>File: Add to versions.json
+    LLAR-->>M: Dependency added
+```
+
+**Acceptance Criteria**:
+- Add dependency to `versions.json`
+- Resolve version conflicts with MVS
+- Record exact version
+
+### 3.10 Maintainer: Clean Up Formula Dependencies
+
+**As** a formula maintainer
+**I want** to clean up unused dependencies in versions.json
+**So that** I can keep formula configuration tidy
+
+**Command**: `llar tidy`
+
+**Acceptance Criteria**:
+- Remove unused entries from `versions.json`
+- Keep only actively used dependencies
+- Preserve dependency order
 
 ## 4. Core Workflow
 
