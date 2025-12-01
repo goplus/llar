@@ -169,7 +169,7 @@ The `{{repo}}_cmp.gox` file defines version comparison logic for version sorting
 ```go
 // ninja_cmp.gox
 compareVer (v1, v2) => {
-    return semverCompare(v1, v2)
+    return semver.Compare(v1, v2)
 }
 ```
 
@@ -208,6 +208,73 @@ Use `import(packageID)` to import other formulas.
 **Example**:
 ```go
 depFormula := import("madler/zlib")
+```
+
+## Built-in Helper Functions
+
+LLAR formulas provide several built-in helper functions for common operations:
+
+### pkgID
+
+Converts a library name to a package ID.
+
+**Signature**: `pkgID(name string) string`
+
+**Parameters**:
+- `name`: Library name (e.g., "zlib", "re2c")
+
+**Returns**: Package ID in `owner/repo` format (e.g., "madler/zlib")
+
+**Example**:
+```go
+id := pkgID("zlib")  // Returns "madler/zlib"
+deps.require(pkgID("re2c"), "2.0")
+```
+
+### findDeps
+
+Parses and extracts dependency declarations from CMake files.
+
+**Signature**: `findDeps(content string) []Dependency`
+
+**Parameters**:
+- `content`: CMake file content (typically from CMakeLists.txt)
+
+**Returns**: Array of dependency objects with `name` and `version` fields
+
+**Example**:
+```go
+cmake := proj.readFile("CMakeLists.txt")
+matches := findDeps(cmake)
+// Returns: [{name: "re2c", version: "2.0"}, {name: "zlib", version: ""}]
+
+for m in matches {
+    deps.require(pkgID(m.Name), m.Version)
+}
+```
+
+### semver.Compare
+
+Semantic version comparison function from Go's `golang.org/x/mod/semver` module (auto-imported).
+
+**Signature**: `semver.Compare(v1 string, v2 string) int`
+
+**Parameters**:
+- `v1`: First version string
+- `v2`: Second version string
+
+**Returns**:
+- `-1`: v1 < v2
+- `0`: v1 == v2
+- `1`: v1 > v2
+
+**Example**:
+```go
+compareVer (v1, v2) => {
+    return semver.Compare(v1, v2)
+}
+
+result := semver.Compare("v1.2.3", "v1.3.0")  // Returns -1
 ```
 
 ## Version Management
@@ -279,7 +346,7 @@ onBuild (proj, out) => {
 
 ```go
 compareVer (v1, v2) => {
-    return semverCompare(v1, v2)
+    return semver.Compare(v1, v2)
 }
 ```
 
