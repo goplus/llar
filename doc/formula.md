@@ -96,6 +96,53 @@ type Project interface {
 }
 ```
 
+### Formula
+
+Formula interface provides access to package metadata and callback registration.
+
+```go
+type Formula interface {
+    // Id - supports overloading
+    Id__0() string          // Returns the current package id (owner/repo format)
+    Id__1(id string)        // Declares the package id
+
+    // FromVer - supports overloading
+    FromVer__0() string     // Returns the starting version this formula applies to
+    FromVer__1(ver string)  // Declares the starting version
+
+    // Matrix - supports overloading
+    Matrix__0() matrix.Matrix      // Returns the current build matrix
+    Matrix__1(m matrix.Matrix)     // Declares the build matrix
+
+    // Version - returns the current package version
+    Version() version.Version
+
+    // OnRequire - registers dependency extraction callback (optional)
+    OnRequire(fn func(proj Project, deps deps.Graph))
+
+    // OnBuild - registers build execution callback (required)
+    OnBuild(fn func(proj Project, out Output))
+
+    // Filter - registers matrix filter callback (optional)
+    Filter(fn func(m matrix.Matrix) bool)
+}
+```
+
+### Output
+
+Output interface provides build output operations.
+
+```go
+type Output interface {
+    // Dir returns the output directory (read-only)
+    Dir() string
+
+    // SetLinkFlags sets the link flags for this build output
+    // flags: array of link flags (e.g., "-I/path/include", "-L/path/lib", "-lname")
+    SetLinkFlags(flags ...string)
+}
+```
+
 ### onRequire
 
 Extracts dependency declarations from project source code. This is an optional callback.
