@@ -87,12 +87,12 @@ type Project interface {
     fs.FS                    // Project source directory
     deps.Graph               // Dependency graph
 
-    Dir()                    // Project source directory
+    Dir() string             // Project source directory
     // ReadFile reads the content of a file from the project source directory
     ReadFile(filename string) ([]byte, error)
 
     // Matrix returns the current build matrix configuration
-    Matrix()
+    Matrix() matrix.Matrix
 }
 ```
 
@@ -437,7 +437,7 @@ Some combinations of architecture and operating system are unsupported:
 
 **Defining the Filter Function**:
 
-```javascript
+```go
 matrix require = {
     "arch": ["x86_64", "arm64", "mips", "riscv"],
     "os": ["linux", "darwin", "windows"]
