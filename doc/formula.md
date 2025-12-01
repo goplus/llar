@@ -87,6 +87,7 @@ type Project interface {
     fs.FS                    // Project source directory
     deps.Graph               // Dependency graph
 
+    Dir()                    // Project source directory
     // ReadFile reads the content of a file from the project source directory
     ReadFile(filename string) ([]byte, error)
 
