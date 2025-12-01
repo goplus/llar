@@ -6,7 +6,7 @@ id "DaveGamble/cJSON"  # module id
 
 fromVer "v1.0.0"  # run formula from this version
 
-onRequire (proj, deps) => {  # abstract deps from this project
+onRequire (proj, deps) => {  # extract deps from this project
     cmake := proj.readFile("CMakeLists.txt")
 
     # find_package(re2c 2.0 REQUIRED)  -> {name: "re2c", version: "2.0"}
