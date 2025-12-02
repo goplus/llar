@@ -29,11 +29,11 @@ filter matrix => {
 
 
 onRequire (proj, deps) => {  // extract deps from this project
-    cmake := proj.readFile("CMakeLists.txt")
+    makefile := proj.readFile("CMakeLists.txt")
 
     // find_package(re2c 2.0 REQUIRED)  -> {name: "re2c", version: "2.0"}
     // find_package(zlib REQUIRED)      -> {name: "zlib", version: ""}
-    matches := findDeps(cmake)  // return [{name: "re2c", version: "2.0"}, {name: "zlib", version: ""}]
+    matches := findDeps(makefile)  // return [{name: "re2c", version: "2.0"}, {name: "zlib", version: ""}]
 
     for m in matches {
         deps.require(moduleID(m.Name), m.Version)
@@ -185,8 +185,8 @@ Extracts dependency declarations from project source code. This is an optional c
 **Example**:
 ```go
 onRequire (proj, deps) => {
-    cmake := proj.readFile("CMakeLists.txt")
-    matches := findDeps(cmake)
+    makefile := proj.readFile("CMakeLists.txt")
+    matches := findDeps(makefile)
 
     for m in matches {
         deps.require(moduleID(m.Name), m.Version)
