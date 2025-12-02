@@ -4,66 +4,39 @@
 
 ### 1.1 Core Problem
 
-In modular compilation languages (C/C++, Python, WASM), developers face:
+Building local compilation environments requires:
+- Installing toolchains (GCC, Clang, CMake)
+- Understanding build systems (CMake, Make, Autotools)
+- Resolving dependency conflicts manually
+- Handling platform-specific issues
 
-**Problem Scenario**:
-- Different libraries have numerous optional compilation configurations and combinations
-- Changing a configuration or platform requires rebuilding all libraries from scratch
-- Repeated builds are meaningless and waste time
+**This mental burden is the barrier to making software engineering accessible.**
 
-**Existing Solutions' Shortcomings**:
+### 1.2 LLAR's Solution
 
-Package managers like Homebrew, Conan, and APT provide "pre-built" packages, but:
-- To save space, they don't build all possible configurations
-- "Universal" pre-built artifacts often don't meet user needs
-- Users still need to build locally in most cases, wasting time
-- Developers repeatedly build the same artifacts, extremely wasteful
+Three core advantages:
 
-**LLAR's Approach**:
-- Builds DefaultOptions matrix by default (common configurations)
-- Non-default options trigger server lazy build (on demand)
-- Users wait for server build, artifacts are cached and shared globally
-- No local build for missing packages, reducing user burden
-
-### 1.2 Design Goals
-
-**LLAR's Positioning**:
-
-LLAR is dedicated to creating a package manager that:
-- Has complete pre-built artifact management (provides online build management for pre-built packages)
-- Provides convenient build configuration
-- Balances artifact management and build configuration
-
-**Core Advantages vs Existing Package Managers**:
-
-1. **Automatic Dependency Conflict Resolution** - Borrowing Go's dependency management philosophy
-   - Industry Pain Point: Conan/pip report errors on version conflicts, requiring manual override
-   - LLAR Solution: Uses Go's MVS algorithm to automatically calculate version combinations
-   - User Value: No "dependency hell", just run `llar install`
-
-2. **Lazy Build Mechanism** - Server builds on demand
-   - Industry Pain Point: Conan/Nix can only build locally when missing packages
-   - LLAR Solution: LLAR builds DefaultOptions by default; non-LLAR pre-built triggers server build, user waits
-   - User Value: First time may wait, but artifacts are shared globally, no repeated waste
-
-3. **Smart Formulas** - Automatic dependency parsing
-   - Industry Pain Point: Conan/Homebrew formulas require manual dependency maintenance
-   - LLAR Solution: `onRequire` automatically extracts dependencies from CMakeLists.txt
-   - Maintainer Value: Low maintenance cost, low contribution barrier, fast ecosystem growth
+1. **Auto Dependency Resolution**: MVS algorithm eliminates "dependency hell"
+2. **Lazy Build**: DefaultOptions pre-built, rare configs built by server on-demand
+3. **Smart Formulas**: Auto-parse dependencies from CMakeLists.txt, low maintenance
 
 ## 2. Basic Concepts
 
-### 2.1 Package
+### 2.1 Module
 
-A package represents a complete source library (e.g., `DaveGamble/cJSON`), containing:
+A module is a versioned source library (e.g., `DaveGamble/cJSON@1.7.18`), containing:
 - **Formula**: Build instructions
 - **Matrix**: Supported configurations (os/arch/options)
-- **Versions**: Auto-retrieved from GitHub/GitLab
-- **Dependencies**: Required packages
+- **Versions**: Auto-retrieved from GitHub/GitLab (e.g., v1.0.0, v1.7.18, v2.0.0)
+- **Dependencies**: Required modules
+
+**Module vs Package**:
+- **Module**: Has version number, is the unit of dependency management (e.g., `zlib@1.2.13`)
+- **Package**: Build artifact (pre-built binaries) for a specific module version and matrix combination
 
 ### 2.2 Formula
 
-Formula defines how to build a package across versions and platforms.
+Formula defines how to build a module across versions and platforms.
 
 **Structure**: `{{repo}}_cmp.gox` (version comparison) + `versions.json` (deps fallback) + `{{repo}}_llar.gox` (build logic)
 
@@ -134,11 +107,6 @@ sequenceDiagram
         Note over Cache: Cached for future users
     end
 ```
-
-**Benefits of Future Lazy Build**:
-- No local build: Users wait for server instead
-- Shared cache: Once built, available to all users globally
-- DefaultOptions pre-built, non-default built on-demand
 
 ### 2.5 Version Management
 
@@ -220,40 +188,40 @@ graph TD
 ### 3.3 Developer: List Available Versions
 
 **As** a developer
-**I want** to list all available versions of a package
+**I want** to list all available versions of a module
 **So that** I can choose the right version
 
-**Command**: `llar list <package>`
+**Command**: `llar list <module>`
 
 **Acceptance Criteria**:
 - Display all versions sorted by time (newest first)
 - Auto-fetch from GitHub/GitLab tags
 - Support `--json` output format
 
-### 3.4 Developer: View Package Information
+### 3.4 Developer: View Module Information
 
 **As** a developer
-**I want** to view detailed package build information
+**I want** to view detailed module build information
 **So that** I can understand dependencies and build configuration
 
-**Command**: `llar info <package>[@version]`
+**Command**: `llar info <module>[@version]`
 
 **Acceptance Criteria**:
-- Display package metadata (version, matrix, build time)
+- Display module metadata (version, matrix, build time)
 - Show dependencies and link flags
 - Support `--json` output format
 
-### 3.5 Developer: Search Packages
+### 3.5 Developer: Search Modules
 
 **As** a developer
-**I want** to search packages by keyword
+**I want** to search modules by keyword
 **So that** I can find libraries I need
 
 **Command**: `llar search <keyword>`
 
 **Acceptance Criteria**:
-- Search by package name and description
-- Display matching packages with descriptions
+- Search by module name and description
+- Display matching modules with descriptions
 - Support `--json` output format
 
 ### 3.6 Maintainer: Submit New Formula
@@ -348,7 +316,7 @@ onRequire (proj, deps) => {
 
 **As** a formula maintainer
 **I want** to initialize a formula project
-**So that** I can start writing formula for a package
+**So that** I can start writing formula for a module
 
 **Command**: `llar init`
 
@@ -361,22 +329,9 @@ onRequire (proj, deps) => {
 
 **As** a formula maintainer
 **I want** to add dependencies to formula's versions.json
-**So that** I can declare package dependencies
+**So that** I can declare module dependencies
 
-**Command**: `llar get <package>[@version]`
-
-**Workflow**:
-```mermaid
-sequenceDiagram
-    participant M as Maintainer
-    participant LLAR
-    participant File[versions.json]
-
-    M->>LLAR: llar get zlib@1.2.13
-    LLAR->>LLAR: Resolve with MVS
-    LLAR->>File: Add to versions.json
-    LLAR-->>M: Dependency added
-```
+**Command**: `llar get <module>[@version]`
 
 **Acceptance Criteria**:
 - Add dependency to `versions.json`
@@ -398,11 +353,11 @@ sequenceDiagram
 
 ## 4. Core Workflow
 
-### 4.1 Package Install Flow
+### 4.1 Module Install Flow
 
 ```mermaid
 graph TB
-    A[User: llar install cJSON@1.7.18] --> B[Parse package and version]
+    A[User: llar install cJSON@1.7.18] --> B[Parse module and version]
     B --> C[Get formula from repo]
     C --> D[Parse build matrix - DefaultOptions]
     D --> E[Execute MVS algorithm]
@@ -503,61 +458,17 @@ App (onBuild) → Build (can access HTTP + OpenSSL artifacts)
 
 ### 5.2 Static Linking (Recommended)
 
-**Design Rationale**: LLAR recommends static libraries (`.a` files) for:
-- Complete isolation from system environment
-- Build reproducibility
-- No version conflicts
-- Portability
+LLAR recommends static libraries (`.a` files) for isolation, reproducibility, and portability.
 
-**Build Requirements**:
-```go
-onBuild (proj, out) => {
-    // Disable shared libraries
-    cmake "-DBUILD_SHARED_LIBS=OFF", "."
-
-    // Set link flags
-    out.setLinkFlags("-L" + out.dir + "/lib", "-lmylib")
-}
-```
-
-**Note**: Dynamic library support design is under development.
+**Note**: Dynamic library support is under development.
 
 ## 6. Design Advantages
 
-### 6.1 vs Conan
-
-| Feature | LLAR | Conan |
-|---------|------|-------|
-| Dependency Conflicts | Auto (MVS) | Manual override |
-| Missing Package | Server build (user waits) | Local only |
-| Formula Maintenance | Auto (onRequire) | Manual |
-| Version Management | Simple (versions.json) | Complex (conanfile.py + conan.lock) |
-| Default Build | DefaultOptions only | All configurations |
-
-### 6.2 vs Homebrew
-
-| Feature | LLAR | Homebrew |
-|---------|------|----------|
-| Configuration Coverage | DefaultOptions + lazy build | Limited |
-| Cross-platform | Yes | macOS/Linux only |
-| Dependency Resolution | MVS | Manual |
-| Formula Intelligence | onRequire auto-parse | Manual maintenance |
-| Missing Package | Server build | Not available |
-
-### 6.3 vs Nix
-
-| Feature | LLAR | Nix |
-|---------|------|-----|
-| Learning Curve | Low (XGo) | High (Nix expressions) |
-| Missing Package | Server build (user waits) | Local only |
-| Build Speed | Fast (server + cache) | Slow (local only) |
-| Configuration | Simple (DefaultOptions) | Complex |
-| Default Build | DefaultOptions only | All configurations |
-
-## 7. References
-
-- [formula.md](formula.md) - Formula specification
-- [formula-version-design.md](../docs/formula-version-design.md) - Formula version adaptation
-- [mvs-algorithm-design.md](../docs/mvs-algorithm-design.md) - MVS algorithm
-- [version-range-design.md](../docs/version-range-design.md) - Version range
-- [matrix.md](../docs/matrix.md) - Build matrix
+| Feature | LLAR | Conan | Homebrew | Nix |
+|---------|------|-------|----------|-----|
+| Dependency Resolution | Auto (MVS) | Manual override | Manual | Manual |
+| Missing Artifact | Server build | Local only | Not available | Local only |
+| Formula Maintenance | Auto (onRequire) | Manual | Manual | Manual |
+| Learning Curve | Low (XGo) | Medium | Low | High |
+| Cross-platform | Yes | Yes | macOS/Linux | Yes |
+| Default Build | DefaultOptions only | All configs | Limited | All configs |
