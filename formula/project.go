@@ -2,7 +2,7 @@ package formula
 
 // -----------------------------------------------------------------------------
 
-// Project represents a project being built.
+// Project represents a project (module) being built.
 type Project struct {
 }
 
