@@ -10,6 +10,9 @@ import (
 type ModuleF struct {
 	gsh.App
 
+	fOnRequire func(proj *Project, deps *ModuleDeps)
+	fOnBuild   func(proj *Project, out *BuildResult)
+
 	modID      string
 	modFromVer string
 }
@@ -34,12 +37,14 @@ type ModuleDeps struct {
 // Require declares that the module being built depends on the specified
 // module (by its modID and version).
 func (p *ModuleDeps) Require(modID, ver string) {
+	panic("TODO")
 }
 
 // OnRequire event is used to retrieve all direct dependencies of a
 // project (module). proj is the project being built, deps is used to
 // declare dependencies.
-func (p *ModuleF) OnRequire(proj *Project, deps *ModuleDeps) {
+func (p *ModuleF) OnRequire(f func(proj *Project, deps *ModuleDeps)) {
+	p.fOnRequire = f
 }
 
 // -----------------------------------------------------------------------------
@@ -49,7 +54,8 @@ type BuildResult struct {
 }
 
 // OnBuild event is used to instruct the Formula to compile a project.
-func (p *ModuleF) OnBuild(proj *Project, out *BuildResult) {
+func (p *ModuleF) OnBuild(f func(proj *Project, out *BuildResult)) {
+	p.fOnBuild = f
 }
 
 // -----------------------------------------------------------------------------
