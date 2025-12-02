@@ -461,14 +461,3 @@ App (onBuild) → Build (can access HTTP + OpenSSL artifacts)
 LLAR recommends static libraries (`.a` files) for isolation, reproducibility, and portability.
 
 **Note**: Dynamic library support is under development.
-
-## 6. Design Advantages
-
-| Feature | LLAR | Conan | Homebrew | Nix |
-|---------|------|-------|----------|-----|
-| Dependency Resolution | Auto (MVS) | Manual override | Manual | Manual |
-| Missing Artifact | Server build | Local only | Not available | Local only |
-| Formula Maintenance | Auto (onRequire) | Manual | Manual | Manual |
-| Learning Curve | Low (XGo) | Medium | Low | High |
-| Cross-platform | Yes | Yes | macOS/Linux | Yes |
-| Default Build | DefaultOptions only | All configs | Limited | All configs |
