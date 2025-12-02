@@ -335,7 +335,6 @@ onRequire (proj, deps) => {
 
 **Acceptance Criteria**:
 - Add dependency to `versions.json`
-- Resolve version conflicts with MVS
 - Record exact version
 
 ### 3.10 Maintainer: Clean Up Formula Dependencies
