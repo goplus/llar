@@ -27,6 +27,8 @@ func Parse(file string, data []byte) (*Versions, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer f.Close()
+
 		reader = f
 	}
 
