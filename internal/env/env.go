@@ -5,10 +5,15 @@ import (
 	"path/filepath"
 )
 
-func WorkDir() (string, error) {
+func FormulaDir() (string, error) {
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(userCacheDir, ".llar"), nil
+	formulaDir := filepath.Join(userCacheDir, ".llar", "formulas")
+
+	if err := os.MkdirAll(formulaDir, 0700); err != nil {
+		return "", err
+	}
+	return formulaDir, nil
 }
