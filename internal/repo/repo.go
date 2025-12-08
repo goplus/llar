@@ -1,35 +1,40 @@
 package repo
 
 import (
+	"context"
+	"io/fs"
+	"os"
 	"path/filepath"
-	"sync"
 )
 
+// Repo manages a remote formula repository.
 type Repo struct {
 	vcs      VCS
 	remote   string
 	localDir string
-	syncOnce sync.Once
 }
 
+// NewRepo creates a new Repo instance.
 func NewRepo(vcs VCS, remote, localDir string) *Repo {
-	return &Repo{vcs: vcs, remote: remote, localDir: localDir}
-}
-
-func (r *Repo) lazyInit() error {
-	var err error
-
-	r.syncOnce.Do(func() {
-		// FIXME(MeteorsLiu): allow non-main branch
-		err = r.vcs.Sync(r.remote, "main", r.localDir)
-	})
-
-	return err
-}
-
-func (r *Repo) ModulePath(moduleID string) (string, error) {
-	if err := r.lazyInit(); err != nil {
-		return "", err
+	return &Repo{
+		vcs:      vcs,
+		remote:   remote,
+		localDir: localDir,
 	}
-	return filepath.Join(r.localDir, moduleID), nil
+}
+
+// Sync synchronizes the repository to the specified ref (branch, tag, or commit).
+// If ref is empty, syncs to the default branch.
+func (r *Repo) Sync(ctx context.Context, ref string) error {
+	return r.vcs.Sync(ctx, r.remote, ref, r.localDir)
+}
+
+// ModulePath returns the local filesystem path for a module.
+func (r *Repo) ModulePath(moduleID string) string {
+	return filepath.Join(r.localDir, moduleID)
+}
+
+// ModuleFS returns a fs.FS for the given module.
+func (r *Repo) ModuleFS(moduleID string) fs.FS {
+	return os.DirFS(r.ModulePath(moduleID))
 }

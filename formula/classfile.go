@@ -43,13 +43,13 @@ func (p *ModuleF) FromVer(ver string) {
 
 // ModuleDeps represents the dependencies of a module.
 type ModuleDeps struct {
-	deps []versions.Dependency
+	Deps []versions.Dependency
 }
 
 // Require declares that the module being built depends on the specified
 // module (by its modID and version).
 func (p *ModuleDeps) Require(modID, ver string) {
-	p.deps = append(p.deps, versions.Dependency{ModuleID: modID, Version: ver})
+	p.Deps = append(p.Deps, versions.Dependency{ModuleID: modID, Version: ver})
 }
 
 // OnRequire event is used to retrieve all direct dependencies of a

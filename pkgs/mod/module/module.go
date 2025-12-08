@@ -5,4 +5,4 @@ type Version struct {
 	Version string
 }
 
-type VersionComparator func(v1, v2 Version) int
+type VersionComparator func(v1, v2 string) int

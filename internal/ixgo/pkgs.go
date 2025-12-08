@@ -1,6 +1,4 @@
-package loader
-
-// make ixgo happy
+package ixgo
 
 //go:generate qexp -outdir pkg github.com/goplus/llar/formula
 //go:generate qexp -outdir pkg github.com/goplus/llar/cmp
@@ -175,11 +173,11 @@ import (
 	// _ "github.com/goplus/ixgo/pkg/testing/iotest"
 	// _ "github.com/goplus/ixgo/pkg/testing/quick"
 	// _ "github.com/goplus/ixgo/pkg/testing/slogtest"
-	_ "github.com/goplus/llar/internal/loader/pkg/github.com/goplus/llar/cmp"
-	_ "github.com/goplus/llar/internal/loader/pkg/github.com/goplus/llar/formula"
-	_ "github.com/goplus/llar/internal/loader/pkg/github.com/goplus/llar/pkgs/gnu"
-	_ "github.com/goplus/llar/internal/loader/pkg/github.com/goplus/llar/pkgs/mod/module"
-	_ "github.com/goplus/llar/internal/loader/pkg/github.com/goplus/llar/pkgs/mod/versions"
-	_ "github.com/goplus/llar/internal/loader/pkg/github.com/qiniu/x/gsh"
-	_ "github.com/goplus/llar/internal/loader/pkg/golang.org/x/mod/semver"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/cmp"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/formula"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/gnu"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/mod/module"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/mod/versions"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/qiniu/x/gsh"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/golang.org/x/mod/semver"
 )
