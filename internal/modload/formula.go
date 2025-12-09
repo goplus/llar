@@ -69,8 +69,8 @@ func newFormulaContext() *formulaContext {
 	}
 }
 
-func (m *formulaContext) comparatorOf(mod module.Version) (module.VersionComparator, error) {
-	if comp, ok := m.comparators[mod.ID]; ok {
+func (m *formulaContext) comparatorOf(modId string) (module.VersionComparator, error) {
+	if comp, ok := m.comparators[mod]; ok {
 		return comp, nil
 	}
 	comp, err := loadComparator(m.loader, mod)
@@ -116,22 +116,22 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	return f, nil
 }
 
-func parseLibraryName(mod module.Version) string {
-	_, name, ok := strings.Cut(mod.ID, "/")
+func parseLibraryName(modID string) string {
+	_, name, ok := strings.Cut(modID, "/")
 	if !ok {
 		panic("invalid module id")
 	}
 	return name
 }
 
-func loadComparator(loader loader.Loader, mod module.Version) (comparator module.VersionComparator, err error) {
+func loadComparator(loader loader.Loader, modID string) (comparator module.VersionComparator, err error) {
 	formulaDir, err := env.FormulaDir()
 	if err != nil {
 		return nil, err
 	}
-	moduleDir := filepath.Join(formulaDir, mod.ID)
+	moduleDir := filepath.Join(formulaDir, modID)
 
-	cmpFormulaPath := filepath.Join(moduleDir, fmt.Sprintf("%s_cmp.gox", parseLibraryName(mod)))
+	cmpFormulaPath := filepath.Join(moduleDir, fmt.Sprintf("%s_cmp.gox", parseLibraryName(modID)))
 
 	if _, err := os.Stat(cmpFormulaPath); os.IsNotExist(err) {
 		cmpFormulas, _ := filepath.Glob(filepath.Join(moduleDir, "*_cmp.gox"))

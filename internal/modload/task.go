@@ -70,7 +70,15 @@ func (t *task) resolveDeps(ctx *formulaContext) ([]module.Version, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, dep := range versions.Dependencies[f.Version] {
 
+	for _, dep := range versions.Dependencies[f.Version.Version] {
+		if dep.Version != "" {
+			vers = append(vers, module.Version{
+				ID:      dep.ModuleID,
+				Version: dep.Version,
+			})
+		}
 	}
+
+	return vers, nil
 }

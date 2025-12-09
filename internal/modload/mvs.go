@@ -10,10 +10,10 @@ var _ mvs.Reqs = (*mvsReqs)(nil)
 // mvsReqs implements mvs.Reqs for module semantic versions,
 // with any exclusions or replacements applied internally.
 type mvsReqs struct {
-	roots         []module.Version
-	isMain        func(module.Version) bool
-	cmp           func(p string, v1, v2 string) int
-	onLoadVersion func(module.Version) ([]module.Version, error)
+	roots  []module.Version
+	isMain func(module.Version) bool
+	cmp    func(p string, v1, v2 string) int
+	onLoad func(module.Version) ([]module.Version, error)
 }
 
 func (r *mvsReqs) Required(mod module.Version) ([]module.Version, error) {
@@ -27,7 +27,7 @@ func (r *mvsReqs) Required(mod module.Version) ([]module.Version, error) {
 		return nil, nil
 	}
 
-	return r.onLoadVersion(mod)
+	return r.onLoad(mod)
 }
 
 // Max returns the maximum of v1 and v2 according to gover.ModCompare.
