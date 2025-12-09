@@ -16,8 +16,8 @@ type Dependency struct {
 
 // Versions represents a module's version file containing its dependencies.
 type Versions struct {
-	ModuleID     string                `json:"id"`   // ModuleID
-	Dependencies map[string]Dependency `json:"deps"` // Map of dependency name to dependency details
+	ModuleID     string                  `json:"id"`   // ModuleID
+	Dependencies map[string][]Dependency `json:"deps"` // Map of dependency name to dependency details
 }
 
 // Parse reads and parses a version file from either provided data or a file path.
