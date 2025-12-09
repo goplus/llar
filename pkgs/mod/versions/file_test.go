@@ -3,6 +3,7 @@ package versions
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -18,15 +19,15 @@ func TestParse_WithData(t *testing.T) {
 			data: `{
 				"id": "example/module",
 				"deps": {
-					"dep1": {"id": "dep/one", "version": "v1.0.0"},
-					"dep2": {"id": "dep/two", "version": "v2.1.0"}
+					"dep1": [{"id": "dep/one", "version": "v1.0.0"}],
+					"dep2": [{"id": "dep/two", "version": "v2.1.0"}]
 				}
 			}`,
 			want: &Versions{
 				ModuleID: "example/module",
-				Dependencies: map[string]Dependency{
-					"dep1": {ModuleID: "dep/one", Version: "v1.0.0"},
-					"dep2": {ModuleID: "dep/two", Version: "v2.1.0"},
+				Dependencies: map[string][]Dependency{
+					"dep1": {{ModuleID: "dep/one", Version: "v1.0.0"}},
+					"dep2": {{ModuleID: "dep/two", Version: "v2.1.0"}},
 				},
 			},
 			wantErr: false,
@@ -36,7 +37,7 @@ func TestParse_WithData(t *testing.T) {
 			data: `{"id": "example/module", "deps": {}}`,
 			want: &Versions{
 				ModuleID:     "example/module",
-				Dependencies: map[string]Dependency{},
+				Dependencies: map[string][]Dependency{},
 			},
 			wantErr: false,
 		},
@@ -83,7 +84,7 @@ func TestParse_WithData(t *testing.T) {
 			for k, v := range tt.want.Dependencies {
 				if gotDep, ok := got.Dependencies[k]; !ok {
 					t.Errorf("Parse() missing dependency %q", k)
-				} else if gotDep != v {
+				} else if !reflect.DeepEqual(gotDep, v) {
 					t.Errorf("Parse() dependency %q = %v, want %v", k, gotDep, v)
 				}
 			}
@@ -95,7 +96,7 @@ func TestParse_WithFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	t.Run("valid file", func(t *testing.T) {
-		content := `{"id": "test/module", "deps": {"a": {"id": "dep/a", "version": "v1.0.0"}}}`
+		content := `{"id": "test/module", "deps": {"a": [{"id": "dep/a", "version": "v1.0.0"}]}}`
 		file := filepath.Join(tmpDir, "versions.json")
 		if err := os.WriteFile(file, []byte(content), 0644); err != nil {
 			t.Fatal(err)
@@ -111,7 +112,7 @@ func TestParse_WithFile(t *testing.T) {
 		if len(got.Dependencies) != 1 {
 			t.Errorf("Parse() Dependencies len = %v, want 1", len(got.Dependencies))
 		}
-		if dep := got.Dependencies["a"]; dep.ModuleID != "dep/a" || dep.Version != "v1.0.0" {
+		if dep := got.Dependencies["a"]; dep[0].ModuleID != "dep/a" || dep[0].Version != "v1.0.0" {
 			t.Errorf("Parse() dependency a = %v, want {dep/a v1.0.0}", dep)
 		}
 	})
