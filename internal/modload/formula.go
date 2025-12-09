@@ -1,6 +1,7 @@
 package modload
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/loader"
 	"github.com/goplus/llar/internal/parser"
+	"github.com/goplus/llar/internal/repo"
 	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
@@ -22,9 +24,96 @@ const _defaultFormulaSuffix = "_llar.gox"
 type Formula struct {
 	module.Version
 
+	vcs           repo.VCS
+	remoteRepoUrl string
+
 	Dir       string
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(proj *formula.Project, out *formula.BuildResult)
+}
+
+func (f *Formula) ref(ctx context.Context) (string, error) {
+	refs, err := f.vcs.Tags(ctx, f.remoteRepoUrl)
+	if err != nil {
+		return "", err
+	}
+	ref, ok := matchGitRef(refs, f.Version.Version)
+	if !ok {
+		return "", fmt.Errorf("failed to resolve version: cannot find a ref from version: %s", f.Version.Version)
+	}
+	return ref, nil
+}
+
+func (f *Formula) Sync(ctx context.Context, dir string) error {
+	ref, err := f.ref(ctx)
+	if err != nil {
+		return err
+	}
+	return f.vcs.Sync(ctx, f.remoteRepoUrl, ref, dir)
+}
+
+type formulaContext struct {
+	ctx         *ixgo.Context
+	loader      loader.Loader
+	formulas    map[module.Version]*Formula
+	comparators map[string]module.VersionComparator
+}
+
+func newFormulaContext() *formulaContext {
+	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
+	return &formulaContext{
+		ctx:         ctx,
+		loader:      loader.NewFormulaLoader(ctx),
+		formulas:    make(map[module.Version]*Formula),
+		comparators: make(map[string]module.VersionComparator),
+	}
+}
+
+func (m *formulaContext) comparatorOf(mod module.Version) (module.VersionComparator, error) {
+	if comp, ok := m.comparators[mod.ID]; ok {
+		return comp, nil
+	}
+	comp, err := loadComparator(m.loader, mod)
+	if err != nil {
+		return nil, err
+	}
+	m.comparators[mod.ID] = comp
+	return comp, nil
+}
+
+func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
+	comparator, err := m.comparatorOf(mod)
+	if err != nil {
+		return nil, err
+	}
+	maxFromVer, formulaPath, err := findMaxFromVer(mod, comparator)
+	if err != nil {
+		return nil, err
+	}
+	cacheKey := module.Version{ID: mod.ID, Version: maxFromVer}
+	f, ok := m.formulas[cacheKey]
+	if ok {
+		return f, nil
+	}
+	formulaStruct, err := m.loader.Load(formulaPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO(MeteorsLiu): Support different VCS
+	vcs := repo.NewGitVCS()
+	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", mod.ID)
+
+	f = &Formula{
+		Version:       mod,
+		vcs:           vcs,
+		remoteRepoUrl: remoteRepoUrl,
+		Dir:           formulaPath,
+		OnBuild:       formulaStruct.Value("fOnBuild").(func(*formula.Project, *formula.BuildResult)),
+		OnRequire:     formulaStruct.Value("fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
+	}
+	m.formulas[cacheKey] = f
+	return f, nil
 }
 
 func parseLibraryName(mod module.Version) string {
@@ -149,4 +238,13 @@ func parseCallArg(c *ast.CallExpr, fnName string) (string, error) {
 		}
 	}
 	return argResult, nil
+}
+
+func matchGitRef(refs []string, version string) (ref string, ok bool) {
+	for _, r := range refs {
+		if strings.HasSuffix(r, version) {
+			return r, true
+		}
+	}
+	return "", false
 }

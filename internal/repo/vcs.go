@@ -9,15 +9,8 @@ import (
 	"strings"
 )
 
-type VCSType int
-
-const (
-	Git VCSType = iota + 1
-)
-
 // VCS defines the interface for version control operations.
 type VCS interface {
-	Type() VCSType
 	// Sync ensures the local repo exists and is at the specified ref.
 	// ref can be branch, tag, or commit hash.
 	// If dir doesn't exist, clones the repo.
@@ -98,10 +91,6 @@ func (g *gitVCS) checkout(ctx context.Context, dir, ref string) error {
 		return fmt.Errorf("checkout %s: %w", ref, err)
 	}
 	return nil
-}
-
-func (g *gitVCS) Type() VCSType {
-	return Git
 }
 
 func (g *gitVCS) Tags(ctx context.Context, remote string) ([]string, error) {
