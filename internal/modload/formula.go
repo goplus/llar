@@ -15,7 +15,7 @@ import (
 	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/loader"
 	"github.com/goplus/llar/internal/parser"
-	repo "github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
@@ -25,7 +25,7 @@ const _defaultFormulaSuffix = "_llar.gox"
 type Formula struct {
 	module.Version
 
-	vcs           repo.VCS
+	vcs           vcs.VCS
 	refcnt        int
 	remoteRepoUrl string
 
@@ -112,7 +112,7 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	}
 
 	// TODO(MeteorsLiu): Support different VCS
-	vcs := repo.NewGitVCS()
+	vcs := vcs.NewGitVCS()
 	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", mod.ID)
 
 	formulaDir, err := env.FormulaDir()
