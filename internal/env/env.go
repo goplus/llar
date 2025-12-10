@@ -4,6 +4,7 @@ package env
 import (
 	"os"
 	"path/filepath"
+	"testing"
 )
 
 // FormulaDir returns the directory path where formulas are stored.
@@ -14,6 +15,9 @@ import (
 //   - string: The absolute path to the formulas directory
 //   - error: An error if the user cache directory cannot be determined or the directory cannot be created
 func FormulaDir() (string, error) {
+	if testing.Testing() {
+		return "testdata", nil
+	}
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
