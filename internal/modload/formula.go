@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/goplus/ixgo"
@@ -25,11 +26,21 @@ type Formula struct {
 	module.Version
 
 	vcs           repo.VCS
+	refcnt        int
 	remoteRepoUrl string
 
 	Dir       string
+	Proj      *formula.Project
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(proj *formula.Project, out *formula.BuildResult)
+}
+
+func (f *Formula) markUse() {
+	f.refcnt++
+}
+
+func (f *Formula) inUse() bool {
+	return f.refcnt > 0
 }
 
 func (f *Formula) ref(ctx context.Context) (string, error) {
@@ -70,19 +81,19 @@ func newFormulaContext() *formulaContext {
 }
 
 func (m *formulaContext) comparatorOf(modId string) (module.VersionComparator, error) {
-	if comp, ok := m.comparators[mod]; ok {
+	if comp, ok := m.comparators[modId]; ok {
 		return comp, nil
 	}
-	comp, err := loadComparator(m.loader, mod)
+	comp, err := loadComparator(m.loader, modId)
 	if err != nil {
 		return nil, err
 	}
-	m.comparators[mod.ID] = comp
+	m.comparators[modId] = comp
 	return comp, nil
 }
 
 func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
-	comparator, err := m.comparatorOf(mod)
+	comparator, err := m.comparatorOf(mod.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,16 +115,30 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	vcs := repo.NewGitVCS()
 	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", mod.ID)
 
+	formulaDir, err := env.FormulaDir()
+	if err != nil {
+		return nil, err
+	}
 	f = &Formula{
-		Version:       mod,
 		vcs:           vcs,
 		remoteRepoUrl: remoteRepoUrl,
-		Dir:           formulaPath,
+		Version:       mod,
+		Dir:           filepath.Join(formulaDir, mod.ID),
 		OnBuild:       formulaStruct.Value("fOnBuild").(func(*formula.Project, *formula.BuildResult)),
 		OnRequire:     formulaStruct.Value("fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}
 	m.formulas[cacheKey] = f
 	return f, nil
+}
+
+func (m *formulaContext) gc() {
+	for _, f := range m.formulas {
+		if !f.inUse() && f.Proj != nil {
+			tmpDir := reflect.ValueOf(f.Proj.DirFS).String()
+
+			os.RemoveAll(tmpDir)
+		}
+	}
 }
 
 func parseLibraryName(modID string) string {
@@ -131,20 +156,17 @@ func loadComparator(loader loader.Loader, modID string) (comparator module.Versi
 	}
 	moduleDir := filepath.Join(formulaDir, modID)
 
-	cmpFormulaPath := filepath.Join(moduleDir, fmt.Sprintf("%s_cmp.gox", parseLibraryName(modID)))
+	var cmpFormulaPath string
+	cmpFormulas, _ := filepath.Glob(filepath.Join(moduleDir, "*_cmp.gox"))
 
-	if _, err := os.Stat(cmpFormulaPath); os.IsNotExist(err) {
-		cmpFormulas, _ := filepath.Glob(filepath.Join(moduleDir, "*_cmp.gox"))
-
-		if len(cmpFormulas) == 0 {
-			cmpFormulaPath = ""
-		} else {
-			cmpFormulaPath = cmpFormulas[0]
-		}
+	if len(cmpFormulas) > 0 {
+		cmpFormulaPath = cmpFormulas[0]
 	}
 
 	if cmpFormulaPath == "" {
-		return gnu.Compare, nil
+		return func(v1, v2 module.Version) int {
+			return gnu.Compare(v1.Version, v2.Version)
+		}, nil
 	}
 
 	cmpStruct, err := loader.Load(cmpFormulaPath)
@@ -181,13 +203,14 @@ func findMaxFromVer(mod module.Version, compare module.VersionComparator) (maxFr
 		if err != nil {
 			return err
 		}
-		if maxFromVer == "" {
-			maxFromVer = fromVer
-			formulaPath = path
+		fromVerMod := module.Version{mod.ID, fromVer}
+
+		// skip if not fromVer <= mod.
+		if compare(fromVerMod, mod) > 0 {
 			return nil
 		}
-		// a > b
-		if compare(fromVer, maxFromVer) > 0 {
+		// fromVer > maxFromVer
+		if maxFromVer == "" || compare(fromVerMod, module.Version{mod.ID, maxFromVer}) > 0 {
 			maxFromVer = fromVer
 			formulaPath = path
 		}

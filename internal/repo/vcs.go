@@ -54,33 +54,32 @@ func (g *gitVCS) Sync(ctx context.Context, remote, ref, dir string) error {
 		return g.clone(ctx, remote, ref, dir)
 	}
 
-	if err := g.fetch(ctx, dir); err != nil {
-		return err
-	}
-
 	if ref != "" {
-		return g.checkout(ctx, dir, ref)
+		if err := g.fetch(ctx, dir, ref); err != nil {
+			return err
+		}
+		return g.checkout(ctx, dir, "FETCH_HEAD")
 	}
 	return nil
 }
 
 func (g *gitVCS) clone(ctx context.Context, remote, ref, dir string) error {
-	if err := g.run(ctx, "", "clone", remote, dir); err != nil {
+	args := []string{"clone", "--depth", "1"}
+	if ref != "" {
+		args = append(args, "--branch", ref)
+	}
+	args = append(args, remote, dir)
+
+	if err := g.run(ctx, "", args...); err != nil {
+		os.RemoveAll(dir)
 		return fmt.Errorf("clone %s: %w", remote, err)
 	}
-
-	if ref != "" {
-		if err := g.checkout(ctx, dir, ref); err != nil {
-			os.RemoveAll(dir)
-			return err
-		}
-	}
-
 	return nil
 }
 
-func (g *gitVCS) fetch(ctx context.Context, dir string) error {
-	if err := g.run(ctx, dir, "fetch", "--all", "--tags"); err != nil {
+func (g *gitVCS) fetch(ctx context.Context, dir, ref string) error {
+	args := []string{"fetch", "--depth", "1", "origin", ref}
+	if err := g.run(ctx, dir, args...); err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
 	return nil

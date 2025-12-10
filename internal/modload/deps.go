@@ -5,49 +5,39 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/goplus/llar/pkgs/mod/versions"
 )
 
-type task struct {
-	tmpDir string
-	mod    module.Version
-	proj   *formula.Project
-}
-
-func newTask(mod module.Version) (*task, error) {
-	tempDir, err := os.MkdirTemp("", fmt.Sprintf("llar-build-%s-%s*", mod.ID, mod.Version))
-	if err != nil {
-		return nil, err
+func initProj(ctx context.Context, f *Formula) error {
+	if f.Proj != nil {
+		return nil
 	}
-	return &task{
-		mod: mod,
-		proj: &formula.Project{
-			DirFS: os.DirFS(tempDir),
-		},
-	}, nil
-}
-
-func (t *task) prepareSource(ctx *formulaContext) error {
-	f, err := ctx.formulaOf(t.mod)
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("llar-build-%s-%s-*", strings.ReplaceAll(f.Version.ID, "/", "-"), f.Version.Version))
 	if err != nil {
 		return err
 	}
-	return f.Sync(context.TODO(), t.tmpDir)
+	os.RemoveAll(tmpDir)
+
+	f.Proj = &formula.Project{
+		DirFS: os.DirFS(tmpDir),
+	}
+	return f.Sync(ctx, tmpDir)
 }
 
-func (t *task) resolveDeps(ctx *formulaContext) ([]module.Version, error) {
-	f, err := ctx.formulaOf(t.mod)
-	if err != nil {
+func resolveDeps(ctx context.Context, f *Formula) ([]module.Version, error) {
+	if err := initProj(ctx, f); err != nil {
 		return nil, err
 	}
+
 	var deps formula.ModuleDeps
 
 	// onRequire is optional
 	if f.OnRequire != nil {
-		f.OnRequire(t.proj, &deps)
+		f.OnRequire(f.Proj, &deps)
 	}
 
 	var vers []module.Version
@@ -66,7 +56,7 @@ func (t *task) resolveDeps(ctx *formulaContext) ([]module.Version, error) {
 	}
 
 	// fallback
-	versions, err := versions.Parse(filepath.Join(), nil)
+	versions, err := versions.Parse(filepath.Join(f.Dir, "versions.json"), nil)
 	if err != nil {
 		return nil, err
 	}

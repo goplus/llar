@@ -12,4 +12,4 @@ type Version struct {
 //   - negative value if v1 < v2
 //   - zero if v1 == v2
 //   - positive value if v1 > v2
-type VersionComparator func(v1, v2 string) int
+type VersionComparator func(v1, v2 Version) int

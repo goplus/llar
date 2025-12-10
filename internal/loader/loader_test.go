@@ -263,7 +263,7 @@ func TestFormulaLoader_LoadCmpFormula(t *testing.T) {
 		// Try to read the compareVer field
 		compareVer := elem.Value("fCompareVer").(module.VersionComparator)
 
-		if ret := compareVer("", ""); ret != -1 {
+		if ret := compareVer(module.Version{}, module.Version{}); ret != -1 {
 			t.Fatalf("Unexpected compare result: want %d got %d", -1, ret)
 			return
 		}
