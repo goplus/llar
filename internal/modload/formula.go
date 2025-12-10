@@ -15,7 +15,7 @@ import (
 	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/loader"
 	"github.com/goplus/llar/internal/parser"
-	"github.com/goplus/llar/internal/repo"
+	repo "github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/module"
 )

@@ -10,7 +10,7 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/mvs"
 	"github.com/goplus/llar/internal/parser"
-	"github.com/goplus/llar/internal/repo"
+	repo "github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
