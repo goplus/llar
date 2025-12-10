@@ -22,6 +22,8 @@ import (
 
 const _defaultFormulaSuffix = "_llar.gox"
 
+// Formula represents a build formula for a module version.
+// It contains the module version info, VCS configuration, and build callbacks.
 type Formula struct {
 	module.Version
 
@@ -35,14 +37,17 @@ type Formula struct {
 	OnBuild   func(proj *formula.Project, out *formula.BuildResult)
 }
 
+// markUse increments the reference count to indicate the formula is in use.
 func (f *Formula) markUse() {
 	f.refcnt++
 }
 
+// inUse returns true if the formula is currently being used.
 func (f *Formula) inUse() bool {
 	return f.refcnt > 0
 }
 
+// ref resolves the VCS reference for the formula's version.
 func (f *Formula) ref(ctx context.Context) (string, error) {
 	refs, err := f.vcs.Tags(ctx, f.remoteRepoUrl)
 	if err != nil {
@@ -55,6 +60,7 @@ func (f *Formula) ref(ctx context.Context) (string, error) {
 	return ref, nil
 }
 
+// Sync synchronizes the source code from remote repository to the specified directory.
 func (f *Formula) Sync(ctx context.Context, dir string) error {
 	ref, err := f.ref(ctx)
 	if err != nil {
@@ -63,6 +69,8 @@ func (f *Formula) Sync(ctx context.Context, dir string) error {
 	return f.vcs.Sync(ctx, f.remoteRepoUrl, ref, dir)
 }
 
+// formulaContext manages formula loading and caching.
+// It maintains a cache of loaded formulas and version comparators.
 type formulaContext struct {
 	ctx         *ixgo.Context
 	loader      loader.Loader
@@ -70,6 +78,7 @@ type formulaContext struct {
 	comparators map[string]module.VersionComparator
 }
 
+// newFormulaContext creates a new formula context with initialized caches.
 func newFormulaContext() *formulaContext {
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
 	return &formulaContext{
@@ -80,6 +89,8 @@ func newFormulaContext() *formulaContext {
 	}
 }
 
+// comparatorOf returns a version comparator for the specified module.
+// It caches comparators to avoid reloading them.
 func (m *formulaContext) comparatorOf(modId string) (module.VersionComparator, error) {
 	if comp, ok := m.comparators[modId]; ok {
 		return comp, nil
@@ -92,6 +103,8 @@ func (m *formulaContext) comparatorOf(modId string) (module.VersionComparator, e
 	return comp, nil
 }
 
+// formulaOf returns the formula for the specified module version.
+// It finds the appropriate formula file based on version and caches the result.
 func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	comparator, err := m.comparatorOf(mod.ID)
 	if err != nil {
@@ -131,6 +144,8 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	return f, nil
 }
 
+// gc performs garbage collection by removing temporary directories
+// of formulas that are no longer in use.
 func (m *formulaContext) gc() {
 	for _, f := range m.formulas {
 		if !f.inUse() && f.Proj != nil {
@@ -141,6 +156,7 @@ func (m *formulaContext) gc() {
 	}
 }
 
+// parseLibraryName extracts the library name from a module ID (e.g., "owner/repo" -> "repo").
 func parseLibraryName(modID string) string {
 	_, name, ok := strings.Cut(modID, "/")
 	if !ok {
@@ -149,6 +165,8 @@ func parseLibraryName(modID string) string {
 	return name
 }
 
+// loadComparator loads a version comparator for a module.
+// If a custom comparator (*_cmp.gox) exists, it loads that; otherwise returns a default GNU version comparator.
 func loadComparator(loader loader.Loader, modID string) (comparator module.VersionComparator, err error) {
 	formulaDir, err := env.FormulaDir()
 	if err != nil {
@@ -176,6 +194,8 @@ func loadComparator(loader loader.Loader, modID string) (comparator module.Versi
 	return cmpStruct.Value("fCompareVer").(module.VersionComparator), nil
 }
 
+// findMaxFromVer finds the formula file with the highest FromVer that is <= the target version.
+// This allows a single formula to handle multiple versions of a module.
 func findMaxFromVer(mod module.Version, compare module.VersionComparator) (maxFromVer, formulaPath string, err error) {
 	formulaDir, err := env.FormulaDir()
 	if err != nil {
@@ -228,6 +248,7 @@ func findMaxFromVer(mod module.Version, compare module.VersionComparator) (maxFr
 	return maxFromVer, formulaPath, nil
 }
 
+// fromVerFrom extracts the FromVer value from a formula AST by finding the FromVer() call.
 func fromVerFrom(formulaAST *ast.File) (fromVer string, err error) {
 	ast.Inspect(formulaAST, func(n ast.Node) bool {
 		c, ok := n.(*ast.CallExpr)
@@ -248,6 +269,7 @@ func fromVerFrom(formulaAST *ast.File) (fromVer string, err error) {
 	return
 }
 
+// parseCallArg extracts the first string argument from a function call expression.
 func parseCallArg(c *ast.CallExpr, fnName string) (string, error) {
 	if len(c.Args) == 0 {
 		return "", fmt.Errorf("failed to parse %s from AST: no argument", fnName)
@@ -263,6 +285,7 @@ func parseCallArg(c *ast.CallExpr, fnName string) (string, error) {
 	return argResult, nil
 }
 
+// matchGitRef finds a git reference that matches the given version string.
 func matchGitRef(refs []string, version string) (ref string, ok bool) {
 	for _, r := range refs {
 		if strings.HasSuffix(r, version) {

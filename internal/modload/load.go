@@ -8,6 +8,9 @@ import (
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
+// LoadPackages loads all packages required by the main module and resolves
+// their dependencies using the MVS algorithm. It returns formulas for all
+// modules in the computed build list.
 func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) {
 	formulaContext := newFormulaContext()
 	defer formulaContext.gc()

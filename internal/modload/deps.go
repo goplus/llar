@@ -12,6 +12,8 @@ import (
 	"github.com/goplus/llar/pkgs/mod/versions"
 )
 
+// initProj initializes the project directory for a formula.
+// It creates a temporary directory and syncs the source code from remote repository.
 func initProj(ctx context.Context, f *Formula) error {
 	if f.Proj != nil {
 		return nil
@@ -28,6 +30,9 @@ func initProj(ctx context.Context, f *Formula) error {
 	return f.Sync(ctx, tmpDir)
 }
 
+// resolveDeps resolves the dependencies for a formula.
+// It first tries to get dependencies from the OnRequire callback,
+// then falls back to parsing versions.json if no dependencies are found.
 func resolveDeps(ctx context.Context, f *Formula) ([]module.Version, error) {
 	if err := initProj(ctx, f); err != nil {
 		return nil, err
