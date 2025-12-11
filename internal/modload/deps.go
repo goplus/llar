@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/goplus/llar/formula"
@@ -45,28 +46,38 @@ func resolveDeps(ctx context.Context, f *Formula) ([]module.Version, error) {
 		f.OnRequire(f.Proj, &deps)
 	}
 
+	depTable, err := versions.Parse(filepath.Join(f.Dir, "versions.json"), nil)
+	if err != nil {
+		return nil, err
+	}
+	current := depTable.Dependencies[f.Version.Version]
+
 	var vers []module.Version
 
 	for _, dep := range deps.Deps {
-		if dep.Version != "" {
-			vers = append(vers, module.Version{
-				ID:      dep.ModuleID,
-				Version: dep.Version,
+		if dep.Version == "" {
+			// if a version of a dep input by onRequire is empty, try our best to resolve it.
+			idx := slices.IndexFunc[[]versions.Dependency](current, func(depInTable versions.Dependency) bool {
+				return depInTable.ModuleID == dep.ModuleID
 			})
+			if idx < 0 {
+				// It seems safe to drop deps here, because we resolve deps recursively and finally we will find that dep.
+				continue
+			}
+			dep.Version = current[idx].Version
 		}
+
+		vers = append(vers, module.Version{
+			ID:      dep.ModuleID,
+			Version: dep.Version,
+		})
 	}
 
 	if len(vers) > 0 {
 		return vers, nil
 	}
 
-	// fallback
-	versions, err := versions.Parse(filepath.Join(f.Dir, "versions.json"), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, dep := range versions.Dependencies[f.Version.Version] {
+	for _, dep := range current {
 		if dep.Version != "" {
 			vers = append(vers, module.Version{
 				ID:      dep.ModuleID,

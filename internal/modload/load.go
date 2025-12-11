@@ -2,11 +2,33 @@ package modload
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/goplus/llar/internal/mvs"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
+
+func latestVersion(modID string, comparator module.VersionComparator) (version string, err error) {
+	// TODO(MeteorsLiu): Support different VCS
+	vcs := vcs.NewGitVCS()
+	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", modID)
+
+	tags, err := vcs.Tags(context.TODO(), remoteRepoUrl)
+	if err != nil {
+		return "", err
+	}
+	if len(tags) == 0 {
+		return "", fmt.Errorf("failed to retrieve the latest version: no tags found")
+	}
+	slices.SortFunc(tags, func(a, b string) int {
+		return comparator(module.Version{modID, a}, module.Version{modID, b})
+	})
+
+	return tags[0], nil
+}
 
 // LoadPackages loads all packages required by the main module and resolves
 // their dependencies using the MVS algorithm. It returns formulas for all
@@ -24,6 +46,18 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 		defer cancel()
 
 		return resolveDeps(ctx, f)
+	}
+
+	if main.Version == "" {
+		cmp, err := formulaContext.comparatorOf(main.ID)
+		if err != nil {
+			return nil, err
+		}
+		latest, err := latestVersion(main.ID, cmp)
+		if err != nil {
+			return nil, err
+		}
+		main.Version = latest
 	}
 
 	f, err := formulaContext.formulaOf(main)
