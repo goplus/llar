@@ -16,7 +16,7 @@ func TestE2E(t *testing.T) {
 		return
 	}
 	for _, f := range mods {
-		fmt.Println(f.ID)
+		fmt.Println(f.ID, f.Proj.Deps)
 	}
 }
 

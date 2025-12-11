@@ -76,7 +76,7 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 		return compare(module.Version{p, v1}, module.Version{p, v2})
 	}
 
-	graph := mvs.NewGraph(cmp, mainDeps)
+	graph := mvs.NewGraph(cmp, []module.Version{main})
 
 	graph.Require(main, mainDeps)
 
@@ -121,7 +121,7 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 		f.markUse()
 		// fill the dep list
 		if mod == main {
-			f.Proj.Deps = buildList
+			f.Proj.Deps = buildList[1:]
 		} else {
 			f.Proj.Deps, _ = graph.RequiredBy(mod)
 		}
