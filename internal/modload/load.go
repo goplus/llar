@@ -38,17 +38,6 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 	formulaContext := newFormulaContext()
 	defer formulaContext.gc()
 
-	onLoad := func(mod module.Version) ([]module.Version, error) {
-		f, err := formulaContext.formulaOf(mod)
-		if err != nil {
-			return nil, err
-		}
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		defer cancel()
-
-		return resolveDeps(ctx, f)
-	}
-
 	if main.Version == "" {
 		cmp, err := formulaContext.comparatorOf(main.ID)
 		if err != nil {
@@ -60,7 +49,6 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 		}
 		main.Version = latest
 	}
-
 	f, err := formulaContext.formulaOf(main)
 	if err != nil {
 		return nil, err
@@ -72,26 +60,49 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 	if err != nil {
 		return nil, err
 	}
+	cmp := func(p, v1, v2 string) int {
+		// none is an internal version for MVS, which means the smallest
+		if v1 == "none" && v2 != "none" {
+			return -1
+		} else if v1 != "none" && v2 == "none" {
+			return +1
+		} else if v1 == "none" && v2 == "none" {
+			return 0
+		}
+		compare, err := formulaContext.comparatorOf(p)
+		if err != nil {
+			panic(err)
+		}
+		return compare(module.Version{p, v1}, module.Version{p, v2})
+	}
+
+	graph := mvs.NewGraph(cmp, mainDeps)
+
+	graph.Require(main, mainDeps)
+
+	onLoad := func(mod module.Version) ([]module.Version, error) {
+		f, err := formulaContext.formulaOf(mod)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+
+		deps, err := resolveDeps(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+
+		graph.Require(mod, deps)
+		return deps, nil
+	}
+
 	reqs := &mvsReqs{
 		roots: mainDeps,
 		isMain: func(v module.Version) bool {
 			return v.ID == main.ID && v.Version == main.Version
 		},
-		cmp: func(p, v1, v2 string) int {
-			// none is an internal version for MVS, which means the smallest
-			if v1 == "none" && v2 != "none" {
-				return -1
-			} else if v1 != "none" && v2 == "none" {
-				return +1
-			} else if v1 == "none" && v2 == "none" {
-				return 0
-			}
-			compare, err := formulaContext.comparatorOf(p)
-			if err != nil {
-				panic(err)
-			}
-			return compare(module.Version{p, v1}, module.Version{p, v2})
-		},
+		cmp:    cmp,
 		onLoad: onLoad,
 	}
 
@@ -108,6 +119,12 @@ func LoadPackages(ctx context.Context, main module.Version) ([]*Formula, error) 
 			return nil, err
 		}
 		f.markUse()
+		// fill the dep list
+		if mod == main {
+			f.Proj.Deps = buildList
+		} else {
+			f.Proj.Deps, _ = graph.RequiredBy(mod)
+		}
 		formulas = append(formulas, f)
 	}
 

@@ -20,14 +20,6 @@ type ModuleF struct {
 	modFromVer string
 }
 
-func (p *ModuleF) Matrix__0() {
-
-}
-
-func (p *ModuleF) Matrix__1() {
-
-}
-
 // Id sets the module ID that this formula serves.
 // modID should be in the form of "owner/repo".
 func (p *ModuleF) Id(modID string) {
