@@ -24,7 +24,8 @@ func latestVersion(modID string, comparator module.VersionComparator) (version s
 		return "", fmt.Errorf("failed to retrieve the latest version: no tags found")
 	}
 	slices.SortFunc(tags, func(a, b string) int {
-		return comparator(module.Version{modID, a}, module.Version{modID, b})
+		// we want the max heap
+		return -comparator(module.Version{modID, a}, module.Version{modID, b})
 	})
 
 	return tags[0], nil
