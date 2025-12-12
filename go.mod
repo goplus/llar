@@ -9,6 +9,7 @@ require (
 	github.com/goplus/mod v0.17.1
 	github.com/qiniu/x v1.15.1
 	golang.org/x/mod v0.25.0
+	golang.org/x/sys v0.30.0
 )
 
 require (

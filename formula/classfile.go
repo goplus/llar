@@ -1,6 +1,9 @@
 package formula
 
 import (
+	"sort"
+	"strings"
+
 	"github.com/goplus/llar/pkgs/mod/versions"
 	"github.com/qiniu/x/gsh"
 )
@@ -18,6 +21,143 @@ type ModuleF struct {
 
 	modID      string
 	modFromVer string
+	matrix     Matrix
+}
+
+type Matrix struct {
+	Require        map[string][]string
+	Options        map[string][]string
+	DefaultOptions map[string][]string
+}
+
+// String returns the string representation of a single matrix.
+// Keys are sorted alphabetically, values are joined with "-".
+// Require and options are joined with "|".
+func (m *Matrix) String() string {
+	// Helper function to build string for a map (single value per key)
+	buildPart := func(kvs map[string][]string) string {
+		if len(kvs) == 0 {
+			return ""
+		}
+
+		// Sort keys alphabetically
+		keys := make([]string, 0, len(kvs))
+		for k := range kvs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		// Build result by joining values with "-"
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			if len(kvs[k]) > 0 {
+				parts = append(parts, kvs[k][0])
+			}
+		}
+		return strings.Join(parts, "-")
+	}
+
+	requirePart := buildPart(m.Require)
+	optionsPart := buildPart(m.Options)
+
+	if requirePart == "" {
+		return optionsPart
+	}
+	if optionsPart == "" {
+		return requirePart
+	}
+	return requirePart + "|" + optionsPart
+}
+
+// Combinations returns all cartesian product combinations of the matrix.
+// Keys are sorted alphabetically, and combinations are built layer by layer.
+// Require fields are joined with "-", then combined with options using "|".
+func (m *Matrix) Combinations() []string {
+	// Helper function to compute cartesian product for a map
+	cartesian := func(kvs map[string][]string) []string {
+		if len(kvs) == 0 {
+			return nil
+		}
+
+		// Sort keys alphabetically
+		keys := make([]string, 0, len(kvs))
+		for k := range kvs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		// Start with first key's values
+		result := make([]string, len(kvs[keys[0]]))
+		copy(result, kvs[keys[0]])
+
+		// Combine with subsequent layers using "-"
+		for i := 1; i < len(keys); i++ {
+			values := kvs[keys[i]]
+			newResult := make([]string, 0, len(result)*len(values))
+			for _, prev := range result {
+				for _, v := range values {
+					newResult = append(newResult, prev+"-"+v)
+				}
+			}
+			result = newResult
+		}
+		return result
+	}
+
+	// Compute require combinations
+	requireCombos := cartesian(m.Require)
+
+	// Compute options combinations
+	optionsCombos := cartesian(m.Options)
+
+	// If no require, just return options
+	if len(requireCombos) == 0 {
+		return optionsCombos
+	}
+
+	// If no options, just return require
+	if len(optionsCombos) == 0 {
+		return requireCombos
+	}
+
+	// Combine require with options using "|"
+	result := make([]string, 0, len(requireCombos)*len(optionsCombos))
+	for _, req := range requireCombos {
+		for _, opt := range optionsCombos {
+			result = append(result, req+"|"+opt)
+		}
+	}
+
+	return result
+}
+
+// CombinationCount returns the total number of cartesian product combinations.
+func (m *Matrix) CombinationCount() int {
+	countPart := func(kvs map[string][]string) int {
+		if len(kvs) == 0 {
+			return 0
+		}
+		count := 1
+		for _, v := range kvs {
+			count *= len(v)
+		}
+		return count
+	}
+
+	requireCount := countPart(m.Require)
+	optionsCount := countPart(m.Options)
+
+	if requireCount == 0 {
+		return optionsCount
+	}
+	if optionsCount == 0 {
+		return requireCount
+	}
+	return requireCount * optionsCount
+}
+
+func (p *ModuleF) Matrix(m Matrix) {
+	p.matrix = m
 }
 
 // Id sets the module ID that this formula serves.
@@ -55,6 +195,7 @@ func (p *ModuleF) OnRequire(f func(proj *Project, deps *ModuleDeps)) {
 
 // BuildResult represents the result of building a project.
 type BuildResult struct {
+	OutputDir string
 }
 
 // OnBuild event is used to instruct the Formula to compile a project.
