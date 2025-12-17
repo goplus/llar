@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -49,36 +50,25 @@ func NewGitVCS(opts ...GitOption) VCS {
 	return g
 }
 
+func (g *gitVCS) ensureInit(ctx context.Context, dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+		return g.run(ctx, dir, "init")
+	}
+	return nil
+}
+
 func (g *gitVCS) Sync(ctx context.Context, remote, ref, dir string) error {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return g.clone(ctx, remote, ref, dir)
+	if err := g.ensureInit(ctx, dir); err != nil {
+		return err
 	}
-
-	if ref != "" {
-		if err := g.fetch(ctx, dir, ref); err != nil {
-			return err
-		}
-		return g.checkout(ctx, dir, "FETCH_HEAD")
+	if err := g.fetch(ctx, remote, dir, ref); err != nil {
+		return err
 	}
-	return nil
+	return g.checkout(ctx, dir, "FETCH_HEAD")
 }
 
-func (g *gitVCS) clone(ctx context.Context, remote, ref, dir string) error {
-	args := []string{"clone", "--depth", "1"}
-	if ref != "" {
-		args = append(args, "--branch", ref)
-	}
-	args = append(args, remote, dir)
-
-	if err := g.run(ctx, "", args...); err != nil {
-		os.RemoveAll(dir)
-		return fmt.Errorf("clone %s: %w", remote, err)
-	}
-	return nil
-}
-
-func (g *gitVCS) fetch(ctx context.Context, dir, ref string) error {
-	args := []string{"fetch", "--depth", "1", "origin", ref}
+func (g *gitVCS) fetch(ctx context.Context, remote, dir, ref string) error {
+	args := []string{"fetch", "--depth", "1", remote, ref}
 	if err := g.run(ctx, dir, args...); err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}

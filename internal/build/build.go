@@ -40,9 +40,7 @@ func (b *Builder) Init(ctx context.Context, vcs vcs.VCS, remoteFormulaRepo strin
 		return err
 	}
 	latest, err := vcs.Latest(ctx, remoteFormulaRepo)
-	if err != nil {
-		return err
-	}
+
 	lockFile := filepath.Join(formulaDir, ".lock")
 
 	unlock, err := lockedfile.MutexAt(lockFile).Lock()
@@ -84,6 +82,10 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 			return nil
 		}
 
+		if err := os.Chdir(f.Proj.Dir); err != nil {
+			return err
+		}
+
 		results := &formula.BuildResult{}
 
 		// Save environment before OnBuild and restore after
@@ -100,6 +102,7 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 			}
 		}
 
+		os.RemoveAll(buildDir)
 		// Move the result to build directory
 		if err := os.Rename(results.OutputDir, buildDir); err != nil {
 			return err
@@ -115,6 +118,7 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 		}
 
 		buildResults[f.Version] = results
+
 		return nil
 	}
 	// first is main

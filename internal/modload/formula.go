@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 
 	"github.com/goplus/ixgo"
@@ -149,9 +148,7 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 func (m *formulaContext) gc() {
 	for _, f := range m.formulas {
 		if !f.inUse() && f.Proj != nil {
-			tmpDir := reflect.ValueOf(f.Proj.DirFS).String()
-
-			os.RemoveAll(tmpDir)
+			os.RemoveAll(f.Proj.Dir)
 		}
 	}
 }

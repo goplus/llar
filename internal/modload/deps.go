@@ -23,10 +23,9 @@ func initProj(ctx context.Context, f *Formula) error {
 	if err != nil {
 		return err
 	}
-	os.RemoveAll(tmpDir)
-
 	f.Proj = &formula.Project{
-		DirFS: os.DirFS(tmpDir),
+		Dir:        tmpDir,
+		FormulaDir: f.Dir,
 	}
 	return f.Sync(ctx, tmpDir)
 }

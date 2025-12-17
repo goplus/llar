@@ -29,7 +29,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	builder := build.NewBuilder()
-	if err := builder.Init(ctx, vcs.NewGitVCS(), "https://github.com/aspect-build/llb-formulas"); err != nil {
+	if err := builder.Init(ctx, vcs.NewGitVCS(), "https://github.com/MeteorsLiu/llarmvp-formula"); err != nil {
 		return fmt.Errorf("failed to init builder: %w", err)
 	}
 
