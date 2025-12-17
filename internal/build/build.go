@@ -2,7 +2,6 @@ package build
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,14 +16,6 @@ import (
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
-
-const cacheFile = ".cache.json"
-
-// BuildCache contains metadata about a successful build.
-type BuildCache struct {
-	BuildResult formula.BuildResult `json:"build_result"`
-	BuildTime   time.Time           `json:"build_time"`
-}
 
 type Builder struct {
 	initOnce sync.Once
@@ -109,7 +100,7 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 		}
 
 		// Save build cache
-		cache := BuildCache{
+		cache := buildCache{
 			BuildResult: *results,
 			BuildTime:   time.Now(),
 		}
@@ -145,22 +136,3 @@ func lock(f *modload.Formula) (unlock func(), err error) {
 	return lockedfile.MutexAt(lockFile).Lock()
 }
 
-func loadBuildCache(path string) (*BuildCache, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var cache BuildCache
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return nil, err
-	}
-	return &cache, nil
-}
-
-func saveBuildCache(path string, cache *BuildCache) error {
-	data, err := json.MarshalIndent(cache, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
-}
