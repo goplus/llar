@@ -31,7 +31,7 @@ func TestBuildZlib(t *testing.T) {
 				"os":   []string{"linux"},
 				"arch": []string{"amd64"},
 			},
-		})
+		}, BuildOptions{})
 		if err != nil {
 			t.Fatal(err)
 			return
@@ -63,7 +63,7 @@ func TestBuildZlib(t *testing.T) {
 				"os":   []string{"linux"},
 				"arch": []string{"amd64"},
 			},
-		})
+		}, BuildOptions{})
 		if err != nil {
 			t.Fatal(err)
 			return

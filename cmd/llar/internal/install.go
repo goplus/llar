@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var installVerbose bool
+
 var installCmd = &cobra.Command{
 	Use:   "install [module@version]",
 	Short: "Install a module to FormulaDir",
@@ -20,6 +22,7 @@ var installCmd = &cobra.Command{
 }
 
 func init() {
+	installCmd.Flags().BoolVarP(&installVerbose, "verbose", "v", false, "Enable verbose build output")
 	rootCmd.AddCommand(installCmd)
 }
 
@@ -40,7 +43,10 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	if err := builder.Build(ctx, modID, version, matrix); err != nil {
+	opts := build.BuildOptions{
+		Verbose: installVerbose,
+	}
+	if err := builder.Build(ctx, modID, version, matrix, opts); err != nil {
 		return fmt.Errorf("failed to build %s@%s: %w", modID, version, err)
 	}
 

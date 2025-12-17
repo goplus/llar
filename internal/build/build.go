@@ -43,7 +43,14 @@ func (b *Builder) Init(ctx context.Context, vcs vcs.VCS, remoteFormulaRepo strin
 	return vcs.Sync(ctx, remoteFormulaRepo, latest, formulaDir)
 }
 
-func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix) error {
+// BuildOptions contains options for the Build method.
+type BuildOptions struct {
+	// Verbose enables verbose output during build.
+	// If false, build output is suppressed.
+	Verbose bool
+}
+
+func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix, opts BuildOptions) error {
 	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer}, modload.PackageOpts{})
 	if err != nil {
 		return err
@@ -81,6 +88,24 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 
 		// Save environment before OnBuild and restore after
 		savedEnv := os.Environ()
+
+		// Redirect stdout/stderr if not verbose
+		var savedStdout, savedStderr *os.File
+		if !opts.Verbose {
+			savedStdout = os.Stdout
+			savedStderr = os.Stderr
+			devNull, err := os.Open(os.DevNull)
+			if err != nil {
+				return err
+			}
+			os.Stdout = devNull
+			os.Stderr = devNull
+			defer func() {
+				devNull.Close()
+				os.Stdout = savedStdout
+				os.Stderr = savedStderr
+			}()
+		}
 
 		if err := f.OnBuild(f.Proj, results); err != nil {
 			return err

@@ -14,6 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var buildVerbose bool
+
 var buildCmd = &cobra.Command{
 	Use:   "build",
 	Short: "Build the current module",
@@ -22,6 +24,7 @@ var buildCmd = &cobra.Command{
 }
 
 func init() {
+	buildCmd.Flags().BoolVarP(&buildVerbose, "verbose", "v", false, "Enable verbose build output")
 	rootCmd.AddCommand(buildCmd)
 }
 
@@ -61,7 +64,10 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	if err := builder.Build(ctx, v.ModuleID, currentVersion, matrix); err != nil {
+	opts := build.BuildOptions{
+		Verbose: buildVerbose,
+	}
+	if err := builder.Build(ctx, v.ModuleID, currentVersion, matrix, opts); err != nil {
 		return fmt.Errorf("failed to build: %w", err)
 	}
 
