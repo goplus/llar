@@ -25,8 +25,7 @@ func initProj(ctx context.Context, f *Formula) error {
 		return err
 	}
 	f.Proj = &formula.Project{
-		BuildDir:   tmpDir,
-		FormulaDir: f.Dir,
+		BuildDir: tmpDir,
 	}
 	return f.Sync(ctx, tmpDir)
 }

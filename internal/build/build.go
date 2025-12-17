@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,19 +51,20 @@ type BuildOptions struct {
 	Verbose bool
 }
 
-func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix, opts BuildOptions) error {
+func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix, opts BuildOptions) ([]module.Version, error) {
 	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer}, modload.PackageOpts{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	buildResults := make(map[module.Version]*formula.BuildResult)
 
 	build := func(f *modload.Formula) error {
-		f.Proj.Matrix = matrx
-		f.Proj.BuildResults = buildResults
-
-		buildDir := filepath.Join(f.Dir, "build", f.Version.Version, f.Proj.Matrix.String())
+		buildDir := filepath.Join(f.Dir, "build", f.Version.Version, matrx.String())
 		cacheFilePath := filepath.Join(buildDir, cacheFile)
+
+		f.Proj.Matrix = matrx
+		f.Proj.FormulaDir = buildDir
+		f.Proj.BuildResults = buildResults
 
 		if f.OnBuild == nil {
 			panic(fmt.Sprintf("failed to build %s: no onBuild", f.ID))
@@ -89,9 +91,14 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 		// Save environment before OnBuild and restore after
 		savedEnv := os.Environ()
 
-		// Redirect stdout/stderr if not verbose
+		// Suppress output if not verbose
 		var savedStdout, savedStderr *os.File
 		if !opts.Verbose {
+			// Redirect gsh.App's fout/ferr
+			f.SetStdout(io.Discard)
+			f.SetStderr(io.Discard)
+
+			// Also redirect os.Stdout/os.Stderr for direct usage
 			savedStdout = os.Stdout
 			savedStderr = os.Stderr
 			devNull, err := os.Open(os.DevNull)
@@ -109,6 +116,12 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 
 		if err := f.OnBuild(f.Proj, results); err != nil {
 			return err
+		}
+
+		// Restore gsh.App's fout/ferr after build
+		if !opts.Verbose {
+			f.SetStdout(savedStdout)
+			f.SetStderr(savedStderr)
 		}
 
 		os.Clearenv()
@@ -140,15 +153,20 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 	// first is main
 	for _, f := range formulas[1:] {
 		if err := build(f); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// build main
 	if err := build(formulas[0]); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	// Return build list
+	buildList := make([]module.Version, len(formulas))
+	for i, f := range formulas {
+		buildList[i] = f.Version
+	}
+	return buildList, nil
 }
 
 func lock(f *modload.Formula) (unlock func(), err error) {

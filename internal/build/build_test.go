@@ -26,7 +26,7 @@ func init() {
 
 func TestBuildZlib(t *testing.T) {
 	t.Run("zlib", func(t *testing.T) {
-		err := NewBuilder().Build(context.TODO(), "madler/zlib", "1.2.11", formula.Matrix{
+		_, err := NewBuilder().Build(context.TODO(), "madler/zlib", "1.2.11", formula.Matrix{
 			Require: map[string][]string{
 				"os":   []string{"linux"},
 				"arch": []string{"amd64"},
@@ -58,7 +58,7 @@ func TestBuildZlib(t *testing.T) {
 		}
 	})
 	t.Run("libpng", func(t *testing.T) {
-		err := NewBuilder().Build(context.TODO(), "pnggroup/libpng", "v1.6.53", formula.Matrix{
+		_, err := NewBuilder().Build(context.TODO(), "pnggroup/libpng", "v1.6.53", formula.Matrix{
 			Require: map[string][]string{
 				"os":   []string{"linux"},
 				"arch": []string{"amd64"},

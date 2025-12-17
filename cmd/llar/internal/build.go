@@ -67,10 +67,16 @@ func runBuild(cmd *cobra.Command, args []string) error {
 	opts := build.BuildOptions{
 		Verbose: buildVerbose,
 	}
-	if err := builder.Build(ctx, v.ModuleID, currentVersion, matrix, opts); err != nil {
+	buildList, err := builder.Build(ctx, v.ModuleID, currentVersion, matrix, opts)
+	if err != nil {
 		return fmt.Errorf("failed to build: %w", err)
 	}
 
-	fmt.Printf("Successfully built %s@%s\n", v.ModuleID, currentVersion)
+	// Print pkgconfig info for main module (first in buildList)
+	if len(buildList) > 0 {
+		main := buildList[0]
+		printPkgConfigInfo(main.ID, main.Version, matrix)
+	}
+
 	return nil
 }

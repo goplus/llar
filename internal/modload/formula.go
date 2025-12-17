@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,11 +30,27 @@ type Formula struct {
 	vcs           vcs.VCS
 	refcnt        int
 	remoteRepoUrl string
+	structElem    *loader.StructElem
 
 	Dir       string
 	Proj      *formula.Project
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(proj *formula.Project, out *formula.BuildResult) error
+}
+
+// SetStdout sets the stdout writer for the formula's gsh.App.
+// This is used to control build output verbosity.
+func (f *Formula) SetStdout(w io.Writer) {
+	if f.structElem != nil {
+		f.structElem.SetValue("fout", w)
+	}
+}
+
+// SetStderr sets the stderr writer for the formula's gsh.App.
+func (f *Formula) SetStderr(w io.Writer) {
+	if f.structElem != nil {
+		f.structElem.SetValue("ferr", w)
+	}
 }
 
 // markUse increments the reference count to indicate the formula is in use.
@@ -134,6 +151,7 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	f = &Formula{
 		vcs:           vcs,
 		remoteRepoUrl: remoteRepoUrl,
+		structElem:    formulaStruct,
 		Version:       mod,
 		// TODO(MeteorsLiu): Localize path with filepath.Localize
 		Dir:       filepath.Join(formulaDir, mod.ID),
