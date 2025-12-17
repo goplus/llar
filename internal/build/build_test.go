@@ -80,13 +80,13 @@ func TestBuildZlib(t *testing.T) {
 			return
 		}
 
-		ret, err := exec.Command("nm", "-g", filepath.Join(outDir, "lib", "libz.a")).CombinedOutput()
+		ret, err := exec.Command("nm", "-g", filepath.Join(outDir, "lib", "libpng.a")).CombinedOutput()
 		if err != nil {
 			t.Fatal(string(ret))
 			return
 		}
-		if !strings.Contains(string(ret), "compress") {
-			t.Fatalf("unexpeceted: want symbol compress")
+		if !strings.Contains(string(ret), "png_free") {
+			t.Fatalf("unexpeceted: want symbol png_free")
 		}
 	})
 
