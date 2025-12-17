@@ -156,6 +156,10 @@ func (m *Matrix) CombinationCount() int {
 	return requireCount * optionsCount
 }
 
+func (p *ModuleF) app() *gsh.App {
+	return &p.App
+}
+
 func (p *ModuleF) Matrix(m Matrix) {
 	p.matrix = m
 }
@@ -206,6 +210,10 @@ func (p *ModuleF) OnBuild(f func(proj *Project, out *BuildResult)) {
 // -----------------------------------------------------------------------------
 
 // Gopt_App_Main is main entry of this classfile.
-func Gopt_ModuleF_Main(this interface{ MainEntry() }) {
+func Gopt_ModuleF_Main(this interface {
+	app() *gsh.App
+	MainEntry()
+}) {
 	this.MainEntry()
+	gsh.InitApp(this.app())
 }

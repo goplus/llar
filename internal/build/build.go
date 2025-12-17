@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/goplus/llar/formula"
@@ -44,7 +45,7 @@ func (b *Builder) Init(ctx context.Context, vcs vcs.VCS, remoteFormulaRepo strin
 }
 
 func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix) error {
-	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer})
+	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer}, modload.PackageOpts{})
 	if err != nil {
 		return err
 	}
@@ -64,7 +65,15 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 		}
 		defer unlock()
 
+		// Save environment before OnBuild and restore after
+		savedEnv := os.Environ()
 		f.OnBuild(f.Proj, results)
+		os.Clearenv()
+		for _, e := range savedEnv {
+			if k, v, ok := strings.Cut(e, "="); ok {
+				os.Setenv(k, v)
+			}
+		}
 
 		buildResults[f.Version] = results
 		return nil

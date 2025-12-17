@@ -1,15 +1,11 @@
 package internal
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 
-	"github.com/goplus/llar/internal/vcs"
-	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/versions"
 	"github.com/spf13/cobra"
 )
@@ -29,26 +25,6 @@ func init() {
 	rootCmd.AddCommand(getCmd)
 }
 
-// latestVersion returns the latest version of the module.
-func latestVersion(modID string) (string, error) {
-	vcsClient := vcs.NewGitVCS()
-	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", modID)
-
-	tags, err := vcsClient.Tags(context.TODO(), remoteRepoUrl)
-	if err != nil {
-		return "", err
-	}
-	if len(tags) == 0 {
-		return "", fmt.Errorf("no tags found")
-	}
-	slices.SortFunc(tags, func(a, b string) int {
-		// we want the max (descending order)
-		return -gnu.Compare(a, b)
-	})
-
-	return tags[0], nil
-}
-
 func runGet(cmd *cobra.Command, args []string) error {
 	depModID, depVersion := parseModuleArg(args[0])
 
@@ -60,16 +36,6 @@ func runGet(cmd *cobra.Command, args []string) error {
 	v, err := versions.Parse(versionsPath, nil)
 	if err != nil {
 		return fmt.Errorf("failed to parse versions.json: %w", err)
-	}
-
-	// If no dependency version specified, get the latest version
-	if depVersion == "" {
-		latest, err := latestVersion(depModID)
-		if err != nil {
-			return fmt.Errorf("failed to get latest version for %s: %w", depModID, err)
-		}
-		depVersion = latest
-		fmt.Printf("Resolved %s to latest version %s\n", depModID, depVersion)
 	}
 
 	// Initialize deps map if needed

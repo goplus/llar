@@ -10,7 +10,7 @@ import (
 )
 
 func TestE2E(t *testing.T) {
-	mods, err := LoadPackages(context.TODO(), module.Version{ID: "DaveGamble/cJSON", Version: "1.7.18"})
+	mods, err := LoadPackages(context.TODO(), module.Version{ID: "DaveGamble/cJSON", Version: "1.7.18"}, PackageOpts{})
 	if err != nil {
 		t.Error(err)
 		return
