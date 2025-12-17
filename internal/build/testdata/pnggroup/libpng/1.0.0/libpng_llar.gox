@@ -1,0 +1,39 @@
+import (
+	"bytes"
+	"path/filepath"
+)
+id "pnggroup/libpng"
+
+fromVer "1.0.0"
+
+onRequire (proj, dep) => {
+	// You should use zlib 1.0.4 or later to run this
+	dep.require "madler/zlib", "1.2.11"
+}
+
+onBuild (proj, out) => {
+	buildDir := filepath.join(proj.Dir, "build")
+	mkdir buildDir
+
+	for dep in proj.Deps {
+		proj.use dep
+		echo "use ${dep.ID} ${dep.Version}"
+	}
+
+	capout => {
+		exec "./configure", "--prefix", buildDir
+		exec "make"
+		exec "make", "install"
+	}
+	echo output
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	echo buildDir
+
+	out.OutputDir = buildDir
+
+	return nil
+}
