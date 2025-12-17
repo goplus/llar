@@ -8,4 +8,5 @@ onRequire (proj, deps) => {
 
 onBuild (proj, out) => {
     echo "hello"
+    return nil
 }

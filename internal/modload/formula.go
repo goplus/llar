@@ -34,7 +34,7 @@ type Formula struct {
 	Dir       string
 	Proj      *formula.Project
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
-	OnBuild   func(proj *formula.Project, out *formula.BuildResult)
+	OnBuild   func(proj *formula.Project, out *formula.BuildResult) error
 }
 
 // markUse increments the reference count to indicate the formula is in use.
@@ -137,7 +137,7 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 		remoteRepoUrl: remoteRepoUrl,
 		Version:       mod,
 		Dir:           filepath.Join(formulaDir, mod.ID),
-		OnBuild:       formulaStruct.Value("fOnBuild").(func(*formula.Project, *formula.BuildResult)),
+		OnBuild:       formulaStruct.Value("fOnBuild").(func(*formula.Project, *formula.BuildResult) error),
 		OnRequire:     formulaStruct.Value("fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}
 	m.formulas[cacheKey] = f
