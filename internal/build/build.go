@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -88,9 +87,11 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 		results := &formula.BuildResult{}
 
 		// Save environment before OnBuild and restore after
-		savedEnv := slices.Clone(os.Environ())
+		savedEnv := os.Environ()
 
-		f.OnBuild(f.Proj, results)
+		if err := f.OnBuild(f.Proj, results); err != nil {
+			return err
+		}
 
 		os.Clearenv()
 		for _, e := range savedEnv {
