@@ -1,0 +1,44 @@
+import (
+	"bytes"
+	"regexp"
+	"path/filepath"
+)
+
+id "madler/zlib"
+
+fromVer "1.0.0"
+
+onBuild (proj, out) => {
+	buildDir := filepath.join(proj.Dir, "build")
+	mkdir buildDir
+
+	capout => {
+		exec "./configure", "--prefix", buildDir
+		exec "make"
+		exec "make", "install"
+	}
+	echo output
+
+	if lastErr != nil {
+		return lastErr
+	}
+
+	pcFiles, _ := filepath.glob(filepath.join(buildDir, "lib", "pkgconfig", "*.pc"))
+
+	re := regexp.mustCompile("^prefix=(.*)")
+
+	for pcFile in pcFiles {
+		pcContent, err := os.readFile(pcFile)
+		if err == nil {
+			newContent := re.replaceAll(pcContent, []byte("prefix={{.FormulaBuildDir}}"))
+
+			if !bytes.equal(newContent, pcContent) {
+				os.writeFile("${pcFile}.tmpl", pcContent, 0755)
+			}
+		}
+	}
+
+	out.OutputDir = buildDir
+
+	return nil
+}
