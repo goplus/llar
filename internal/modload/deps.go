@@ -19,6 +19,7 @@ func initProj(ctx context.Context, f *Formula) error {
 	if f.Proj != nil {
 		return nil
 	}
+	// TODO(MeteorsLiu): Localize path with filepath.Localize
 	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("llar-build-%s-%s-*", strings.ReplaceAll(f.Version.ID, "/", "-"), f.Version.Version))
 	if err != nil {
 		return err

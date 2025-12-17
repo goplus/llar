@@ -161,18 +161,12 @@ func (m *Matrix) CombinationCount() int {
 	return requireCount * optionsCount
 }
 
-// pathSeparator returns the path list separator for the current OS.
-// Windows uses ";", Unix-like systems use ":".
-func pathSeparator() string {
-	if runtime.GOOS == "windows" {
-		return ";"
-	}
-	return ":"
-}
-
 // prependEnv prepends a value to an environment variable using the appropriate separator.
 func prependEnv(key, value string) {
-	sep := pathSeparator()
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
 	current := os.Getenv(key)
 	if current == "" {
 		os.Setenv(key, value)
@@ -217,6 +211,7 @@ func (p *ModuleF) Use(mod module.Version, matrix Matrix) {
 	if err != nil {
 		return
 	}
+	// TODO(MeteorsLiu): Localize path with filepath.Localize
 	buildDir := filepath.Join(formulaDir, mod.ID, "build", mod.Version, matrix.String())
 
 	includeDir := filepath.Join(buildDir, "include")

@@ -135,9 +135,10 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 		vcs:           vcs,
 		remoteRepoUrl: remoteRepoUrl,
 		Version:       mod,
-		Dir:           filepath.Join(formulaDir, mod.ID),
-		OnBuild:       formulaStruct.Value("fOnBuild").(func(*formula.Project, *formula.BuildResult) error),
-		OnRequire:     formulaStruct.Value("fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
+		// TODO(MeteorsLiu): Localize path with filepath.Localize
+		Dir:       filepath.Join(formulaDir, mod.ID),
+		OnBuild:   formulaStruct.Value("fOnBuild").(func(*formula.Project, *formula.BuildResult) error),
+		OnRequire: formulaStruct.Value("fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}
 	m.formulas[cacheKey] = f
 	return f, nil
@@ -198,6 +199,8 @@ func findMaxFromVer(mod module.Version, compare module.VersionComparator) (maxFr
 	if err != nil {
 		return "", "", err
 	}
+	// TODO(MeteorsLiu): Localize path with filepath.Localize
+
 	moduleDir := filepath.Join(formulaDir, mod.ID)
 
 	ctx := ixgo.NewContext(0)
