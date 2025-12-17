@@ -149,7 +149,7 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 func (m *formulaContext) gc() {
 	for _, f := range m.formulas {
 		if !f.inUse() && f.Proj != nil {
-			os.RemoveAll(f.Proj.Dir)
+			os.RemoveAll(f.Proj.BuildDir)
 		}
 	}
 }

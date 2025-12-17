@@ -11,7 +11,7 @@ import (
 
 // Project represents a project (module) being built.
 type Project struct {
-	Dir          string
+	BuildDir     string
 	FormulaDir   string
 	Deps         []module.Version
 	BuildResults map[module.Version]*BuildResult
@@ -20,7 +20,7 @@ type Project struct {
 
 // ReadFile reads the content of a file in the project.
 func (p *Project) ReadFile(path string) ([]byte, error) {
-	fs := os.DirFS(p.Dir).(fs.ReadFileFS)
+	fs := os.DirFS(p.BuildDir).(fs.ReadFileFS)
 	return fs.ReadFile(path)
 }
 

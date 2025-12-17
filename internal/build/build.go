@@ -73,7 +73,7 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 			return nil
 		}
 
-		if err := os.Chdir(f.Proj.Dir); err != nil {
+		if err := os.Chdir(f.Proj.BuildDir); err != nil {
 			return err
 		}
 
@@ -135,4 +135,3 @@ func lock(f *modload.Formula) (unlock func(), err error) {
 
 	return lockedfile.MutexAt(lockFile).Lock()
 }
-
