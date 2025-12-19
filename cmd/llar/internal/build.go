@@ -22,7 +22,7 @@ var buildVerbose bool
 var buildCmd = &cobra.Command{
 	Use:   "build [directory]",
 	Short: "Build the current module",
-	Long:  `Build compiles the current module and its dependencies.
+	Long: `Build compiles the current module and its dependencies.
 If directory is specified, looks for versions.json and formula in that directory.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runBuild,
@@ -62,7 +62,7 @@ func runBuild(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	builder := build.NewBuilder()
-	if err := builder.Init(ctx, vcs.NewGitVCS(), "https://github.com/aspect-build/llb-formulas"); err != nil {
+	if err := builder.Init(ctx, vcs.NewGitVCS(), "https://github.com/MeteorsLiu/llarmvp-formula"); err != nil {
 		return fmt.Errorf("failed to init builder: %w", err)
 	}
 
