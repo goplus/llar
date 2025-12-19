@@ -10,6 +10,8 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/env"
+	"github.com/goplus/llar/internal/modload"
+	"github.com/goplus/llar/pkgs/mod/module"
 )
 
 func init() {
@@ -26,12 +28,35 @@ func init() {
 
 func TestBuildZlib(t *testing.T) {
 	t.Run("zlib", func(t *testing.T) {
-		_, err := NewBuilder().Build(context.TODO(), "madler/zlib", "1.2.11", formula.Matrix{
+		ctx := context.TODO()
+		mainModule := module.Version{ID: "madler/zlib", Version: "1.2.11"}
+
+		// Load packages using modload
+		formulas, err := modload.LoadPackages(ctx, mainModule, modload.PackageOpts{})
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+
+		// Convert formulas to build targets
+		targets := make([]BuildTarget, len(formulas))
+		for i, f := range formulas {
+			targets[i] = BuildTarget{
+				Version: f.Version,
+				Dir:     f.Dir,
+				Project: f.Proj,
+				OnBuild: f.OnBuild,
+			}
+		}
+
+		matrix := formula.Matrix{
 			Require: map[string][]string{
 				"os":   []string{"linux"},
 				"arch": []string{"amd64"},
 			},
-		}, BuildOptions{})
+		}
+
+		err = NewBuilder().Build(ctx, mainModule, targets, matrix)
 		if err != nil {
 			t.Fatal(err)
 			return
@@ -58,12 +83,35 @@ func TestBuildZlib(t *testing.T) {
 		}
 	})
 	t.Run("libpng", func(t *testing.T) {
-		_, err := NewBuilder().Build(context.TODO(), "pnggroup/libpng", "v1.6.53", formula.Matrix{
+		ctx := context.TODO()
+		mainModule := module.Version{ID: "pnggroup/libpng", Version: "v1.6.53"}
+
+		// Load packages using modload
+		formulas, err := modload.LoadPackages(ctx, mainModule, modload.PackageOpts{})
+		if err != nil {
+			t.Fatal(err)
+			return
+		}
+
+		// Convert formulas to build targets
+		targets := make([]BuildTarget, len(formulas))
+		for i, f := range formulas {
+			targets[i] = BuildTarget{
+				Version: f.Version,
+				Dir:     f.Dir,
+				Project: f.Proj,
+				OnBuild: f.OnBuild,
+			}
+		}
+
+		matrix := formula.Matrix{
 			Require: map[string][]string{
 				"os":   []string{"linux"},
 				"arch": []string{"amd64"},
 			},
-		}, BuildOptions{})
+		}
+
+		err = NewBuilder().Build(ctx, mainModule, targets, matrix)
 		if err != nil {
 			t.Fatal(err)
 			return

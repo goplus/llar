@@ -3,7 +3,6 @@ package build
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +12,20 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build/lockedfile"
 	"github.com/goplus/llar/internal/env"
-	"github.com/goplus/llar/internal/modload"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
 type Builder struct {
 	initOnce sync.Once
+}
+
+// BuildTarget represents a single target to build.
+type BuildTarget struct {
+	Version module.Version
+	Dir     string // formula directory
+	Project *formula.Project
+	OnBuild func(*formula.Project, *formula.BuildResult) error
 }
 
 func NewBuilder() *Builder {
@@ -44,38 +50,22 @@ func (b *Builder) Init(ctx context.Context, vcs vcs.VCS, remoteFormulaRepo strin
 	return vcs.Sync(ctx, remoteFormulaRepo, latest, formulaDir)
 }
 
-// BuildOptions contains options for the Build method.
-type BuildOptions struct {
-	// Verbose enables verbose output during build.
-	// If false, build output is suppressed.
-	Verbose bool
-	// LocalDir specifies the local directory to fallback when formula
-	// is not found in FormulaDir. If empty, defaults to current directory.
-	LocalDir string
-}
-
-func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix, opts BuildOptions) ([]module.Version, error) {
-	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer}, modload.PackageOpts{
-		LocalDir: opts.LocalDir,
-	})
-	if err != nil {
-		return nil, err
-	}
+func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets []BuildTarget, matrx formula.Matrix) error {
 	buildResults := make(map[module.Version]*formula.BuildResult)
 
-	build := func(f *modload.Formula) error {
-		buildDir := filepath.Join(f.Dir, "build", f.Version.Version, matrx.String())
+	build := func(target BuildTarget) error {
+		buildDir := filepath.Join(target.Dir, "build", target.Version.Version, matrx.String())
 		cacheFilePath := filepath.Join(buildDir, cacheFile)
 
-		f.Proj.Matrix = matrx
-		f.Proj.FormulaDir = buildDir
-		f.Proj.BuildResults = buildResults
+		target.Project.Matrix = matrx
+		target.Project.FormulaDir = buildDir
+		target.Project.BuildResults = buildResults
 
-		if f.OnBuild == nil {
-			panic(fmt.Sprintf("failed to build %s: no onBuild", f.ID))
+		if target.OnBuild == nil {
+			panic(fmt.Sprintf("failed to build %s: no onBuild", target.Version.ID))
 		}
 
-		unlock, err := lock(f)
+		unlock, err := lockTarget(&target, matrx)
 		if err != nil {
 			return err
 		}
@@ -83,57 +73,18 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 
 		// Double-check cache after acquiring lock (another process may have built it)
 		if cache, err := loadBuildCache(cacheFilePath); err == nil {
-			buildResults[f.Version] = &cache.BuildResult
+			buildResults[target.Version] = &cache.BuildResult
 			return nil
 		}
 
-		if err := os.Chdir(f.Proj.BuildDir); err != nil {
+		if err := os.Chdir(target.Project.BuildDir); err != nil {
 			return err
 		}
 
 		results := &formula.BuildResult{}
 
-		// Save environment before OnBuild and restore after
-		savedEnv := os.Environ()
-
-		// Suppress output if not verbose
-		var savedStdout, savedStderr *os.File
-		if !opts.Verbose {
-			// Redirect gsh.App's fout/ferr
-			f.SetStdout(io.Discard)
-			f.SetStderr(io.Discard)
-
-			// Also redirect os.Stdout/os.Stderr for direct usage
-			savedStdout = os.Stdout
-			savedStderr = os.Stderr
-			devNull, err := os.Open(os.DevNull)
-			if err != nil {
-				return err
-			}
-			os.Stdout = devNull
-			os.Stderr = devNull
-			defer func() {
-				devNull.Close()
-				os.Stdout = savedStdout
-				os.Stderr = savedStderr
-			}()
-		}
-
-		if err := f.OnBuild(f.Proj, results); err != nil {
+		if err := target.OnBuild(target.Project, results); err != nil {
 			return err
-		}
-
-		// Restore gsh.App's fout/ferr after build
-		if !opts.Verbose {
-			f.SetStdout(savedStdout)
-			f.SetStderr(savedStderr)
-		}
-
-		os.Clearenv()
-		for _, e := range savedEnv {
-			if k, v, ok := strings.Cut(e, "="); ok {
-				os.Setenv(k, v)
-			}
 		}
 
 		os.RemoveAll(buildDir)
@@ -151,31 +102,44 @@ func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx
 			return err
 		}
 
-		buildResults[f.Version] = results
+		buildResults[target.Version] = results
 
 		return nil
 	}
-	// first is main
-	for _, f := range formulas[1:] {
-		if err := build(f); err != nil {
-			return nil, err
+
+	// Save environment before Build and restore after
+	savedEnv := os.Environ()
+
+	defer func() {
+		os.Clearenv()
+		for _, e := range savedEnv {
+			if k, v, ok := strings.Cut(e, "="); ok {
+				os.Setenv(k, v)
+			}
+		}
+	}()
+
+	// Build dependencies first, then main
+	var mainTarget BuildTarget
+	for _, target := range targets {
+		if target.Version.ID == mainModule.ID && target.Version.Version == mainModule.Version {
+			mainTarget = target
+			continue // skip main for now
+		}
+		if err := build(target); err != nil {
+			return err
 		}
 	}
 	// build main
-	if err := build(formulas[0]); err != nil {
-		return nil, err
+	if err := build(mainTarget); err != nil {
+		return err
 	}
 
-	// Return build list
-	buildList := make([]module.Version, len(formulas))
-	for i, f := range formulas {
-		buildList[i] = f.Version
-	}
-	return buildList, nil
+	return nil
 }
 
-func lock(f *modload.Formula) (unlock func(), err error) {
-	buildDir := filepath.Join(f.Dir, "build", f.Version.Version, f.Proj.Matrix.String())
+func lockTarget(target *BuildTarget, matrx formula.Matrix) (unlock func(), err error) {
+	buildDir := filepath.Join(target.Dir, "build", target.Version.Version, matrx.String())
 	if err = os.MkdirAll(buildDir, 0700); err != nil {
 		return nil, err
 	}

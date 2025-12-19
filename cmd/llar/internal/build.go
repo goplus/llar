@@ -3,13 +3,16 @@ package internal
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
+	"github.com/goplus/llar/internal/modload"
 	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/goplus/llar/pkgs/mod/versions"
 	"github.com/spf13/cobra"
 )
@@ -63,6 +66,25 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to init builder: %w", err)
 	}
 
+	// Load packages using modload
+	formulas, err := modload.LoadPackages(ctx, module.Version{ID: v.ModuleID, Version: currentVersion}, modload.PackageOpts{
+		LocalDir: dir,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to load packages: %w", err)
+	}
+
+	// Convert formulas to build targets
+	targets := make([]build.BuildTarget, len(formulas))
+	for i, f := range formulas {
+		targets[i] = build.BuildTarget{
+			Version: f.Version,
+			Dir:     f.Dir,
+			Project: f.Proj,
+			OnBuild: f.OnBuild,
+		}
+	}
+
 	matrix := formula.Matrix{
 		Require: map[string][]string{
 			"os":   {runtime.GOOS},
@@ -70,19 +92,46 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	opts := build.BuildOptions{
-		Verbose:  buildVerbose,
-		LocalDir: dir,
+	// Handle verbose output
+	var savedStdout, savedStderr *os.File
+	if !buildVerbose {
+		// Redirect stdout/stderr for formulas
+		for i := range formulas {
+			formulas[i].SetStdout(io.Discard)
+			formulas[i].SetStderr(io.Discard)
+		}
+
+		// Also redirect os.Stdout/os.Stderr
+		savedStdout = os.Stdout
+		savedStderr = os.Stderr
+		devNull, err := os.Open(os.DevNull)
+		if err != nil {
+			return fmt.Errorf("failed to open devnull: %w", err)
+		}
+		os.Stdout = devNull
+		os.Stderr = devNull
+		defer func() {
+			devNull.Close()
+			os.Stdout = savedStdout
+			os.Stderr = savedStderr
+		}()
 	}
-	buildList, err := builder.Build(ctx, v.ModuleID, currentVersion, matrix, opts)
-	if err != nil {
+
+	mainModule := module.Version{ID: v.ModuleID, Version: currentVersion}
+	if err := builder.Build(ctx, mainModule, targets, matrix); err != nil {
 		return fmt.Errorf("failed to build: %w", err)
 	}
 
-	// Print pkgconfig info for main module (first in buildList)
-	if len(buildList) > 0 {
-		main := buildList[0]
-		printPkgConfigInfo(main.ID, main.Version, matrix)
+	// Restore stdout/stderr before printing pkgconfig info
+	if !buildVerbose {
+		os.Stdout = savedStdout
+		os.Stderr = savedStderr
+	}
+
+	// Print pkgconfig info for main module (first in formulas)
+	if len(formulas) > 0 {
+		main := formulas[0]
+		printPkgConfigInfo(main.ID, main.Version.Version, matrix)
 	}
 
 	return nil
