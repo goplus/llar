@@ -112,7 +112,7 @@ func newFormulaContext(localDir string) *formulaContext {
 		loader:      loader.NewFormulaLoader(ctx),
 		formulas:    make(map[module.Version]*Formula),
 		comparators: make(map[string]module.VersionComparator),
-		searchPaths: []string{formulaDir, localDir},
+		searchPaths: []string{localDir, formulaDir},
 	}
 }
 
