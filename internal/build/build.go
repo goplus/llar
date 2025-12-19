@@ -62,10 +62,10 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 		target.Project.BuildResults = buildResults
 
 		if target.OnBuild == nil {
-			panic(fmt.Sprintf("failed to build %s: no onBuild", target.Version.ID))
+			return fmt.Errorf("failed to build %s: no onBuild", target.Version.ID)
 		}
 
-		unlock, err := lockTarget(&target, matrx)
+		unlock, err := lockTarget(target, matrx)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 	return nil
 }
 
-func lockTarget(target *BuildTarget, matrx formula.Matrix) (unlock func(), err error) {
+func lockTarget(target BuildTarget, matrx formula.Matrix) (unlock func(), err error) {
 	buildDir := filepath.Join(target.Dir, "build", target.Version.Version, matrx.String())
 	if err = os.MkdirAll(buildDir, 0700); err != nil {
 		return nil, err
