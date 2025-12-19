@@ -20,6 +20,9 @@ type PackageOpts struct {
 	// Tidy, if true, computes minimal dependencies using mvs.Req
 	// and updates the versions.json file.
 	Tidy bool
+	// LocalDir specifies the local directory to fallback when formula
+	// is not found in FormulaDir. If empty, defaults to current directory.
+	LocalDir string
 }
 
 func latestVersion(modID string, comparator module.VersionComparator) (version string, err error) {
@@ -46,7 +49,7 @@ func latestVersion(modID string, comparator module.VersionComparator) (version s
 // their dependencies using the MVS algorithm. It returns formulas for all
 // modules in the computed build list.
 func LoadPackages(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formula, error) {
-	formulaContext := newFormulaContext()
+	formulaContext := newFormulaContext(opts.LocalDir)
 	defer formulaContext.gc()
 
 	if main.Version == "" {

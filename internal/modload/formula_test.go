@@ -103,10 +103,13 @@ func TestFindMaxFromVer(t *testing.T) {
 		{"version 1.0.0 gets fromVer 1.0.0", "1.0.0", "1.0.0"},
 	}
 
+	ctx := newFormulaContext("testdata")
+	defer ctx.gc()
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mod := module.Version{ID: "DaveGamble/cJSON", Version: tt.modVersion}
-			maxFromVer, formulaPath, err := findMaxFromVer(mod, cmp)
+			maxFromVer, formulaPath, err := ctx.findMaxFromVer(mod, cmp)
 			if err != nil {
 				t.Fatalf("findMaxFromVer() error = %v", err)
 			}
@@ -131,8 +134,11 @@ func TestFindMaxFromVer_NoMatch(t *testing.T) {
 		return 0
 	}
 
+	ctx := newFormulaContext("testdata")
+	defer ctx.gc()
+
 	mod := module.Version{ID: "DaveGamble/cJSON", Version: "0.5.0"}
-	_, _, err := findMaxFromVer(mod, cmp)
+	_, _, err := ctx.findMaxFromVer(mod, cmp)
 	if err == nil {
 		t.Error("findMaxFromVer() expected error for version with no matching fromVer")
 	}
@@ -247,7 +253,7 @@ func TestParseCallArg_EmptyString(t *testing.T) {
 }
 
 func TestFormulaContext_comparatorOf(t *testing.T) {
-	ctx := newFormulaContext()
+	ctx := newFormulaContext("testdata")
 	defer ctx.gc()
 
 	// Test loading default comparator (gnu.Compare) for madler/zlib
@@ -282,7 +288,7 @@ func TestFormulaContext_comparatorOf(t *testing.T) {
 }
 
 func TestFormulaContext_formulaOf(t *testing.T) {
-	ctx := newFormulaContext()
+	ctx := newFormulaContext("testdata")
 	defer ctx.gc()
 
 	// Use madler/zlib which has no custom comparator
@@ -315,7 +321,7 @@ func TestFormulaContext_formulaOf(t *testing.T) {
 }
 
 func TestFormulaContext_gc(t *testing.T) {
-	ctx := newFormulaContext()
+	ctx := newFormulaContext("testdata")
 
 	mod := module.Version{ID: "madler/zlib", Version: "1.5.0"}
 

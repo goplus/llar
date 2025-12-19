@@ -17,10 +17,12 @@ import (
 var buildVerbose bool
 
 var buildCmd = &cobra.Command{
-	Use:   "build",
+	Use:   "build [directory]",
 	Short: "Build the current module",
-	Long:  `Build compiles the current module and its dependencies.`,
-	RunE:  runBuild,
+	Long:  `Build compiles the current module and its dependencies.
+If directory is specified, looks for versions.json and formula in that directory.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runBuild,
 }
 
 func init() {
@@ -29,10 +31,14 @@ func init() {
 }
 
 func runBuild(cmd *cobra.Command, args []string) error {
-	// Find versions.json in current directory
-	versionsPath := filepath.Join(".", "versions.json")
+	dir := "."
+	if len(args) > 0 {
+		dir = args[0]
+	}
+
+	versionsPath := filepath.Join(dir, "versions.json")
 	if _, err := os.Stat(versionsPath); os.IsNotExist(err) {
-		return fmt.Errorf("versions.json not found in current directory, run 'llar init' first")
+		return fmt.Errorf("versions.json not found in %s", dir)
 	}
 
 	v, err := versions.Parse(versionsPath, nil)
@@ -65,7 +71,8 @@ func runBuild(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := build.BuildOptions{
-		Verbose: buildVerbose,
+		Verbose:  buildVerbose,
+		LocalDir: dir,
 	}
 	buildList, err := builder.Build(ctx, v.ModuleID, currentVersion, matrix, opts)
 	if err != nil {

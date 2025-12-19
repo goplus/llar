@@ -2,12 +2,26 @@ package modload
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/env"
 	repo "github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
+
+func init() {
+	formulaDir, err := env.FormulaDir()
+	if err != nil {
+		panic(err)
+	}
+	os.RemoveAll(formulaDir)
+
+	if err = os.CopyFS(formulaDir, os.DirFS("testdata")); err != nil {
+		panic(err)
+	}
+}
 
 func TestInitProj(t *testing.T) {
 	f := &Formula{

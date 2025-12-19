@@ -186,23 +186,6 @@ func appendFlag(key, flag string) {
 }
 
 // Use configures the build environment to use the specified module.
-// Following Conan's approach, it sets up environment variables for different build systems:
-//
-// For Autotools/GCC (Unix):
-//   - CPPFLAGS: -I flags for include paths
-//   - LDFLAGS: -L flags for library paths
-//
-// For CMake (all platforms):
-//   - CMAKE_PREFIX_PATH: CMake package search path
-//   - CMAKE_INCLUDE_PATH: CMake include search path
-//   - CMAKE_LIBRARY_PATH: CMake library search path
-//
-// For pkg-config (all platforms):
-//   - PKG_CONFIG_PATH: pkg-config .pc file search path
-//
-// For Windows MSVC:
-//   - INCLUDE: MSVC include search path
-//   - LIB: MSVC library search path
 func (p *ModuleF) Use(mod module.Version, matrix Matrix) {
 	if len(matrix.Require) == 0 {
 		return

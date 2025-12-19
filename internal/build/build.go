@@ -49,10 +49,15 @@ type BuildOptions struct {
 	// Verbose enables verbose output during build.
 	// If false, build output is suppressed.
 	Verbose bool
+	// LocalDir specifies the local directory to fallback when formula
+	// is not found in FormulaDir. If empty, defaults to current directory.
+	LocalDir string
 }
 
 func (b *Builder) Build(ctx context.Context, mainModId, mainModVer string, matrx formula.Matrix, opts BuildOptions) ([]module.Version, error) {
-	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer}, modload.PackageOpts{})
+	formulas, err := modload.LoadPackages(ctx, module.Version{mainModId, mainModVer}, modload.PackageOpts{
+		LocalDir: opts.LocalDir,
+	})
 	if err != nil {
 		return nil, err
 	}

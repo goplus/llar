@@ -92,16 +92,27 @@ type formulaContext struct {
 	loader      loader.Loader
 	formulas    map[module.Version]*Formula
 	comparators map[string]module.VersionComparator
+	searchPaths []string // formula search paths (first match wins)
 }
 
 // newFormulaContext creates a new formula context with initialized caches.
-func newFormulaContext() *formulaContext {
+// localDir is the fallback directory when formula is not found in FormulaDir.
+// If localDir is empty, defaults to current working directory.
+func newFormulaContext(localDir string) *formulaContext {
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
+
+	formulaDir, _ := env.FormulaDir()
+
+	if localDir == "" {
+		localDir = "."
+	}
+
 	return &formulaContext{
 		ctx:         ctx,
 		loader:      loader.NewFormulaLoader(ctx),
 		formulas:    make(map[module.Version]*Formula),
 		comparators: make(map[string]module.VersionComparator),
+		searchPaths: []string{formulaDir, localDir},
 	}
 }
 
@@ -126,7 +137,7 @@ func (m *formulaContext) formulaOf(mod module.Version) (*Formula, error) {
 	if err != nil {
 		return nil, err
 	}
-	maxFromVer, formulaPath, err := findMaxFromVer(mod, comparator)
+	maxFromVer, formulaPath, err := m.findMaxFromVer(mod, comparator)
 	if err != nil {
 		return nil, err
 	}
@@ -211,59 +222,57 @@ func loadComparator(loader loader.Loader, modID string) (comparator module.Versi
 }
 
 // findMaxFromVer finds the formula file with the highest FromVer that is <= the target version.
-// This allows a single formula to handle multiple versions of a module.
-func findMaxFromVer(mod module.Version, compare module.VersionComparator) (maxFromVer, formulaPath string, err error) {
-	formulaDir, err := env.FormulaDir()
-	if err != nil {
-		return "", "", err
-	}
-	// TODO(MeteorsLiu): Localize path with filepath.Localize
-
-	moduleDir := filepath.Join(formulaDir, mod.ID)
-
+// It searches through all searchPaths in order, returning the first match.
+func (m *formulaContext) findMaxFromVer(mod module.Version, compare module.VersionComparator) (maxFromVer, formulaPath string, err error) {
 	ctx := ixgo.NewContext(0)
+	p := parser.NewParser(ctx)
 
-	parser := parser.NewParser(ctx)
+	for _, searchPath := range m.searchPaths {
+		moduleDir := filepath.Join(searchPath, mod.ID)
 
-	err = filepath.WalkDir(moduleDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+		// Skip if directory doesn't exist
+		if _, statErr := os.Stat(moduleDir); os.IsNotExist(statErr) {
+			continue
 		}
-		if !strings.HasSuffix(path, _defaultFormulaSuffix) {
-			// skip non-suffix
+
+		err = filepath.WalkDir(moduleDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !strings.HasSuffix(path, _defaultFormulaSuffix) {
+				return nil
+			}
+			formulaAST, err := p.ParseAST(path)
+			if err != nil {
+				return err
+			}
+			fromVer, err := fromVerFrom(formulaAST)
+			if err != nil {
+				return err
+			}
+			fromVerMod := module.Version{mod.ID, fromVer}
+
+			if compare(fromVerMod, mod) > 0 {
+				return nil
+			}
+			if maxFromVer == "" || compare(fromVerMod, module.Version{mod.ID, maxFromVer}) > 0 {
+				maxFromVer = fromVer
+				formulaPath = path
+			}
 			return nil
-		}
-		formulaAST, err := parser.ParseAST(path)
-		if err != nil {
-			return err
-		}
-		fromVer, err := fromVerFrom(formulaAST)
-		if err != nil {
-			return err
-		}
-		fromVerMod := module.Version{mod.ID, fromVer}
+		})
 
-		// skip if not fromVer <= mod.
-		if compare(fromVerMod, mod) > 0 {
-			return nil
+		if err != nil {
+			return "", "", err
 		}
-		// fromVer > maxFromVer
-		if maxFromVer == "" || compare(fromVerMod, module.Version{mod.ID, maxFromVer}) > 0 {
-			maxFromVer = fromVer
-			formulaPath = path
-		}
-		return nil
-	})
 
-	if err != nil {
-		return "", "", err
+		// Found in this search path, return immediately
+		if formulaPath != "" {
+			return maxFromVer, formulaPath, nil
+		}
 	}
 
-	if formulaPath == "" {
-		return "", "", fmt.Errorf("failed to load formula: no formula found")
-	}
-
-	return maxFromVer, formulaPath, nil
+	return "", "", fmt.Errorf("failed to load formula: no formula found for %s", mod.ID)
 }
 
 // fromVerFrom extracts the FromVer value from a formula AST by finding the FromVer() call.
