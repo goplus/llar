@@ -1,4 +1,4 @@
-package modload
+package modules
 
 import (
 	"github.com/goplus/llar/internal/mvs"

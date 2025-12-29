@@ -17,7 +17,7 @@ onRequire (proj, deps) => {  # extract deps from this project
         if m.Version == "" {
             ...
         }
-        deps.require(pkgID(m.Name), m.Version)
+        deps.require(modID(m.Name), m.Version)
     }
 }
 

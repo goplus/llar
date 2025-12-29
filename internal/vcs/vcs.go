@@ -52,6 +52,9 @@ func NewGitVCS(opts ...GitOption) VCS {
 
 func (g *gitVCS) ensureInit(ctx context.Context, dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
 		return g.run(ctx, dir, "init")
 	}
 	return nil

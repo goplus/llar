@@ -10,7 +10,6 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/env"
-	"github.com/goplus/llar/internal/modload"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 

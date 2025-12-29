@@ -1,4 +1,4 @@
-package loader
+package modules
 
 import (
 	"path/filepath"
@@ -261,7 +261,7 @@ func TestFormulaLoader_LoadCmpFormula(t *testing.T) {
 	// Test reading fields from the loaded formula
 	t.Run("ReadFields", func(t *testing.T) {
 		// Try to read the compareVer field
-		compareVer := elem.Value("fCompareVer").(module.VersionComparator)
+		compareVer := elem.Value("fCompareVer").(func(v1, v2 module.Version) int,)
 
 		if ret := compareVer(module.Version{}, module.Version{}); ret != -1 {
 			t.Fatalf("Unexpected compare result: want %d got %d", -1, ret)

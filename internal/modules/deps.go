@@ -1,4 +1,4 @@
-package modload
+package modules
 
 import (
 	"context"
@@ -8,26 +8,18 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/goplus/llar/formula"
+	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/goplus/llar/pkgs/mod/versions"
 )
 
-// initProj initializes the project directory for a formula.
-// It creates a temporary directory and syncs the source code from remote repository.
-func initProj(ctx context.Context, f *Formula) error {
-	if f.Proj != nil {
-		return nil
-	}
-	// TODO(MeteorsLiu): Localize path with filepath.Localize
-	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("llar-build-%s-%s-*", strings.ReplaceAll(f.Version.ID, "/", "-"), f.Version.Version))
+func newProject(ctx context.Context, mod module.Version, f *formula.Formula) (*classfile.Project, error) {
+	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("llar-build-%s-%s-*", strings.ReplaceAll(mod.ID, "/", "-"), mod.Version))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	f.Proj = &formula.Project{
-		BuildDir: tmpDir,
-	}
-	return f.Sync(ctx, tmpDir)
+	f.Sync(ctx, tmpDir)
 }
 
 // resolveDeps resolves the dependencies for a formula.

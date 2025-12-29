@@ -1,4 +1,4 @@
-package modload
+package modules
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type PackageOpts struct {
 	LocalDir string
 }
 
-func latestVersion(modID string, comparator module.VersionComparator) (version string, err error) {
+func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (version string, err error) {
 	// TODO(MeteorsLiu): Support different VCS
 	vcs := vcs.NewGitVCS()
 	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", modID)
@@ -48,12 +48,12 @@ func latestVersion(modID string, comparator module.VersionComparator) (version s
 // LoadPackages loads all packages required by the main module and resolves
 // their dependencies using the MVS algorithm. It returns formulas for all
 // modules in the computed build list.
-func LoadPackages(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formula, error) {
-	formulaContext := newFormulaContext(opts.LocalDir)
-	defer formulaContext.gc()
+func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formula, error) {
+	cache := newClassfileCache(opts.LocalDir)
+	defer cache.gc()
 
 	if main.Version == "" {
-		cmp, err := formulaContext.comparatorOf(main.ID)
+		cmp, err := cache.comparatorOf(main.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -63,7 +63,7 @@ func LoadPackages(ctx context.Context, main module.Version, opts PackageOpts) ([
 		}
 		main.Version = latest
 	}
-	mainFormula, err := formulaContext.formulaOf(main)
+	mainFormula, err := cache.formulaOf(main)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func LoadPackages(ctx context.Context, main module.Version, opts PackageOpts) ([
 		} else if v1 == "none" && v2 == "none" {
 			return 0
 		}
-		compare, err := formulaContext.comparatorOf(p)
+		compare, err := cache.comparatorOf(p)
 		if err != nil {
 			panic(err)
 		}
@@ -95,7 +95,7 @@ func LoadPackages(ctx context.Context, main module.Version, opts PackageOpts) ([
 	graph.Require(main, mainDeps)
 
 	onLoad := func(mod module.Version) ([]module.Version, error) {
-		f, err := formulaContext.formulaOf(mod)
+		f, err := cache.formulaOf(mod)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +135,7 @@ func LoadPackages(ctx context.Context, main module.Version, opts PackageOpts) ([
 	var formulas []*Formula
 
 	for _, mod := range buildList {
-		f, err := formulaContext.formulaOf(mod)
+		f, err := cache.formulaOf(mod)
 		if err != nil {
 			return nil, err
 		}

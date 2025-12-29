@@ -21,7 +21,8 @@ var getCmd = &cobra.Command{
 var getVersion string
 
 func init() {
-	getCmd.Flags().StringVarP(&getVersion, "version", "v", "", "Version key in versions.json to add dependency to")
+	getCmd.Flags().StringVarP(&getVersion, "version", "v", "",
+		"Version key in versions.json to add dependency to")
 	rootCmd.AddCommand(getCmd)
 }
 
