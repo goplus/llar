@@ -9,11 +9,22 @@ import (
 	"slices"
 	"time"
 
+	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/mvs"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/goplus/llar/pkgs/mod/versions"
 )
+
+type Module struct {
+	*formula.Formula
+
+	ID      string
+	Dir     string
+	Version string
+
+	Deps []*Module
+}
 
 // PackageOpts contains options for LoadPackages.
 type PackageOpts struct {
@@ -26,11 +37,13 @@ type PackageOpts struct {
 }
 
 func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (version string, err error) {
-	// TODO(MeteorsLiu): Support different VCS
-	vcs := vcs.NewGitVCS()
-	remoteRepoUrl := fmt.Sprintf("https://github.com/%s", modID)
+	// TODO(MeteorsLiu): Support different code host sites
+	repo, err := vcs.NewRepo(fmt.Sprintf("https://github.com/%s", modID))
+	if err != nil {
+		return "", err
+	}
 
-	tags, err := vcs.Tags(context.TODO(), remoteRepoUrl)
+	tags, err := repo.Tags(context.TODO())
 	if err != nil {
 		return "", err
 	}
@@ -48,7 +61,7 @@ func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (ve
 // LoadPackages loads all packages required by the main module and resolves
 // their dependencies using the MVS algorithm. It returns formulas for all
 // modules in the computed build list.
-func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formula, error) {
+func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Module, error) {
 	cache := newClassfileCache(opts.LocalDir)
 	defer cache.gc()
 
@@ -70,7 +83,7 @@ func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formul
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	mainDeps, err := resolveDeps(ctx, mainFormula)
+	mainDeps, err := resolveDeps(ctx, main, mainFormula)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +115,7 @@ func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formul
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 
-		deps, err := resolveDeps(ctx, f)
+		deps, err := resolveDeps(ctx, mod, f)
 		if err != nil {
 			return nil, err
 		}
@@ -127,39 +140,81 @@ func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Formul
 
 	// Tidy: compute minimal dependencies and update versions.json
 	if opts.Tidy {
-		if err := tidy(main, mainFormula.Dir, reqs); err != nil {
+		if err := tidy(main, reqs); err != nil {
 			return nil, err
 		}
 	}
 
-	var formulas []*Formula
+	modCache := make(map[module.Version]*Module)
 
-	for _, mod := range buildList {
-		f, err := cache.formulaOf(mod)
-		if err != nil {
-			return nil, err
+	convertToModules := func(modList []module.Version) ([]*Module, error) {
+		var modules []*Module
+
+		for _, mod := range modList {
+			if cacheMod, ok := modCache[mod]; ok {
+				modules = append(modules, cacheMod)
+				continue
+			}
+			f, err := cache.formulaOf(mod)
+			if err != nil {
+				return nil, err
+			}
+			// TODO(MeteorsLiu): Support custom module dir
+			moduleDir, err := moduleDirOf(mod.ID)
+			if err != nil {
+				return nil, err
+			}
+			module := &Module{
+				Formula: f,
+				ID:      mod.ID,
+				Dir:     moduleDir,
+				Version: mod.Version,
+			}
+			modCache[mod] = module
+			modules = append(modules, module)
 		}
-		f.markUse()
-		// fill the dep list
-		if mod == main {
-			f.Proj.Deps = buildList[1:]
+
+		return modules, nil
+	}
+
+	modules, err := convertToModules(buildList)
+	if err != nil {
+		return nil, err
+	}
+
+	// fill the deps
+	for _, mod := range modules {
+		var deps []*Module
+
+		if mod.ID == main.ID && mod.Version == main.Version {
+			deps = modules[1:]
 		} else {
-			f.Proj.Deps, _ = graph.RequiredBy(mod)
+			reqs, err := mvs.Req(module.Version{mod.ID, mod.Version}, []string{}, reqs)
+			if err != nil {
+				return nil, err
+			}
+			deps, err = convertToModules(reqs)
+			if err != nil {
+				return nil, err
+			}
 		}
-		formulas = append(formulas, f)
+		mod.Deps = deps
 	}
 
-	return formulas, nil
+	return modules, nil
 }
 
 // tidy computes minimal dependencies using mvs.Req and updates versions.json.
-func tidy(main module.Version, formulaDir string, reqs *mvsReqs) error {
+func tidy(main module.Version, reqs *mvsReqs) error {
 	minDeps, err := mvs.Req(main, []string{}, reqs)
 	if err != nil {
 		return err
 	}
-
-	versionsFile := filepath.Join(formulaDir, "versions.json")
+	moduleDir, err := moduleDirOf(main.ID)
+	if err != nil {
+		return err
+	}
+	versionsFile := filepath.Join(moduleDir, "versions.json")
 	v, err := versions.Parse(versionsFile, nil)
 	if err != nil {
 		return err

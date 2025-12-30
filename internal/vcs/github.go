@@ -157,30 +157,6 @@ func (g *githubClient) ReadFile(ctx context.Context, owner, repo, ref, path stri
 	return io.ReadAll(resp.Body)
 }
 
-// ReadDir reads the contents of a directory by downloading the tarball.
-// Note: This downloads the entire repo tarball - use SyncDir for efficiency.
-func (g *githubClient) ReadDir(ctx context.Context, owner, repo, ref, path string) ([]fs.DirEntry, error) {
-	// Create a temporary directory
-	tmpDir, err := os.MkdirTemp("", "llar-readdir-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// Download and extract the tarball
-	if err := g.SyncDir(ctx, owner, repo, ref, path, tmpDir); err != nil {
-		return nil, err
-	}
-
-	// Read the directory
-	entries, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return nil, err
-	}
-
-	return entries, nil
-}
-
 // SyncDir downloads a directory to the destination directory using tarball.
 func (g *githubClient) SyncDir(ctx context.Context, owner, repo, ref, path, destDir string) error {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -219,9 +195,8 @@ func (g *githubClient) SyncDir(ctx context.Context, owner, repo, ref, path, dest
 	// We need to find and strip this prefix
 	var rootPrefix string
 
-	// Normalize path for matching
-	path = strings.TrimPrefix(path, "/")
-	path = strings.TrimSuffix(path, "/")
+	// Normalize path for matching using filepath
+	path = filepath.Clean(path)
 	if path == "." {
 		path = ""
 	}
@@ -240,35 +215,40 @@ func (g *githubClient) SyncDir(ctx context.Context, owner, repo, ref, path, dest
 			continue
 		}
 
+		// Convert tar path (always uses forward slashes) to filepath
+		name := filepath.FromSlash(header.Name)
+
 		// Get the root prefix from the first real entry (should be a directory)
 		if rootPrefix == "" {
-			parts := strings.SplitN(header.Name, "/", 2)
-			if len(parts) > 0 {
-				rootPrefix = parts[0] + "/"
-			}
+			// Find the first path component
+			rootPrefix = strings.SplitN(filepath.ToSlash(name), "/", 2)[0]
 		}
 
 		// Strip the root prefix
-		name := strings.TrimPrefix(header.Name, rootPrefix)
+		name = strings.TrimPrefix(filepath.ToSlash(name), rootPrefix+"/")
 		if name == "" {
 			continue
 		}
+		name = filepath.FromSlash(name)
 
 		// Check if this entry is under our target path
 		var relPath string
 		if path == "" {
 			relPath = name
-		} else if strings.HasPrefix(name, path+"/") {
-			relPath = strings.TrimPrefix(name, path+"/")
-		} else if name == path {
-			// Exact match (probably a file)
-			relPath = filepath.Base(name)
 		} else {
-			// Not under our target path
-			continue
+			// Use filepath.Rel to determine relative path
+			rel, err := filepath.Rel(path, name)
+			if err != nil {
+				continue
+			}
+			// If rel starts with "..", name is not under path
+			if strings.HasPrefix(rel, "..") {
+				continue
+			}
+			relPath = rel
 		}
 
-		if relPath == "" {
+		if relPath == "" || relPath == "." {
 			continue
 		}
 
@@ -320,13 +300,3 @@ func (f *fileInfo) Mode() fs.FileMode  { return f.mode }
 func (f *fileInfo) ModTime() time.Time { return f.modTime }
 func (f *fileInfo) IsDir() bool        { return f.isDir }
 func (f *fileInfo) Sys() any           { return nil }
-
-// dirEntry implements fs.DirEntry.
-type dirEntry struct {
-	info *fileInfo
-}
-
-func (d *dirEntry) Name() string               { return d.info.Name() }
-func (d *dirEntry) IsDir() bool                { return d.info.IsDir() }
-func (d *dirEntry) Type() fs.FileMode          { return d.info.Mode().Type() }
-func (d *dirEntry) Info() (fs.FileInfo, error) { return d.info, nil }

@@ -12,7 +12,6 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/xgo/ast"
 	"github.com/goplus/xgo/parser"
-	"github.com/goplus/xgo/parser/fsx"
 	"github.com/goplus/xgo/token"
 
 	_ "github.com/goplus/llar/internal/ixgo"
@@ -33,7 +32,7 @@ type Formula struct {
 // It searches for the fromVer() call in the formula file and returns its argument.
 func FromVerOf(formulaPath string) (fromVer string, err error) {
 	fs := token.NewFileSet()
-	astFile, err := parser.ParseFSEntry(fs, fsx.Local, formulaPath, nil, parser.Config{
+	astFile, err := parser.ParseEntry(fs, formulaPath, nil, parser.Config{
 		ClassKind: xgobuild.ClassKind,
 	})
 	if err != nil {
@@ -48,9 +47,7 @@ func FromVerOf(formulaPath string) (fromVer string, err error) {
 func Load(path string) (*Formula, error) {
 	ctx := ixgo.NewContext(0)
 
-	// FIXME(MeteorsLiu): there's a bug with ixgo ParseFile, which cause the failure compiling classfile
-	// we use BuildDir temporarily, in the future we will change it back.
-	source, err := xgobuild.BuildDir(ctx, filepath.Dir(path))
+	source, err := xgobuild.BuildFile(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +75,7 @@ func Load(path string) (*Formula, error) {
 	val := reflect.New(typ)
 	class := val.Elem()
 
-	val.Interface().(classfileMain).Main()
+	val.Interface().(interface{ Main() }).Main()
 
 	return &Formula{
 		structElem: class,

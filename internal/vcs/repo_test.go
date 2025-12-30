@@ -6,6 +6,7 @@ package vcs
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,11 +14,11 @@ import (
 
 func TestParseRepoPath(t *testing.T) {
 	tests := []struct {
-		input       string
-		wantHost    string
-		wantOwner   string
-		wantRepo    string
-		wantErr     bool
+		input     string
+		wantHost  string
+		wantOwner string
+		wantRepo  string
+		wantErr   bool
 	}{
 		{"github.com/owner/repo", "github.com", "owner", "repo", false},
 		{"github.com/owner/repo/sub", "github.com", "owner", "repo/sub", false},
@@ -231,5 +232,196 @@ func TestRepoFSSync(t *testing.T) {
 
 	if len(entries) == 0 {
 		t.Error("Synced directory is empty")
+	}
+}
+
+func TestRepoFSOpen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	repo, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	repoFS := repo.At("v68.0.0", localDir)
+
+	// Open file (lazy loading)
+	f, err := repoFS.Open("README.md")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	// File not downloaded yet (lazy)
+	cached := filepath.Join(localDir, "README.md")
+	if _, err := os.Stat(cached); !os.IsNotExist(err) {
+		t.Error("File should not be cached before Read")
+	}
+
+	// Read triggers download
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if len(data) == 0 {
+		t.Error("Read returned empty data")
+	}
+
+	// Now file should be cached
+	if _, err := os.Stat(cached); os.IsNotExist(err) {
+		t.Error("File should be cached after Read")
+	}
+
+	// Stat should work
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	if info.Name() != "README.md" {
+		t.Errorf("Stat Name = %q, want %q", info.Name(), "README.md")
+	}
+}
+
+func TestRepoFSOpenStatBeforeRead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	repo, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	repoFS := repo.At("v68.0.0", localDir)
+
+	f, err := repoFS.Open("README.md")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	// Stat before Read should fetch from remote
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	if info.Name() != "README.md" {
+		t.Errorf("Stat Name = %q, want %q", info.Name(), "README.md")
+	}
+
+	// File still not cached (Stat doesn't download content)
+	cached := filepath.Join(localDir, "README.md")
+	if _, err := os.Stat(cached); !os.IsNotExist(err) {
+		t.Error("File should not be cached after Stat only")
+	}
+}
+
+func TestRepoFSOpenMultipleReads(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	repo, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	repoFS := repo.At("v68.0.0", localDir)
+
+	f, err := repoFS.Open("LICENSE")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	// First read
+	buf1 := make([]byte, 10)
+	n1, err := f.Read(buf1)
+	if err != nil {
+		t.Fatalf("First Read failed: %v", err)
+	}
+
+	// Second read continues from where we left off
+	buf2 := make([]byte, 10)
+	n2, err := f.Read(buf2)
+	if err != nil {
+		t.Fatalf("Second Read failed: %v", err)
+	}
+
+	// Should read different content
+	if string(buf1[:n1]) == string(buf2[:n2]) && n1 == n2 {
+		t.Error("Multiple reads should advance position")
+	}
+}
+
+func TestRepoFSOpenNonExistent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	repo, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	repoFS := repo.At("v68.0.0", localDir)
+
+	// Open succeeds (lazy)
+	f, err := repoFS.Open("nonexistent-file.txt")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	// Read should fail for non-existent file
+	_, err = io.ReadAll(f)
+	if err == nil {
+		t.Error("Read should fail for non-existent file")
+	}
+}
+
+func TestRepoFSOpenFromCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	repo, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	repoFS := repo.At("v68.0.0", localDir)
+
+	// Pre-populate cache
+	cached := filepath.Join(localDir, "cached.txt")
+	cachedContent := []byte("cached content")
+	if err := os.WriteFile(cached, cachedContent, 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	// Open should read from cache, not remote
+	f, err := repoFS.Open("cached.txt")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if string(data) != string(cachedContent) {
+		t.Errorf("Read = %q, want %q (from cache)", string(data), string(cachedContent))
 	}
 }

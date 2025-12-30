@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
@@ -55,7 +55,9 @@ func (m *classfileCache) comparatorOf(modId string) (func(v1, v2 module.Version)
 		}
 	}
 	if comp == nil {
-		return nil, fmt.Errorf("failed to load comparator: comparator not found")
+		comp = func(v1, v2 module.Version) int {
+			return gnu.Compare(v1.Version, v2.Version)
+		}
 	}
 	m.comparators[modId] = comp
 	return comp, nil
@@ -140,16 +142,4 @@ func (m *classfileCache) findMaxFromVer(mod module.Version, compare func(v1, v2 
 	}
 
 	return "", "", fmt.Errorf("failed to load formula: no formula found for %s", mod.ID)
-}
-
-func moduleDirOf(modId string) (string, error) {
-	formulaDir, err := env.FormulaDir()
-	if err != nil {
-		return "", err
-	}
-	escapedModId, err := module.EscapeID(modId)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(formulaDir, escapedModId), nil
 }

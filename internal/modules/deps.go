@@ -3,45 +3,46 @@ package modules
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/goplus/llar/pkgs/mod/versions"
 )
 
-func newProject(ctx context.Context, mod module.Version, f *formula.Formula) (*classfile.Project, error) {
-	tmpDir, err := os.MkdirTemp("", fmt.Sprintf("llar-build-%s-%s-*", strings.ReplaceAll(mod.ID, "/", "-"), mod.Version))
-	if err != nil {
-		return nil, err
-	}
-	f.Sync(ctx, tmpDir)
-}
-
 // resolveDeps resolves the dependencies for a formula.
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
-func resolveDeps(ctx context.Context, f *Formula) ([]module.Version, error) {
-	if err := initProj(ctx, f); err != nil {
-		return nil, err
-	}
+func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formula.Formula) ([]module.Version, error) {
+	var deps classfile.ModuleDeps
 
-	var deps formula.ModuleDeps
+	// TODO(MeteorsLiu): Support different code host sites.
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mainMod.ID))
 
-	// onRequire is optional
-	if f.OnRequire != nil {
-		f.OnRequire(f.Proj, &deps)
-	}
-
-	depTable, err := versions.Parse(filepath.Join(f.Dir, "versions.json"), nil)
+	moduleDir, err := moduleDirOf(mainMod.ID)
 	if err != nil {
 		return nil, err
 	}
-	current := depTable.Dependencies[f.Version.Version]
+	sourceCacheDir, err := sourceCacheDirOf(mainMod)
+	if err != nil {
+		return nil, err
+	}
+	proj := &classfile.Project{
+		FileFS: repo.At(mainMod.Version, sourceCacheDir),
+	}
+	// onRequire is optional
+	if mainFormula.OnRequire != nil {
+		mainFormula.OnRequire(proj, &deps)
+	}
+
+	depTable, err := versions.Parse(filepath.Join(moduleDir, "versions.json"), nil)
+	if err != nil {
+		return nil, err
+	}
+	current := depTable.Dependencies[mainMod.Version]
 
 	var vers []module.Version
 

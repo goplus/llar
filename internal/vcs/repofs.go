@@ -5,10 +5,13 @@
 package vcs
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // RepoFS provides a filesystem view of a repository at a specific ref.
@@ -18,32 +21,39 @@ type RepoFS struct {
 	localDir string
 }
 
-// ReadFile reads the content of a file.
-// It first checks the local directory, then fetches from remote if not found.
-func (r *RepoFS) ReadFile(name string) ([]byte, error) {
-	// Try local first
-	local := filepath.Join(r.localDir, name)
-	if data, err := os.ReadFile(local); err == nil {
-		return data, nil
-	}
+// Open opens the named file for reading (lazy loading).
+func (r *RepoFS) Open(name string) (fs.File, error) {
+	return &repoFile{
+		name:   name,
+		local:  filepath.Join(r.localDir, name),
+		client: r.repo.client,
+		owner:  r.repo.owner,
+		repo:   r.repo.repo,
+		ref:    r.ref,
+	}, nil
+}
 
-	// Fetch from remote
-	ctx := context.Background()
-	data, err := r.repo.client.ReadFile(ctx, r.repo.owner, r.repo.repo, r.ref, name)
+// ReadFile reads the content of a file.
+func (r *RepoFS) ReadFile(name string) ([]byte, error) {
+	f, err := r.Open(name)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
 
-	// Save to local
-	if err := r.saveToLocal(name, data); err != nil {
+// Stat returns file info for the given path.
+func (r *RepoFS) Stat(name string) (fs.FileInfo, error) {
+	f, err := r.Open(name)
+	if err != nil {
 		return nil, err
 	}
-
-	return data, nil
+	defer f.Close()
+	return f.Stat()
 }
 
 // ReadDir reads the contents of a directory.
-// It downloads the entire directory if not present locally.
 func (r *RepoFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	local := filepath.Join(r.localDir, name)
 
@@ -61,34 +71,71 @@ func (r *RepoFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	return os.ReadDir(local)
 }
 
-// Stat returns file info for the given path.
-func (r *RepoFS) Stat(name string) (fs.FileInfo, error) {
-	// Try local first
-	local := filepath.Join(r.localDir, name)
-	if info, err := os.Stat(local); err == nil {
-		return info, nil
-	}
-
-	// Fetch from remote
-	ctx := context.Background()
-	return r.repo.client.Stat(ctx, r.repo.owner, r.repo.repo, r.ref, name)
-}
-
 // Sync downloads the specified path to localDir.
-// If path is ".", it syncs the entire repository at the ref.
 func (r *RepoFS) Sync(ctx context.Context, path string) error {
 	local := filepath.Join(r.localDir, path)
 	return r.repo.client.SyncDir(ctx, r.repo.owner, r.repo.repo, r.ref, path, local)
 }
 
-// saveToLocal saves data to the local directory.
-func (r *RepoFS) saveToLocal(name string, data []byte) error {
-	local := filepath.Join(r.localDir, name)
-	dir := filepath.Dir(local)
+// repoFile implements fs.File with lazy loading.
+type repoFile struct {
+	name   string
+	local  string
+	client client
+	owner  string
+	repo   string
+	ref    string
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+	once   sync.Once
+	reader *bytes.Reader
+	err    error
+}
+
+func (f *repoFile) load() {
+	// Try local first
+	if data, err := os.ReadFile(f.local); err == nil {
+		f.reader = bytes.NewReader(data)
+		return
 	}
 
-	return os.WriteFile(local, data, 0644)
+	// Fetch from remote
+	ctx := context.Background()
+	data, err := f.client.ReadFile(ctx, f.owner, f.repo, f.ref, f.name)
+	if err != nil {
+		f.err = err
+		return
+	}
+
+	// Save to local
+	if err := os.MkdirAll(filepath.Dir(f.local), 0755); err != nil {
+		f.err = err
+		return
+	}
+	if err := os.WriteFile(f.local, data, 0644); err != nil {
+		f.err = err
+		return
+	}
+
+	f.reader = bytes.NewReader(data)
 }
+
+func (f *repoFile) Read(p []byte) (int, error) {
+	f.once.Do(f.load)
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.reader.Read(p)
+}
+
+func (f *repoFile) Stat() (fs.FileInfo, error) {
+	// Try local first
+	if info, err := os.Stat(f.local); err == nil {
+		return info, nil
+	}
+
+	// Fetch from remote
+	ctx := context.Background()
+	return f.client.Stat(ctx, f.owner, f.repo, f.ref, f.name)
+}
+
+func (f *repoFile) Close() error { return nil }

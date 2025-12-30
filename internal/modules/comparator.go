@@ -2,7 +2,6 @@ package modules
 
 import (
 	"fmt"
-	"go/ast"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,7 +10,6 @@ import (
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	_ "github.com/goplus/llar/internal/ixgo"
-	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
@@ -24,16 +22,9 @@ import (
 //   - zero if v1 == v2
 //   - a positive value if v1 > v2
 func loadComparator(path string) (comparator func(v1, v2 module.Version) int, err error) {
-	if path == "" {
-		return func(v1, v2 module.Version) int {
-			return gnu.Compare(v1.Version, v2.Version)
-		}, nil
-	}
 	ctx := ixgo.NewContext(0)
 
-	// FIXME(MeteorsLiu): there's a bug with ixgo ParseFile, which cause the failure compiling classfile
-	// we use BuildDir temporarily, in the future we will change it back.
-	source, err := xgobuild.BuildDir(ctx, filepath.Dir(path))
+	source, err := xgobuild.BuildFile(ctx, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -72,16 +63,6 @@ func unexportValueOf(field reflect.Value) reflect.Value {
 	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
 }
 
-// valueOf retrieves the value of a field by name from a struct element.
-// It handles both exported and unexported fields, and both pointer and non-pointer types.
-// For pointer fields, it returns the dereferenced value; for non-pointer fields, it returns the value directly.
 func valueOf(elem reflect.Value, name string) any {
-	if ast.IsExported(name) {
-		field := elem.FieldByName(name)
-		if field.Kind() == reflect.Ptr {
-			return field.Elem().Interface()
-		}
-		return field.Interface()
-	}
 	return unexportValueOf(elem.FieldByName(name)).Interface()
 }

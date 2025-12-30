@@ -194,8 +194,11 @@ func (p *ModuleF) Use(mod module.Version, matrix Matrix) {
 	if err != nil {
 		return
 	}
-	// TODO(MeteorsLiu): Localize path with filepath.Localize
-	buildDir := filepath.Join(formulaDir, mod.ID, "build", mod.Version, matrix.String())
+	espcapedId, err := module.EscapeID(mod.ID)
+	if err != nil {
+		return
+	}
+	buildDir := filepath.Join(formulaDir, espcapedId, "build", mod.Version, matrix.String())
 
 	includeDir := filepath.Join(buildDir, "include")
 	libDir := filepath.Join(buildDir, "lib")

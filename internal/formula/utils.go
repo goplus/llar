@@ -6,11 +6,6 @@ import (
 	"unsafe"
 )
 
-// classfileMain represents an XGo class file that can be executed.
-type classfileMain interface {
-	Main()
-}
-
 // unexportValueOf creates a reflect.Value that allows access to unexported fields.
 // It uses unsafe operations to bypass Go's exported field restrictions.
 func unexportValueOf(field reflect.Value) reflect.Value {

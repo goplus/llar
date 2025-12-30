@@ -24,9 +24,6 @@ type client interface {
 	// ReadFile reads the content of a file.
 	ReadFile(ctx context.Context, owner, repo, ref, path string) ([]byte, error)
 
-	// ReadDir reads the contents of a directory.
-	ReadDir(ctx context.Context, owner, repo, ref, path string) ([]fs.DirEntry, error)
-
 	// SyncDir downloads a directory to the destination directory.
 	SyncDir(ctx context.Context, owner, repo, ref, path, destDir string) error
 }
