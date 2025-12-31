@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"slices"
 
@@ -21,6 +22,9 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 
 	// TODO(MeteorsLiu): Support different code host sites.
 	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mainMod.ID))
+	if err != nil {
+		return nil, err
+	}
 
 	moduleDir, err := moduleDirOf(mainMod.ID)
 	if err != nil {
@@ -30,8 +34,9 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 	if err != nil {
 		return nil, err
 	}
+	repoFS := repo.At(mainMod.Version, sourceCacheDir)
 	proj := &classfile.Project{
-		FileFS: repo.At(mainMod.Version, sourceCacheDir),
+		FileFS: repoFS.(fs.ReadFileFS),
 	}
 	// onRequire is optional
 	if mainFormula.OnRequire != nil {

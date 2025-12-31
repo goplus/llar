@@ -9,62 +9,54 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/build/lockedfile"
-	"github.com/goplus/llar/internal/env"
+	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/lockedfile"
+	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
 type Builder struct {
 	initOnce sync.Once
+	// newRepo creates a vcs.Repo for downloading source code.
+	// If nil, uses vcs.NewRepo.
+	newRepo func(repoPath string) (vcs.Repo, error)
 }
 
-// BuildTarget represents a single target to build.
-type BuildTarget struct {
-	Version module.Version
-	Dir     string // formula directory
-	Project *formula.Project
-	OnBuild func(*formula.Project, *formula.BuildResult) error
-}
-
-func NewBuilder() *Builder {
-	return &Builder{}
-}
-
-func (b *Builder) Init(ctx context.Context, vcs vcs.VCS, remoteFormulaRepo string) error {
-	formulaDir, err := env.FormulaDir()
-	if err != nil {
-		return err
+// NewBuilder creates a new Builder with optional custom repo creator.
+// If newRepo is nil, uses vcs.NewRepo.
+func NewBuilder(newRepo func(repoPath string) (vcs.Repo, error)) *Builder {
+	if newRepo == nil {
+		newRepo = vcs.NewRepo
 	}
-	latest, err := vcs.Latest(ctx, remoteFormulaRepo)
-
-	lockFile := filepath.Join(formulaDir, ".lock")
-
-	unlock, err := lockedfile.MutexAt(lockFile).Lock()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	return vcs.Sync(ctx, remoteFormulaRepo, latest, formulaDir)
+	return &Builder{newRepo: newRepo}
 }
 
-func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets []BuildTarget, matrx formula.Matrix) error {
-	buildResults := make(map[module.Version]*formula.BuildResult)
+func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets []*modules.Module, matrx classfile.Matrix) error {
+	buildResults := make(map[module.Version]*classfile.BuildResult)
 
-	build := func(target BuildTarget) error {
-		buildDir := filepath.Join(target.Dir, "build", target.Version.Version, matrx.String())
-		cacheFilePath := filepath.Join(buildDir, cacheFile)
+	build := func(target *modules.Module) error {
+		buildDir := filepath.Join(target.Dir, ".source", target.Version)
+		outputDir := filepath.Join(target.Dir, ".build", target.Version, matrx.String())
+		cacheFilePath := filepath.Join(outputDir, cacheFile)
 
-		target.Project.Matrix = matrx
-		target.Project.FormulaDir = buildDir
-		target.Project.BuildResults = buildResults
-
-		if target.OnBuild == nil {
-			return fmt.Errorf("failed to build %s: no onBuild", target.Version.ID)
+		proj := &classfile.Project{
+			Deps:         moduleVersionsOf(target.Deps),
+			BuildDir:     buildDir,
+			BuildResults: buildResults,
+			Matrix:       matrx,
 		}
-
+		if target.OnBuild == nil {
+			return fmt.Errorf("failed to build %s: no onBuild", target.ID)
+		}
+		// TODO(MeteorsLiu): Support different code host sites.
+		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", target.ID))
+		if err != nil {
+			return err
+		}
+		if err = repo.Sync(ctx, target.Version, "", buildDir); err != nil {
+			return err
+		}
 		unlock, err := lockTarget(target, matrx)
 		if err != nil {
 			return err
@@ -73,17 +65,16 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 
 		// Double-check cache after acquiring lock (another process may have built it)
 		if cache, err := loadBuildCache(cacheFilePath); err == nil {
-			buildResults[target.Version] = &cache.BuildResult
+			buildResults[module.Version{target.ID, target.Version}] = &cache.BuildResult
 			return nil
 		}
-
-		if err := os.Chdir(target.Project.BuildDir); err != nil {
+		if err := os.Chdir(buildDir); err != nil {
 			return err
 		}
 
-		results := &formula.BuildResult{}
+		results := &classfile.BuildResult{}
 
-		if err := target.OnBuild(target.Project, results); err != nil {
+		if err := target.OnBuild(proj, results); err != nil {
 			return err
 		}
 
@@ -102,7 +93,7 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 			return err
 		}
 
-		buildResults[target.Version] = results
+		buildResults[module.Version{target.ID, target.Version}] = results
 
 		return nil
 	}
@@ -120,9 +111,9 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 	}()
 
 	// Build dependencies first, then main
-	var mainTarget BuildTarget
+	var mainTarget *modules.Module
 	for _, target := range targets {
-		if target.Version.ID == mainModule.ID && target.Version.Version == mainModule.Version {
+		if target.ID == mainModule.ID && target.Version == mainModule.Version {
 			mainTarget = target
 			continue // skip main for now
 		}
@@ -138,12 +129,22 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 	return nil
 }
 
-func lockTarget(target BuildTarget, matrx formula.Matrix) (unlock func(), err error) {
-	buildDir := filepath.Join(target.Dir, "build", target.Version.Version, matrx.String())
+func lockTarget(target *modules.Module, matrx classfile.Matrix) (unlock func(), err error) {
+	buildDir := filepath.Join(target.Dir, ".build", target.Version, matrx.String())
 	if err = os.MkdirAll(buildDir, 0700); err != nil {
 		return nil, err
 	}
 	lockFile := filepath.Join(buildDir, ".lock")
 
 	return lockedfile.MutexAt(lockFile).Lock()
+}
+
+func moduleVersionsOf(mod []*modules.Module) []module.Version {
+	var versions []module.Version
+
+	for _, m := range mod {
+		versions = append(versions, module.Version{m.ID, m.Version})
+	}
+
+	return versions
 }

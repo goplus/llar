@@ -3,6 +3,8 @@ package formula
 import (
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/goplus/xgo/parser"
 	"github.com/goplus/xgo/token"
 
+	"github.com/goplus/llar/internal/env"
 	_ "github.com/goplus/llar/internal/ixgo"
 )
 
@@ -41,13 +44,16 @@ func FromVerOf(formulaPath string) (fromVer string, err error) {
 	return fromVerFrom(astFile)
 }
 
-// Load loads and executes a LLAR formula file, returning a Formula instance.
-// The formula file name must follow the pattern "StructName_*.gox".
-// It compiles the XGo code, executes the Main() method, and extracts formula metadata.
-func Load(path string) (*Formula, error) {
+// loadFS is the internal implementation for loading a formula from a filesystem.
+// It builds and interprets the formula file, then extracts the struct fields.
+func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	ctx := ixgo.NewContext(0)
 
-	source, err := xgobuild.BuildFile(ctx, path, nil)
+	content, err := fs.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	source, err := xgobuild.BuildFile(ctx, path, content)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +90,30 @@ func Load(path string) (*Formula, error) {
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Project, *formula.BuildResult) error),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}, nil
+}
+
+// Load loads a formula from the local filesystem.
+// The path must be within the formula directory (env.FormulaDir).
+func Load(path string) (*Formula, error) {
+	formulaDir, err := env.FormulaDir()
+	if err != nil {
+		return nil, err
+	}
+	relPath, err := filepath.Rel(formulaDir, path)
+	if err != nil || relPath == ".." {
+		if err == nil {
+			return nil, fmt.Errorf("failed to load formula: disallow non formula dir access")
+		}
+		return nil, err
+	}
+	return loadFS(os.DirFS(formulaDir).(fs.ReadFileFS), relPath)
+}
+
+// LoadFS loads a formula from a filesystem interface.
+// This allows loading formulas from remote repositories or mock filesystems.
+// The path should be relative to the filesystem root.
+func LoadFS(fsys fs.ReadFileFS, path string) (*Formula, error) {
+	return loadFS(fsys, path)
 }
 
 // SetStdout sets the stdout writer for the formula's gsh.App.

@@ -10,6 +10,8 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/env"
+	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
@@ -26,36 +28,38 @@ func init() {
 }
 
 func TestBuildZlib(t *testing.T) {
+	testdataDir, _ := filepath.Abs("testdata")
+	mockRepo := newMockRepo(testdataDir)
+
+	// Create mock repo factory for modules.Load
+	mockFormulaRepo := newMockRepo(testdataDir)
+
 	t.Run("zlib", func(t *testing.T) {
 		ctx := context.TODO()
-		mainModule := module.Version{ID: "madler/zlib", Version: "1.2.11"}
+		mainModule := module.Version{ID: "github.com/madler/zlib", Version: "1.2.11"}
 
-		// Load packages using modload
-		formulas, err := modload.LoadPackages(ctx, mainModule, modload.PackageOpts{})
+		// Load packages using modload with mock formula repo
+		modules, err := modules.Load(ctx, mainModule, modules.Options{
+			FormulaRepo: mockFormulaRepo,
+		})
 		if err != nil {
 			t.Fatal(err)
 			return
 		}
 
-		// Convert formulas to build targets
-		targets := make([]BuildTarget, len(formulas))
-		for i, f := range formulas {
-			targets[i] = BuildTarget{
-				Version: f.Version,
-				Dir:     f.Dir,
-				Project: f.Proj,
-				OnBuild: f.OnBuild,
-			}
-		}
-
 		matrix := formula.Matrix{
 			Require: map[string][]string{
-				"os":   []string{"linux"},
-				"arch": []string{"amd64"},
+				"os":   {"linux"},
+				"arch": {"amd64"},
 			},
 		}
 
-		err = NewBuilder().Build(ctx, mainModule, targets, matrix)
+		// Use mock repo factory for source downloads
+		newRepo := func(repoPath string) (vcs.Repo, error) {
+			return mockRepo, nil
+		}
+
+		err = NewBuilder(newRepo).Build(ctx, mainModule, modules, matrix)
 		if err != nil {
 			t.Fatal(err)
 			return
@@ -65,7 +69,7 @@ func TestBuildZlib(t *testing.T) {
 			t.Fatal(err)
 			return
 		}
-		outDir := filepath.Join(dir, "madler/zlib", "build", "1.2.11", "amd64-linux")
+		outDir := filepath.Join(dir, "github.com/madler/zlib", ".build", "1.2.11", "amd64-linux")
 
 		if _, err := os.Stat(filepath.Join(outDir, "lib")); os.IsNotExist(err) {
 			t.Errorf("output dir not found")
@@ -83,34 +87,30 @@ func TestBuildZlib(t *testing.T) {
 	})
 	t.Run("libpng", func(t *testing.T) {
 		ctx := context.TODO()
-		mainModule := module.Version{ID: "pnggroup/libpng", Version: "v1.6.53"}
+		mainModule := module.Version{ID: "github.com/pnggroup/libpng", Version: "v1.6.53"}
 
-		// Load packages using modload
-		formulas, err := modload.LoadPackages(ctx, mainModule, modload.PackageOpts{})
+		// Load packages using modload with mock formula repo
+		modules, err := modules.Load(ctx, mainModule, modules.Options{
+			FormulaRepo: mockFormulaRepo,
+		})
 		if err != nil {
 			t.Fatal(err)
 			return
 		}
 
-		// Convert formulas to build targets
-		targets := make([]BuildTarget, len(formulas))
-		for i, f := range formulas {
-			targets[i] = BuildTarget{
-				Version: f.Version,
-				Dir:     f.Dir,
-				Project: f.Proj,
-				OnBuild: f.OnBuild,
-			}
-		}
-
 		matrix := formula.Matrix{
 			Require: map[string][]string{
-				"os":   []string{"linux"},
-				"arch": []string{"amd64"},
+				"os":   {"linux"},
+				"arch": {"amd64"},
 			},
 		}
 
-		err = NewBuilder().Build(ctx, mainModule, targets, matrix)
+		// Use mock repo factory for source downloads
+		newRepo := func(repoPath string) (vcs.Repo, error) {
+			return mockRepo, nil
+		}
+
+		err = NewBuilder(newRepo).Build(ctx, mainModule, modules, matrix)
 		if err != nil {
 			t.Fatal(err)
 			return
@@ -120,7 +120,7 @@ func TestBuildZlib(t *testing.T) {
 			t.Fatal(err)
 			return
 		}
-		outDir := filepath.Join(dir, "pnggroup/libpng", "build", "v1.6.53", "amd64-linux")
+		outDir := filepath.Join(dir, "github.com/pnggroup/libpng", ".build", "v1.6.53", "amd64-linux")
 
 		if _, err := os.Stat(filepath.Join(outDir, "lib")); os.IsNotExist(err) {
 			t.Errorf("output dir not found")

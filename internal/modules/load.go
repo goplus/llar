@@ -26,14 +26,16 @@ type Module struct {
 	Deps []*Module
 }
 
-// PackageOpts contains options for LoadPackages.
-type PackageOpts struct {
+// Options contains options for LoadPackages.
+type Options struct {
 	// Tidy, if true, computes minimal dependencies using mvs.Req
 	// and updates the versions.json file.
 	Tidy bool
 	// LocalDir specifies the local directory to fallback when formula
 	// is not found in FormulaDir. If empty, defaults to current directory.
 	LocalDir string
+	// FormulaRepo is the vcs.Repo for downloading formulas.
+	FormulaRepo vcs.Repo
 }
 
 func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (version string, err error) {
@@ -61,9 +63,8 @@ func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (ve
 // LoadPackages loads all packages required by the main module and resolves
 // their dependencies using the MVS algorithm. It returns formulas for all
 // modules in the computed build list.
-func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Module, error) {
-	cache := newClassfileCache(opts.LocalDir)
-	defer cache.gc()
+func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
+	cache := newClassfileCache(opts.FormulaRepo, opts.LocalDir)
 
 	if main.Version == "" {
 		cmp, err := cache.comparatorOf(main.ID)
@@ -102,11 +103,6 @@ func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Module
 		}
 		return compare(module.Version{p, v1}, module.Version{p, v2})
 	}
-
-	graph := mvs.NewGraph(cmp, []module.Version{main})
-
-	graph.Require(main, mainDeps)
-
 	onLoad := func(mod module.Version) ([]module.Version, error) {
 		f, err := cache.formulaOf(mod)
 		if err != nil {
@@ -115,13 +111,7 @@ func Load(ctx context.Context, main module.Version, opts PackageOpts) ([]*Module
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 
-		deps, err := resolveDeps(ctx, mod, f)
-		if err != nil {
-			return nil, err
-		}
-
-		graph.Require(mod, deps)
-		return deps, nil
+		return resolveDeps(ctx, mod, f)
 	}
 
 	reqs := &mvsReqs{

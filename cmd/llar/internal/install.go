@@ -13,7 +13,7 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/env"
-	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/spf13/cobra"
 )
@@ -39,25 +39,11 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	builder := build.NewBuilder()
-	if err := builder.Init(ctx, vcs.NewGitVCS(), "https://github.com/MeteorsLiu/llarmvp-formula"); err != nil {
-		return fmt.Errorf("failed to init builder: %w", err)
-	}
 
 	// Load packages using modload
-	formulas, err := modload.LoadPackages(ctx, module.Version{ID: modID, Version: version}, modload.PackageOpts{})
+	modules, err := modules.Load(ctx, module.Version{ID: modID, Version: version}, modules.Options{})
 	if err != nil {
 		return fmt.Errorf("failed to load packages: %w", err)
-	}
-
-	// Convert formulas to build targets
-	targets := make([]build.BuildTarget, len(formulas))
-	for i, f := range formulas {
-		targets[i] = build.BuildTarget{
-			Version: f.Version,
-			Dir:     f.Dir,
-			Project: f.Proj,
-			OnBuild: f.OnBuild,
-		}
 	}
 
 	matrix := formula.Matrix{
@@ -71,9 +57,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	var savedStdout, savedStderr *os.File
 	if !installVerbose {
 		// Redirect stdout/stderr for formulas
-		for i := range formulas {
-			formulas[i].SetStdout(io.Discard)
-			formulas[i].SetStderr(io.Discard)
+		for _, mod := range modules {
+			mod.SetStdout(io.Discard)
+			mod.SetStderr(io.Discard)
 		}
 
 		// Also redirect os.Stdout/os.Stderr
@@ -93,7 +79,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	mainModule := module.Version{ID: modID, Version: version}
-	if err := builder.Build(ctx, mainModule, targets, matrix); err != nil {
+	if err := builder.Build(ctx, mainModule, modules, matrix); err != nil {
 		return fmt.Errorf("failed to build %s@%s: %w", modID, version, err)
 	}
 
@@ -104,9 +90,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print pkgconfig info for main module (first in formulas)
-	if len(formulas) > 0 {
-		main := formulas[0]
-		printPkgConfigInfo(main.ID, main.Version.Version, matrix)
+	if len(modules) > 0 {
+		main := modules[0]
+		printPkgConfigInfo(main.ID, main.Version, matrix)
 	}
 
 	return nil

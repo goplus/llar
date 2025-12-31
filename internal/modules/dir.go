@@ -17,7 +17,12 @@ func moduleDirOf(modId string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(formulaDir, escapedModId), nil
+	moduleDir := filepath.Join(formulaDir, escapedModId)
+
+	if err := os.MkdirAll(moduleDir, 0700); err != nil {
+		return "", err
+	}
+	return moduleDir, nil
 }
 
 func sourceCacheDirOf(mod module.Version) (string, error) {

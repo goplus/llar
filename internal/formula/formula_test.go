@@ -1,6 +1,8 @@
 package formula
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -118,6 +120,55 @@ func TestFormula_SetStderr(t *testing.T) {
 	t.Run("SetNilWriter", func(t *testing.T) {
 		// Should not panic with nil writer
 		formula.SetStderr(nil)
+	})
+}
+
+func TestLoadFS(t *testing.T) {
+	t.Run("LoadValidFormula", func(t *testing.T) {
+		fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+		formula, err := LoadFS(fsys, "hello_llar.gox")
+		if err != nil {
+			t.Fatalf("LoadFS failed: %v", err)
+		}
+
+		if formula == nil {
+			t.Fatal("LoadFS returned nil formula")
+		}
+
+		if formula.ModId == "" {
+			t.Error("ModId is empty")
+		}
+		t.Logf("ModId: %s", formula.ModId)
+
+		if formula.FromVer == "" {
+			t.Error("FromVer is empty")
+		}
+		t.Logf("FromVer: %s", formula.FromVer)
+
+		if formula.OnBuild == nil {
+			t.Error("OnBuild is nil")
+		}
+
+		if formula.OnRequire == nil {
+			t.Error("OnRequire is nil")
+		}
+	})
+
+	t.Run("LoadNonExistentFile", func(t *testing.T) {
+		fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+		_, err := LoadFS(fsys, "nonexistent.gox")
+		if err == nil {
+			t.Error("LoadFS should return error for non-existent file")
+		}
+	})
+
+	t.Run("LoadInvalidFileName", func(t *testing.T) {
+		// Create a mock FS with an invalid file name
+		fsys := os.DirFS("testdata").(fs.ReadFileFS)
+		_, err := LoadFS(fsys, "invalid.gox")
+		if err == nil {
+			t.Error("LoadFS should return error for invalid file name")
+		}
 	})
 }
 

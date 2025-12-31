@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/goplus/llar/internal/build/lockedfile/filelock"
+	"github.com/goplus/llar/internal/lockedfile/filelock"
 )
 
 func openFile(name string, flag int, perm fs.FileMode) (*os.File, error) {

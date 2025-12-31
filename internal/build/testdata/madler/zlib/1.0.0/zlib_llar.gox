@@ -1,4 +1,5 @@
 import (
+	"os"
 	"bytes"
 	"regexp"
 	"path/filepath"
@@ -9,11 +10,8 @@ id "madler/zlib"
 fromVer "1.0.0"
 
 onBuild (proj, out) => {
-	buildDir := filepath.join(proj.Dir, "build")
-	mkdir buildDir
-
 	capout => {
-		exec "./configure", "--prefix", buildDir
+		exec "./configure", "--prefix", proj.BuildDir
 		exec "make"
 		exec "make", "install"
 	}
@@ -23,7 +21,7 @@ onBuild (proj, out) => {
 		return lastErr
 	}
 
-	pcFiles, _ := filepath.glob(filepath.join(buildDir, "lib", "pkgconfig", "*.pc"))
+	pcFiles, _ := filepath.glob(filepath.join(proj.BuildDir, "lib", "pkgconfig", "*.pc"))
 
 	re := regexp.mustCompile("^prefix=(.*)")
 
@@ -37,8 +35,6 @@ onBuild (proj, out) => {
 			}
 		}
 	}
-
-	out.OutputDir = buildDir
 
 	return nil
 }

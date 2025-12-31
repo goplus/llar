@@ -7,22 +7,36 @@ package vcs
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"strings"
 )
 
 // Repo represents a code hosting repository.
 // It provides version queries and can create filesystem views for specific refs.
-type Repo struct {
+type Repo interface {
+	// Tags returns all tags from the repository.
+	Tags(ctx context.Context) ([]string, error)
+	// Latest returns the latest commit hash on the default branch.
+	Latest(ctx context.Context) (string, error)
+	// At returns a filesystem view of the repository at the specified ref.
+	// The returned fs.FS also implements fs.ReadFileFS and fs.ReadDirFS.
+	At(ref, localDir string) fs.FS
+	// Sync downloads the specified path to localDir.
+	Sync(ctx context.Context, ref, path, localDir string) error
+}
+
+// repo is the default implementation of Repo.
+type repo struct {
 	client client
 	host   string
 	owner  string
-	repo   string
+	name   string
 }
 
 // NewRepo creates a new Repo for the given repository path.
 // repoPath format: "github.com/owner/repo"
-func NewRepo(repoPath string) (*Repo, error) {
-	host, owner, repo, err := parseRepoPath(repoPath)
+func NewRepo(repoPath string) (Repo, error) {
+	host, owner, repoName, err := parseRepoPath(repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -32,33 +46,38 @@ func NewRepo(repoPath string) (*Repo, error) {
 		return nil, err
 	}
 
-	return &Repo{
+	return &repo{
 		client: c,
 		host:   host,
 		owner:  owner,
-		repo:   repo,
+		name:   repoName,
 	}, nil
 }
 
 // Tags returns all tags from the repository.
-func (r *Repo) Tags(ctx context.Context) ([]string, error) {
-	return r.client.Tags(ctx, r.owner, r.repo)
+func (r *repo) Tags(ctx context.Context) ([]string, error) {
+	return r.client.Tags(ctx, r.owner, r.name)
 }
 
 // Latest returns the latest commit hash on the default branch.
-func (r *Repo) Latest(ctx context.Context) (string, error) {
-	return r.client.Latest(ctx, r.owner, r.repo)
+func (r *repo) Latest(ctx context.Context) (string, error) {
+	return r.client.Latest(ctx, r.owner, r.name)
 }
 
 // At returns a filesystem view of the repository at the specified ref.
-// ref can be a tag, branch, or commit hash.
-// localDir is where the files will be stored locally.
-func (r *Repo) At(ref, localDir string) *RepoFS {
-	return &RepoFS{
-		repo:     r,
+func (r *repo) At(ref, localDir string) fs.FS {
+	return &repoFS{
+		client:   r.client,
+		owner:    r.owner,
+		repoName: r.name,
 		ref:      ref,
 		localDir: localDir,
 	}
+}
+
+// Sync downloads the specified path to localDir.
+func (r *repo) Sync(ctx context.Context, ref, path, localDir string) error {
+	return r.client.SyncDir(ctx, r.owner, r.name, ref, path, localDir)
 }
 
 // parseRepoPath parses "github.com/owner/repo" into components.

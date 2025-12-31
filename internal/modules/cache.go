@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/lockedfile"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/gnu"
 	"github.com/goplus/llar/pkgs/mod/module"
 )
@@ -17,21 +20,51 @@ const _defaultFormulaSuffix = "_llar.gox"
 // classfileCache manages formula loading and caching.
 // It maintains a cache of loaded formulas and version comparators.
 type classfileCache struct {
+	formulaRepo vcs.Repo
 	formulas    map[module.Version]*formula.Formula
 	comparators map[string]func(v1, v2 module.Version) int
 	searchPaths []string // formula search paths (first match wins)
 }
 
-func newClassfileCache(localDir string) *classfileCache {
+func newClassfileCache(formulaRepo vcs.Repo, localDir string) *classfileCache {
 	if localDir == "" {
 		localDir = "."
 	}
 
 	return &classfileCache{
+		formulaRepo: formulaRepo,
 		formulas:    make(map[module.Version]*formula.Formula),
 		comparators: make(map[string]func(v1, v2 module.Version) int),
 		searchPaths: []string{localDir},
 	}
+}
+
+func (m *classfileCache) lazyDownloadFormula(modId string) error {
+	moduleDir, err := moduleDirOf(modId)
+	if err != nil {
+		return err
+	}
+	lockfile := filepath.Join(moduleDir, ".lock")
+
+	unlock, err := lockedfile.MutexAt(lockfile).Lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	// normally, the file structure of repo is like:
+	// ├── madler
+	// │   └── zlib
+	// │       ├── 1.0.0
+	// │       │   └── zlib_llar.gox
+	// │       └── versions.json
+	// └── pnggroup
+	// 	└── libpng
+	// 		├── 1.0.0
+	// 		│   └── libpng_llar.gox
+	// 		├── libpng_cmp.gox
+	// 		└── versions.json
+	// so modId is the sub directory of a module
+	return m.formulaRepo.Sync(context.TODO(), "main", modId, moduleDir)
 }
 
 // comparatorOf returns a version comparator for the specified module.
@@ -39,6 +72,9 @@ func newClassfileCache(localDir string) *classfileCache {
 func (m *classfileCache) comparatorOf(modId string) (func(v1, v2 module.Version) int, error) {
 	if comp, ok := m.comparators[modId]; ok {
 		return comp, nil
+	}
+	if err := m.lazyDownloadFormula(modId); err != nil {
+		return nil, err
 	}
 	moduleDir, err := moduleDirOf(modId)
 	if err != nil {
@@ -85,12 +121,6 @@ func (m *classfileCache) formulaOf(mod module.Version) (*formula.Formula, error)
 	}
 	m.formulas[cacheKey] = f
 	return f, nil
-}
-
-// gc performs garbage collection by removing temporary directories
-// of formulas that are no longer in use.
-func (m *classfileCache) gc() {
-
 }
 
 // findMaxFromVer finds the formula file with the highest FromVer that is <= the target version.

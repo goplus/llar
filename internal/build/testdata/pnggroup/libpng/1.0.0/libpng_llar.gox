@@ -12,16 +12,14 @@ onRequire (proj, dep) => {
 }
 
 onBuild (proj, out) => {
-	buildDir := filepath.join(proj.Dir, "build")
-	mkdir buildDir
 
 	for dep in proj.Deps {
-		proj.use dep
+		use dep, proj.Matrix
 		echo "use ${dep.ID} ${dep.Version}"
 	}
 
 	capout => {
-		exec "./configure", "--prefix", buildDir
+		exec "./configure", "--prefix", proj.BuildDir
 		exec "make"
 		exec "make", "install"
 	}
@@ -31,9 +29,9 @@ onBuild (proj, out) => {
 		return lastErr
 	}
 
-	echo buildDir
+	echo proj.BuildDir
 
-	out.OutputDir = buildDir
+	out.OutputDir = proj.BuildDir
 
 	return nil
 }

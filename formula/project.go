@@ -12,6 +12,7 @@ import (
 type Project struct {
 	FileFS       fs.ReadFileFS
 	Deps         []module.Version
+	BuildDir     string
 	BuildResults map[module.Version]*BuildResult
 	Matrix       Matrix
 }

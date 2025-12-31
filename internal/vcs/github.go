@@ -5,8 +5,6 @@
 package vcs
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -157,129 +155,114 @@ func (g *githubClient) ReadFile(ctx context.Context, owner, repo, ref, path stri
 	return io.ReadAll(resp.Body)
 }
 
-// SyncDir downloads a directory to the destination directory using tarball.
+// SyncDir downloads a directory to the destination directory using git sparse-checkout.
+// This is more efficient than tarball for large repositories when only a subdirectory is needed.
+// Falls back to tarball method if sparse-checkout fails.
 func (g *githubClient) SyncDir(ctx context.Context, owner, repo, ref, path, destDir string) error {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return err
 	}
 
-	// Download tarball
-	url := fmt.Sprintf("https://github.com/%s/%s/archive/%s.tar.gz", owner, repo, ref)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("download tarball: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download tarball: status %d", resp.StatusCode)
-	}
-
-	// Decompress gzip
-	gzr, err := gzip.NewReader(resp.Body)
-	if err != nil {
-		return fmt.Errorf("gzip reader: %w", err)
-	}
-	defer gzr.Close()
-
-	// Extract tar
-	tr := tar.NewReader(gzr)
-
-	// The tarball has a root directory like "repo-ref/"
-	// We need to find and strip this prefix
-	var rootPrefix string
-
-	// Normalize path for matching using filepath
+	// Normalize path
 	path = filepath.Clean(path)
 	if path == "." {
 		path = ""
 	}
 
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
+	// Try sparse-checkout first (more efficient for subdirectories)
+	if path != "" {
+		err := g.syncDirSparse(ctx, owner, repo, ref, path, destDir)
+		if err == nil {
+			return nil
 		}
+		// Fall back to tarball if sparse-checkout fails
+	}
+
+	// Use shallow clone for root directory or as fallback
+	return g.syncDirShallowClone(ctx, owner, repo, ref, destDir)
+}
+
+// syncDirSparse uses git sparse-checkout to download only the specified directory.
+// This is much more efficient for large repositories.
+// If the directory already contains a git repo, it will fetch and update instead of re-cloning.
+func (g *githubClient) syncDirSparse(ctx context.Context, owner, repo, ref, path, destDir string) error {
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+
+	// Helper to run git commands in destDir
+	runGit := func(args ...string) error {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = destDir
+		cmd.Env = append(os.Environ(),
+			"GIT_TERMINAL_PROMPT=0", // Disable interactive prompts
+		)
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("read tar: %w", err)
+			return fmt.Errorf("git %s: %w\n%s", args[0], err, string(output))
 		}
+		return nil
+	}
 
-		// Skip PAX extended headers (GitHub tarballs have pax_global_header as first entry)
-		if header.Typeflag == tar.TypeXGlobalHeader || header.Typeflag == tar.TypeXHeader {
-			continue
-		}
+	// Initialize git repository (ignore error if already initialized)
+	runGit("init")
 
-		// Convert tar path (always uses forward slashes) to filepath
-		name := filepath.FromSlash(header.Name)
+	// Add remote (ignore error if already exists)
+	runGit("remote", "add", "origin", repoURL)
 
-		// Get the root prefix from the first real entry (should be a directory)
-		if rootPrefix == "" {
-			// Find the first path component
-			rootPrefix = strings.SplitN(filepath.ToSlash(name), "/", 2)[0]
-		}
+	// Enable sparse-checkout (no-cone mode for exact directory matching)
+	if err := runGit("sparse-checkout", "init", "--no-cone"); err != nil {
+		return err
+	}
 
-		// Strip the root prefix
-		name = strings.TrimPrefix(filepath.ToSlash(name), rootPrefix+"/")
-		if name == "" {
-			continue
-		}
-		name = filepath.FromSlash(name)
+	// Set the sparse-checkout pattern to match only the specified directory
+	gitPath := filepath.ToSlash(path)
+	if err := runGit("sparse-checkout", "set", gitPath+"/**"); err != nil {
+		return err
+	}
 
-		// Check if this entry is under our target path
-		var relPath string
-		if path == "" {
-			relPath = name
-		} else {
-			// Use filepath.Rel to determine relative path
-			rel, err := filepath.Rel(path, name)
+	// Fetch the specified ref
+	if err := runGit("fetch", "--depth=1", "--filter=blob:none", "origin", ref); err != nil {
+		return err
+	}
+
+	// Checkout the fetched content
+	if err := runGit("checkout", "FETCH_HEAD"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// syncDirShallowClone uses git clone --depth 1 to download the repository.
+// Used for root directory sync or as fallback when sparse-checkout fails.
+// If the directory already contains a git repo, it will fetch and update instead of re-cloning.
+func (g *githubClient) syncDirShallowClone(ctx context.Context, owner, repo, ref, destDir string) error {
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
+
+	gitDir := filepath.Join(destDir, ".git")
+	if _, err := os.Stat(gitDir); err == nil {
+		// Existing repo: fetch and checkout
+		runGit := func(args ...string) error {
+			cmd := exec.CommandContext(ctx, "git", args...)
+			cmd.Dir = destDir
+			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+			output, err := cmd.CombinedOutput()
 			if err != nil {
-				continue
+				return fmt.Errorf("git %s: %w\n%s", args[0], err, string(output))
 			}
-			// If rel starts with "..", name is not under path
-			if strings.HasPrefix(rel, "..") {
-				continue
-			}
-			relPath = rel
+			return nil
 		}
 
-		if relPath == "" || relPath == "." {
-			continue
+		if err := runGit("fetch", "--depth=1", "origin", ref); err != nil {
+			return err
 		}
+		return runGit("checkout", "FETCH_HEAD")
+	}
 
-		target := filepath.Join(destDir, relPath)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				return err
-			}
-			f.Close()
-		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return err
-			}
-			if err := os.Symlink(header.Linkname, target); err != nil && !os.IsExist(err) {
-				return err
-			}
-		}
+	// Fresh clone
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--branch", ref, "--single-branch", repoURL, destDir)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git clone: %w\n%s", err, string(output))
 	}
 
 	return nil
