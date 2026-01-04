@@ -14,6 +14,7 @@ import (
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/spf13/cobra"
 )
@@ -40,8 +41,14 @@ func runInstall(cmd *cobra.Command, args []string) error {
 
 	builder := build.NewBuilder()
 
+	formulaRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		return err
+	}
 	// Load packages using modload
-	modules, err := modules.Load(ctx, module.Version{ID: modID, Version: version}, modules.Options{})
+	modules, err := modules.Load(ctx, module.Version{ID: modID, Version: version}, modules.Options{
+		FormulaRepo: formulaRepo,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to load packages: %w", err)
 	}
