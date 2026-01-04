@@ -18,31 +18,30 @@ import (
 
 type Builder struct {
 	initOnce sync.Once
-	// newRepo creates a vcs.Repo for downloading source code.
-	// If nil, uses vcs.NewRepo.
-	newRepo func(repoPath string) (vcs.Repo, error)
 }
 
 // NewBuilder creates a new Builder with optional custom repo creator.
 // If newRepo is nil, uses vcs.NewRepo.
-func NewBuilder(newRepo func(repoPath string) (vcs.Repo, error)) *Builder {
-	if newRepo == nil {
-		newRepo = vcs.NewRepo
-	}
-	return &Builder{newRepo: newRepo}
+func NewBuilder() *Builder {
+	return &Builder{}
 }
 
 func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets []*modules.Module, matrx classfile.Matrix) error {
 	buildResults := make(map[module.Version]*classfile.BuildResult)
 
 	build := func(target *modules.Module) error {
-		buildDir := filepath.Join(target.Dir, ".source", target.Version)
+		sourceDir := filepath.Join(target.Dir, ".source")
 		outputDir := filepath.Join(target.Dir, ".build", target.Version, matrx.String())
 		cacheFilePath := filepath.Join(outputDir, cacheFile)
 
+		// Create output directory
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
+			return err
+		}
+
 		proj := &classfile.Project{
 			Deps:         moduleVersionsOf(target.Deps),
-			BuildDir:     buildDir,
+			BuildDir:     outputDir, // Build output goes to .build/{version}/{matrix}
 			BuildResults: buildResults,
 			Matrix:       matrx,
 		}
@@ -50,11 +49,12 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 			return fmt.Errorf("failed to build %s: no onBuild", target.ID)
 		}
 		// TODO(MeteorsLiu): Support different code host sites.
-		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", target.ID))
+		repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", target.ID))
 		if err != nil {
 			return err
 		}
-		if err = repo.Sync(ctx, target.Version, "", buildDir); err != nil {
+		// Sync source to .source/ (git manages versions)
+		if err = repo.Sync(ctx, target.Version, "", sourceDir); err != nil {
 			return err
 		}
 		unlock, err := lockTarget(target, matrx)
@@ -68,22 +68,15 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 			buildResults[module.Version{target.ID, target.Version}] = &cache.BuildResult
 			return nil
 		}
-		if err := os.Chdir(buildDir); err != nil {
+		if err := os.Chdir(sourceDir); err != nil {
 			return err
 		}
-
-		results := &classfile.BuildResult{}
-
+		results := &classfile.BuildResult{
+			OutputDir: outputDir,
+		}
 		if err := target.OnBuild(proj, results); err != nil {
 			return err
 		}
-
-		os.RemoveAll(buildDir)
-		// Move the result to build directory
-		if err := os.Rename(results.OutputDir, buildDir); err != nil {
-			return err
-		}
-
 		// Save build cache
 		cache := buildCache{
 			BuildResult: *results,
@@ -94,7 +87,6 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 		}
 
 		buildResults[module.Version{target.ID, target.Version}] = results
-
 		return nil
 	}
 

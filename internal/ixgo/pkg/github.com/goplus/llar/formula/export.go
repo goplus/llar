@@ -16,7 +16,6 @@ func init() {
 		Name: "formula",
 		Path: "github.com/goplus/llar/formula",
 		Deps: map[string]string{
-			"github.com/goplus/llar/internal/env":      "env",
 			"github.com/goplus/llar/pkgs/mod/module":   "module",
 			"github.com/goplus/llar/pkgs/mod/versions": "versions",
 			"github.com/qiniu/x/gsh":                   "gsh",

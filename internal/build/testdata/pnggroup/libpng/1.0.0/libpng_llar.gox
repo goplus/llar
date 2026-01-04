@@ -8,13 +8,13 @@ fromVer "1.0.0"
 
 onRequire (proj, dep) => {
 	// You should use zlib 1.0.4 or later to run this
-	dep.require "madler/zlib", "1.2.11"
+	dep.require "madler/zlib", "v1.2.11"
 }
 
 onBuild (proj, out) => {
 
 	for dep in proj.Deps {
-		use dep, proj.Matrix
+		proj.use dep
 		echo "use ${dep.ID} ${dep.Version}"
 	}
 
@@ -30,8 +30,6 @@ onBuild (proj, out) => {
 	}
 
 	echo proj.BuildDir
-
-	out.OutputDir = proj.BuildDir
 
 	return nil
 }

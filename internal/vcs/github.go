@@ -232,40 +232,40 @@ func (g *githubClient) syncDirSparse(ctx context.Context, owner, repo, ref, path
 	return nil
 }
 
-// syncDirShallowClone uses git clone --depth 1 to download the repository.
+// syncDirShallowClone uses git init + fetch + checkout to download the repository.
 // Used for root directory sync or as fallback when sparse-checkout fails.
-// If the directory already contains a git repo, it will fetch and update instead of re-cloning.
+// Works with empty, non-empty, or existing git directories.
 func (g *githubClient) syncDirShallowClone(ctx context.Context, owner, repo, ref, destDir string) error {
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", owner, repo)
 
-	gitDir := filepath.Join(destDir, ".git")
-	if _, err := os.Stat(gitDir); err == nil {
-		// Existing repo: fetch and checkout
-		runGit := func(args ...string) error {
-			cmd := exec.CommandContext(ctx, "git", args...)
-			cmd.Dir = destDir
-			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("git %s: %w\n%s", args[0], err, string(output))
-			}
-			return nil
-		}
-
-		if err := runGit("fetch", "--depth=1", "origin", ref); err != nil {
-			return err
-		}
-		return runGit("checkout", "FETCH_HEAD")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return err
 	}
 
-	// Fresh clone
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--branch", ref, "--single-branch", repoURL, destDir)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone: %w\n%s", err, string(output))
+	runGit := func(args ...string) error {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = destDir
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %s: %w\n%s", args[0], err, string(output))
+		}
+		return nil
 	}
 
-	return nil
+	// Initialize git repo (ignore error if already initialized)
+	runGit("init")
+
+	// Add remote (ignore error if already exists)
+	runGit("remote", "add", "origin", repoURL)
+
+	// Fetch the specified ref
+	if err := runGit("fetch", "--depth=1", "origin", ref); err != nil {
+		return err
+	}
+
+	// Checkout the fetched content
+	return runGit("checkout", "FETCH_HEAD")
 }
 
 // fileInfo implements fs.FileInfo.

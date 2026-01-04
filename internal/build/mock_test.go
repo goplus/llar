@@ -39,6 +39,12 @@ func (m *mockRepo) Sync(ctx context.Context, ref, path, destDir string) error {
 	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
 		return err
 	}
+
+	// Skip if destination already has files (init() already copied)
+	if entries, err := os.ReadDir(destDir); err == nil && len(entries) > 0 {
+		return nil
+	}
+
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return err
 	}

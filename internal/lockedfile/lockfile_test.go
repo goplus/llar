@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/internal/build/lockedfile"
+	"github.com/goplus/llar/internal/lockedfile"
 )
 
 const (
