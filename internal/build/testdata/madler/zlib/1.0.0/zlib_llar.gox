@@ -11,7 +11,7 @@ fromVer "1.0.0"
 
 onBuild (proj, out) => {
 	capout => {
-		exec "./configure", "--prefix", proj.BuildDir
+		exec "./configure", "--prefix", proj.OutputDir
 		exec "make"
 		exec "make", "install"
 	}
@@ -21,7 +21,7 @@ onBuild (proj, out) => {
 		return lastErr
 	}
 
-	pcFiles, _ := filepath.glob(filepath.join(proj.BuildDir, "lib", "pkgconfig", "*.pc"))
+	pcFiles, _ := filepath.glob(filepath.join(proj.OutputDir, "lib", "pkgconfig", "*.pc"))
 
 	re := regexp.mustCompile("^prefix=(.*)")
 

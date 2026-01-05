@@ -19,7 +19,7 @@ onBuild (proj, out) => {
 	}
 
 	capout => {
-		exec "./configure", "--prefix", proj.BuildDir
+		exec "./configure", "--prefix", proj.OutputDir
 		exec "make"
 		exec "make", "install"
 	}
@@ -29,7 +29,7 @@ onBuild (proj, out) => {
 		return lastErr
 	}
 
-	echo proj.BuildDir
+	echo proj.OutputDir
 
 	return nil
 }
