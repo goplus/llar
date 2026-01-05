@@ -1,0 +1,3 @@
+compareVer (a, b) => {
+    return semver.Compare(a.Version, b.Version)
+}
