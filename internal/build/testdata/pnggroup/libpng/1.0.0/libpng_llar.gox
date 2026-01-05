@@ -8,12 +8,10 @@ fromVer "1.0.0"
 
 onRequire (proj, dep) => {
 	// You should use zlib 1.0.4 or later to run this
-	dep.require "madler/zlib", "1.2.11"
+	dep.require "madler/zlib", "v1.2.11"
 }
 
 onBuild (proj, out) => {
-	buildDir := filepath.join(proj.Dir, "build")
-	mkdir buildDir
 
 	for dep in proj.Deps {
 		proj.use dep
@@ -21,7 +19,7 @@ onBuild (proj, out) => {
 	}
 
 	capout => {
-		exec "./configure", "--prefix", buildDir
+		exec "./configure", "--prefix", proj.BuildDir
 		exec "make"
 		exec "make", "install"
 	}
@@ -31,9 +29,7 @@ onBuild (proj, out) => {
 		return lastErr
 	}
 
-	echo buildDir
-
-	out.OutputDir = buildDir
+	echo proj.BuildDir
 
 	return nil
 }
