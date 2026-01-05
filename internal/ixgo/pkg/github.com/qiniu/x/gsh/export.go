@@ -36,6 +36,7 @@ func init() {
 		Funcs: map[string]reflect.Value{
 			"Getenv":        reflect.ValueOf(q.Getenv),
 			"Gopt_App_Main": reflect.ValueOf(q.Gopt_App_Main),
+			"InitApp":       reflect.ValueOf(q.InitApp),
 			"Setenv__0":     reflect.ValueOf(q.Setenv__0),
 			"Setenv__1":     reflect.ValueOf(q.Setenv__1),
 			"Setenv__2":     reflect.ValueOf(q.Setenv__2),
