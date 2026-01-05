@@ -159,7 +159,6 @@ func (p *ModuleF) OnRequire(f func(proj *Project, deps *ModuleDeps)) {
 
 // BuildResult represents the result of building a project.
 type BuildResult struct {
-	OutputDir string
 }
 
 // OnBuild event is used to instruct the Formula to compile a project.
