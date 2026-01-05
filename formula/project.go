@@ -1,26 +1,101 @@
 package formula
 
 import (
-	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/goplus/llar/pkgs/mod/module"
 )
 
 // -----------------------------------------------------------------------------
 
 // Project represents a project (module) being built.
 type Project struct {
-	DirFS fs.FS
+	FileFS       fs.ReadFileFS
+	Deps         []module.Version
+	OutputDir    string
+	BuildResults map[module.Version]*BuildResult
+	Matrix       Matrix
 }
 
 // ReadFile reads the content of a file in the project.
 func (p *Project) ReadFile(path string) ([]byte, error) {
-	file, err := p.DirFS.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+	return p.FileFS.ReadFile(path)
+}
 
-	return io.ReadAll(file)
+// prependEnv prepends a value to an environment variable using the appropriate separator.
+func prependEnv(key, value string) {
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
+	current := os.Getenv(key)
+	if current == "" {
+		os.Setenv(key, value)
+	} else {
+		os.Setenv(key, value+sep+current)
+	}
+}
+
+// appendFlag appends a flag to an environment variable (space-separated).
+func appendFlag(key, flag string) {
+	current := os.Getenv(key)
+	if current == "" {
+		os.Setenv(key, flag)
+	} else {
+		os.Setenv(key, strings.TrimSpace(current+" "+flag))
+	}
+}
+
+// Use configures the build environment to use the specified module.
+func (p *Project) Use(mod module.Version) {
+	depResult := p.BuildResults[mod]
+	if depResult == nil {
+		panic("dep not found")
+	}
+	buildDir := depResult.OutputDir
+
+	includeDir := filepath.Join(buildDir, "include")
+	libDir := filepath.Join(buildDir, "lib")
+	pkgconfigDir := filepath.Join(buildDir, "lib", "pkgconfig")
+
+	// PKG_CONFIG_PATH - pkg-config path (all platforms)
+	if _, err := os.Stat(pkgconfigDir); err == nil {
+		prependEnv("PKG_CONFIG_PATH", pkgconfigDir)
+	}
+
+	// CMAKE paths (all platforms)
+	if _, err := os.Stat(buildDir); err == nil {
+		prependEnv("CMAKE_PREFIX_PATH", buildDir)
+	}
+	if _, err := os.Stat(includeDir); err == nil {
+		prependEnv("CMAKE_INCLUDE_PATH", includeDir)
+	}
+	if _, err := os.Stat(libDir); err == nil {
+		prependEnv("CMAKE_LIBRARY_PATH", libDir)
+	}
+
+	// Platform-specific settings
+	if runtime.GOOS == "windows" {
+		// Windows MSVC environment variables
+		if _, err := os.Stat(includeDir); err == nil {
+			prependEnv("INCLUDE", includeDir)
+		}
+		if _, err := os.Stat(libDir); err == nil {
+			prependEnv("LIB", libDir)
+		}
+	} else {
+		// Unix (Linux/macOS) - Autotools/GCC style flags
+		if _, err := os.Stat(includeDir); err == nil {
+			appendFlag("CPPFLAGS", "-I"+includeDir)
+		}
+		if _, err := os.Stat(libDir); err == nil {
+			appendFlag("LDFLAGS", "-L"+libDir)
+		}
+	}
 }
 
 // -----------------------------------------------------------------------------
