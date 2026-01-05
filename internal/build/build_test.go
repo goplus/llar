@@ -51,7 +51,7 @@ func TestBuildZlib(t *testing.T) {
 		}
 
 		// Use real vcs.NewRepo for source code
-		err = NewBuilder().Build(ctx, mainModule, modules, matrix)
+		_, err = NewBuilder(matrix).Build(ctx, mainModule, modules)
 		if err != nil {
 			t.Fatal(err)
 			return
@@ -98,7 +98,7 @@ func TestBuildZlib(t *testing.T) {
 		}
 
 		// Use real vcs.NewRepo for source code
-		err = NewBuilder().Build(ctx, mainModule, modules, matrix)
+		_, err = NewBuilder(matrix).Build(ctx, mainModule, modules)
 		if err != nil {
 			t.Fatal(err)
 			return

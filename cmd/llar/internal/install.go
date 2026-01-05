@@ -12,7 +12,6 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
-	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/pkgs/mod/module"
@@ -38,8 +37,6 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	modID, version := parseModuleArg(args[0])
 
 	ctx := context.Background()
-
-	builder := build.NewBuilder()
 
 	formulaRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
 	if err != nil {
@@ -86,7 +83,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	mainModule := module.Version{ID: modID, Version: version}
-	if err := builder.Build(ctx, mainModule, modules, matrix); err != nil {
+	results, err := build.NewBuilder(matrix).Build(ctx, mainModule, modules)
+	if err != nil {
 		return fmt.Errorf("failed to build %s@%s: %w", modID, version, err)
 	}
 
@@ -97,9 +95,9 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print pkgconfig info for main module (first in formulas)
-	if len(modules) > 0 {
-		main := modules[0]
-		printPkgConfigInfo(main.ID, main.Version, matrix)
+	if len(results) > 0 {
+		main := results[0]
+		printPkgConfigInfo(main, matrix)
 	}
 
 	return nil
@@ -116,14 +114,8 @@ func parseModuleArg(arg string) (modID, version string) {
 }
 
 // printPkgConfigInfo uses pkg-config to print useful information about installed packages.
-func printPkgConfigInfo(modID, version string, matrix formula.Matrix) error {
-	formulaDir, err := env.FormulaDir()
-	if err != nil {
-		return err
-	}
-
-	buildDir := filepath.Join(formulaDir, modID, "build", version, matrix.String())
-	pkgconfigDir := filepath.Join(buildDir, "lib", "pkgconfig")
+func printPkgConfigInfo(main build.Result, matrix formula.Matrix) error {
+	pkgconfigDir := filepath.Join(main.OutputDir, "lib", "pkgconfig")
 
 	entries, err := os.ReadDir(pkgconfigDir)
 	if err != nil {
