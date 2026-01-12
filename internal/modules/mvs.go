@@ -56,13 +56,13 @@ func (*mvsReqs) Upgrade(m module.Version) (module.Version, error) {
 // The main module (also known as the target) has no version and must be chosen
 // over other versions of the same module in the module dependency graph.
 func (m *mvsReqs) cmpVersion(p string, v1, v2 string) int {
-	if m.isMain(module.Version{ID: p, Version: v2}) {
-		if m.isMain(module.Version{ID: p, Version: v1}) {
+	if m.isMain(module.Version{Path: p, Version: v2}) {
+		if m.isMain(module.Version{Path: p, Version: v1}) {
 			return 0
 		}
 		return -1
 	}
-	if m.isMain(module.Version{ID: p, Version: v1}) {
+	if m.isMain(module.Version{Path: p, Version: v1}) {
 		return 1
 	}
 	return m.cmp(p, v1, v2)

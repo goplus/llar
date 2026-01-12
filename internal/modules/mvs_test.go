@@ -10,7 +10,7 @@ import (
 func TestMvsReqs_Max(t *testing.T) {
 	reqs := &mvsReqs{
 		isMain: func(v module.Version) bool {
-			return v.ID == "main" && v.Version == ""
+			return v.Path == "main" && v.Version == ""
 		},
 		cmp: func(p, v1, v2 string) int {
 			// simple string comparison for test
@@ -48,25 +48,25 @@ func TestMvsReqs_Max(t *testing.T) {
 
 func TestMvsReqs_Required(t *testing.T) {
 	roots := []module.Version{
-		{ID: "dep1", Version: "v1.0.0"},
-		{ID: "dep2", Version: "v2.0.0"},
+		{Path: "dep1", Version: "v1.0.0"},
+		{Path: "dep2", Version: "v2.0.0"},
 	}
 
 	reqs := &mvsReqs{
 		roots: roots,
 		isMain: func(v module.Version) bool {
-			return v.ID == "main" && v.Version == ""
+			return v.Path == "main" && v.Version == ""
 		},
 		onLoad: func(mod module.Version) ([]module.Version, error) {
-			if mod.ID == "dep1" {
-				return []module.Version{{ID: "dep3", Version: "v1.0.0"}}, nil
+			if mod.Path == "dep1" {
+				return []module.Version{{Path: "dep3", Version: "v1.0.0"}}, nil
 			}
 			return nil, nil
 		},
 	}
 
 	t.Run("main module returns roots", func(t *testing.T) {
-		got, err := reqs.Required(module.Version{ID: "main", Version: ""})
+		got, err := reqs.Required(module.Version{Path: "main", Version: ""})
 		if err != nil {
 			t.Fatalf("Required() error = %v", err)
 		}
@@ -76,7 +76,7 @@ func TestMvsReqs_Required(t *testing.T) {
 	})
 
 	t.Run("none version returns nil", func(t *testing.T) {
-		got, err := reqs.Required(module.Version{ID: "dep1", Version: "none"})
+		got, err := reqs.Required(module.Version{Path: "dep1", Version: "none"})
 		if err != nil {
 			t.Fatalf("Required() error = %v", err)
 		}
@@ -86,11 +86,11 @@ func TestMvsReqs_Required(t *testing.T) {
 	})
 
 	t.Run("regular module calls onLoad", func(t *testing.T) {
-		got, err := reqs.Required(module.Version{ID: "dep1", Version: "v1.0.0"})
+		got, err := reqs.Required(module.Version{Path: "dep1", Version: "v1.0.0"})
 		if err != nil {
 			t.Fatalf("Required() error = %v", err)
 		}
-		if len(got) != 1 || got[0].ID != "dep3" {
+		if len(got) != 1 || got[0].Path != "dep3" {
 			t.Errorf("Required() = %v, want [{dep3 v1.0.0}]", got)
 		}
 	})
@@ -99,7 +99,7 @@ func TestMvsReqs_Required(t *testing.T) {
 func TestMvsReqs_cmpVersion(t *testing.T) {
 	reqs := &mvsReqs{
 		isMain: func(v module.Version) bool {
-			return v.ID == "main" && v.Version == ""
+			return v.Path == "main" && v.Version == ""
 		},
 		cmp: func(p, v1, v2 string) int {
 			if v1 < v2 {
@@ -139,7 +139,7 @@ func TestMvsReqs_cmpVersion(t *testing.T) {
 func TestMvsReqs_Upgrade(t *testing.T) {
 	reqs := &mvsReqs{}
 
-	mod := module.Version{ID: "test/pkg", Version: "v1.0.0"}
+	mod := module.Version{Path: "test/pkg", Version: "v1.0.0"}
 	got, err := reqs.Upgrade(mod)
 	if err != nil {
 		t.Fatalf("Upgrade() error = %v", err)
@@ -158,23 +158,23 @@ func TestMVS_BuildList(t *testing.T) {
 	// MVS should select: A@1.0, B@1.0, C@2.0
 
 	deps := map[module.Version][]module.Version{
-		{ID: "A", Version: "1.0"}: {
-			{ID: "B", Version: "1.0"},
-			{ID: "C", Version: "1.0"},
+		{Path: "A", Version: "1.0"}: {
+			{Path: "B", Version: "1.0"},
+			{Path: "C", Version: "1.0"},
 		},
-		{ID: "B", Version: "1.0"}: {
-			{ID: "C", Version: "2.0"},
+		{Path: "B", Version: "1.0"}: {
+			{Path: "C", Version: "2.0"},
 		},
-		{ID: "C", Version: "1.0"}: {},
-		{ID: "C", Version: "2.0"}: {},
+		{Path: "C", Version: "1.0"}: {},
+		{Path: "C", Version: "2.0"}: {},
 	}
 
-	main := module.Version{ID: "A", Version: "1.0"}
+	main := module.Version{Path: "A", Version: "1.0"}
 
 	reqs := &mvsReqs{
 		roots: deps[main],
 		isMain: func(v module.Version) bool {
-			return v.ID == main.ID && v.Version == main.Version
+			return v.Path == main.Path && v.Version == main.Version
 		},
 		cmp: func(p, v1, v2 string) int {
 			if v1 == "none" {
@@ -216,7 +216,7 @@ func TestMVS_BuildList(t *testing.T) {
 	// C should be version 2.0 (MVS selects max)
 	cVersion := ""
 	for _, m := range buildList {
-		if m.ID == "C" {
+		if m.Path == "C" {
 			cVersion = m.Version
 			break
 		}
@@ -234,26 +234,26 @@ func TestMVS_DiamondDependency(t *testing.T) {
 	// MVS should select D@2.0
 
 	deps := map[module.Version][]module.Version{
-		{ID: "A", Version: "1.0"}: {
-			{ID: "B", Version: "1.0"},
-			{ID: "C", Version: "1.0"},
+		{Path: "A", Version: "1.0"}: {
+			{Path: "B", Version: "1.0"},
+			{Path: "C", Version: "1.0"},
 		},
-		{ID: "B", Version: "1.0"}: {
-			{ID: "D", Version: "1.0"},
+		{Path: "B", Version: "1.0"}: {
+			{Path: "D", Version: "1.0"},
 		},
-		{ID: "C", Version: "1.0"}: {
-			{ID: "D", Version: "2.0"},
+		{Path: "C", Version: "1.0"}: {
+			{Path: "D", Version: "2.0"},
 		},
-		{ID: "D", Version: "1.0"}: {},
-		{ID: "D", Version: "2.0"}: {},
+		{Path: "D", Version: "1.0"}: {},
+		{Path: "D", Version: "2.0"}: {},
 	}
 
-	main := module.Version{ID: "A", Version: "1.0"}
+	main := module.Version{Path: "A", Version: "1.0"}
 
 	reqs := &mvsReqs{
 		roots: deps[main],
 		isMain: func(v module.Version) bool {
-			return v.ID == main.ID && v.Version == main.Version
+			return v.Path == main.Path && v.Version == main.Version
 		},
 		cmp: func(p, v1, v2 string) int {
 			if v1 == "none" {
@@ -285,7 +285,7 @@ func TestMVS_DiamondDependency(t *testing.T) {
 	// Find D version
 	dVersion := ""
 	for _, m := range buildList {
-		if m.ID == "D" {
+		if m.Path == "D" {
 			dVersion = m.Version
 			break
 		}
@@ -298,18 +298,18 @@ func TestMVS_DiamondDependency(t *testing.T) {
 func TestMVS_NoneVersion(t *testing.T) {
 	// Test that "none" version is handled correctly
 	deps := map[module.Version][]module.Version{
-		{ID: "A", Version: "1.0"}: {
-			{ID: "B", Version: "1.0"},
+		{Path: "A", Version: "1.0"}: {
+			{Path: "B", Version: "1.0"},
 		},
-		{ID: "B", Version: "1.0"}: {},
+		{Path: "B", Version: "1.0"}: {},
 	}
 
-	main := module.Version{ID: "A", Version: "1.0"}
+	main := module.Version{Path: "A", Version: "1.0"}
 
 	reqs := &mvsReqs{
 		roots: deps[main],
 		isMain: func(v module.Version) bool {
-			return v.ID == main.ID && v.Version == main.Version
+			return v.Path == main.Path && v.Version == main.Version
 		},
 		cmp: func(p, v1, v2 string) int {
 			if v1 == "none" && v2 != "none" {

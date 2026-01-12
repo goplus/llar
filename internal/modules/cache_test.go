@@ -47,7 +47,7 @@ func TestNewClassfileCache(t *testing.T) {
 
 func TestFindMaxFromVer_NoDirectory(t *testing.T) {
 	cache := newClassfileCache(nil, "/nonexistent/path")
-	mod := module.Version{ID: "test/pkg", Version: "1.0.0"}
+	mod := module.Version{Path: "test/pkg", Version: "1.0.0"}
 
 	compare := func(v1, v2 module.Version) int {
 		if v1.Version < v2.Version {
@@ -70,7 +70,7 @@ func TestFindMaxFromVer_WithTestdata(t *testing.T) {
 	cache := newClassfileCache(nil, testdataDir)
 
 	// Test with DaveGamble/cJSON which has multiple versions
-	mod := module.Version{ID: "github.com/DaveGamble/cJSON", Version: "1.7.18"}
+	mod := module.Version{Path: "github.com/DaveGamble/cJSON", Version: "1.7.18"}
 
 	compare := func(v1, v2 module.Version) int {
 		if v1.Version < v2.Version {
@@ -128,8 +128,8 @@ func TestClassfileCache_ComparatorOf_WithMock(t *testing.T) {
 	}
 
 	// Test the comparator works
-	v1 := module.Version{ID: modId, Version: "1.0"}
-	v2 := module.Version{ID: modId, Version: "2.0"}
+	v1 := module.Version{Path: modId, Version: "1.0"}
+	v2 := module.Version{Path: modId, Version: "2.0"}
 
 	if result := comp(v1, v2); result >= 0 {
 		t.Errorf("comp(1.0, 2.0) = %d, want < 0", result)
@@ -169,8 +169,8 @@ func TestClassfileCache_ComparatorOf_Caching(t *testing.T) {
 	}
 
 	// Both should produce same results
-	v1 := module.Version{ID: modId, Version: "1.0"}
-	v2 := module.Version{ID: modId, Version: "2.0"}
+	v1 := module.Version{Path: modId, Version: "1.0"}
+	v2 := module.Version{Path: modId, Version: "2.0"}
 
 	if comp1(v1, v2) != comp2(v1, v2) {
 		t.Error("cached comparator produces different results")

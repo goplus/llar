@@ -110,7 +110,7 @@ func TestClassfileCache_FormulaOf_WithTestdata(t *testing.T) {
 	cache := newClassfileCache(nil, "testdata/DaveGamble/cJSON")
 
 	// Test loading formula for cJSON 1.0.0
-	mod := module.Version{ID: "DaveGamble/cJSON", Version: "1.0.0"}
+	mod := module.Version{Path: "DaveGamble/cJSON", Version: "1.0.0"}
 
 	// The formula file is at testdata/DaveGamble/cJSON/1.0.0/CJSON_llar.gox
 	// But formulaOf uses moduleDirOf which depends on env.FormulaDir
@@ -188,7 +188,7 @@ func TestFindMaxFromVer_WithMultipleVersions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mod := module.Version{ID: "DaveGamble/cJSON", Version: tt.targetVersion}
+			mod := module.Version{Path: "DaveGamble/cJSON", Version: tt.targetVersion}
 			maxFromVer, _, err := cache.findMaxFromVer(mod, compare)
 			if err != nil {
 				t.Skipf("Skipping test: %v", err)
