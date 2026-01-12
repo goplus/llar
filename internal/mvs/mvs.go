@@ -65,7 +65,7 @@ type UpgradeReqs interface {
 type DowngradeReqs interface {
 	Reqs
 
-	// Previous returns the version of m.ID immediately prior to m.Version,
+	// Previous returns the version of m.Path immediately prior to m.Version,
 	// or "none" if no such version is known.
 	Previous(m module.Version) (module.Version, error)
 }
@@ -195,7 +195,7 @@ func Req(mainModule module.Version, base []string, reqs Reqs) ([]module.Version,
 
 	max := map[string]string{}
 	for _, m := range list {
-		max[m.ID] = m.Version
+		max[m.Path] = m.Version
 	}
 
 	// Compute postorder, cache requirements.
@@ -247,7 +247,7 @@ func Req(mainModule module.Version, base []string, reqs Reqs) ([]module.Version,
 		if haveBase[path] {
 			continue
 		}
-		m := module.Version{ID: path, Version: max[path]}
+		m := module.Version{Path: path, Version: max[path]}
 		min = append(min, m)
 		walk(m)
 		haveBase[path] = true
@@ -255,7 +255,7 @@ func Req(mainModule module.Version, base []string, reqs Reqs) ([]module.Version,
 	// Now the reverse postorder to bring in anything else.
 	for i := len(postorder) - 1; i >= 0; i-- {
 		m := postorder[i]
-		if max[m.ID] != m.Version {
+		if max[m.Path] != m.Version {
 			// Older version.
 			continue
 		}
@@ -265,7 +265,7 @@ func Req(mainModule module.Version, base []string, reqs Reqs) ([]module.Version,
 		}
 	}
 	sort.Slice(min, func(i, j int) bool {
-		return min[i].ID < min[j].ID
+		return min[i].Path < min[j].Path
 	})
 	return min, nil
 }
@@ -274,7 +274,7 @@ func Req(mainModule module.Version, base []string, reqs Reqs) ([]module.Version,
 // in which every module is upgraded to its latest version.
 func UpgradeAll(target module.Version, reqs UpgradeReqs) ([]module.Version, error) {
 	return buildList([]module.Version{target}, reqs, func(m module.Version) (module.Version, error) {
-		if m.ID == target.ID {
+		if m.Path == target.Path {
 			return target, nil
 		}
 
@@ -292,25 +292,25 @@ func Upgrade(target module.Version, reqs UpgradeReqs, upgrade ...module.Version)
 
 	pathInList := make(map[string]bool, len(list))
 	for _, m := range list {
-		pathInList[m.ID] = true
+		pathInList[m.Path] = true
 	}
 	list = append([]module.Version(nil), list...)
 
 	upgradeTo := make(map[string]string, len(upgrade))
 	for _, u := range upgrade {
-		if !pathInList[u.ID] {
-			list = append(list, module.Version{ID: u.ID, Version: "none"})
+		if !pathInList[u.Path] {
+			list = append(list, module.Version{Path: u.Path, Version: "none"})
 		}
-		if prev, dup := upgradeTo[u.ID]; dup {
-			upgradeTo[u.ID] = reqs.Max(u.ID, prev, u.Version)
+		if prev, dup := upgradeTo[u.Path]; dup {
+			upgradeTo[u.Path] = reqs.Max(u.Path, prev, u.Version)
 		} else {
-			upgradeTo[u.ID] = u.Version
+			upgradeTo[u.Path] = u.Version
 		}
 	}
 
 	return buildList([]module.Version{target}, &override{target, list, reqs}, func(m module.Version) (module.Version, error) {
-		if v, ok := upgradeTo[m.ID]; ok {
-			return module.Version{ID: m.ID, Version: v}, nil
+		if v, ok := upgradeTo[m.Path]; ok {
+			return module.Version{Path: m.Path, Version: v}, nil
 		}
 		return m, nil
 	})
@@ -339,11 +339,11 @@ func Downgrade(target module.Version, reqs DowngradeReqs, downgrade ...module.Ve
 
 	max := make(map[string]string)
 	for _, r := range list {
-		max[r.ID] = r.Version
+		max[r.Path] = r.Version
 	}
 	for _, d := range downgrade {
-		if v, ok := max[d.ID]; !ok || reqs.Max(d.ID, v, d.Version) != d.Version {
-			max[d.ID] = d.Version
+		if v, ok := max[d.Path]; !ok || reqs.Max(d.Path, v, d.Version) != d.Version {
+			max[d.Path] = d.Version
 		}
 	}
 
@@ -368,7 +368,7 @@ func Downgrade(target module.Version, reqs DowngradeReqs, downgrade ...module.Ve
 			return
 		}
 		added[m] = true
-		if v, ok := max[m.ID]; ok && reqs.Max(m.ID, m.Version, v) != v {
+		if v, ok := max[m.Path]; ok && reqs.Max(m.Path, m.Version, v) != v {
 			// m would upgrade an existing dependency — it is not a strict downgrade,
 			// and because it was already present as a dependency, it could affect the
 			// behavior of other relevant packages.
@@ -419,7 +419,7 @@ List:
 			// included when iterating over prior versions using reqs.Previous.
 			// Insert it into the right place in the iteration.
 			// If v is excluded, p should be returned again by reqs.Previous on the next iteration.
-			if v := max[r.ID]; reqs.Max(r.ID, v, r.Version) != v && reqs.Max(r.ID, p.Version, v) != p.Version {
+			if v := max[r.Path]; reqs.Max(r.Path, v, r.Version) != v && reqs.Max(r.Path, p.Version, v) != p.Version {
 				p.Version = v
 			}
 			if p.Version == "none" {
@@ -456,13 +456,13 @@ List:
 	}
 	actualVersion := make(map[string]string, len(actual))
 	for _, m := range actual {
-		actualVersion[m.ID] = m.Version
+		actualVersion[m.Path] = m.Version
 	}
 
 	downgraded = downgraded[:0]
 	for _, m := range list {
-		if v, ok := actualVersion[m.ID]; ok {
-			downgraded = append(downgraded, module.Version{ID: m.ID, Version: v})
+		if v, ok := actualVersion[m.Path]; ok {
+			downgraded = append(downgraded, module.Version{Path: m.Path, Version: v})
 		}
 	}
 

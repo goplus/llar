@@ -458,7 +458,7 @@ func Test(t *testing.T) {
 		}
 	}
 	m := func(s string) module.Version {
-		return module.Version{ID: s[:1], Version: s[1:]}
+		return module.Version{Path: s[:1], Version: s[1:]}
 	}
 	ms := func(list []string) []module.Version {
 		var mlist []module.Version
@@ -603,12 +603,12 @@ func (r reqsMap) Max(_, v1, v2 string) string {
 func (r reqsMap) Upgrade(m module.Version) (module.Version, error) {
 	u := module.Version{Version: "none"}
 	for k := range r {
-		if k.ID == m.ID && r.Max(k.ID, u.Version, k.Version) == k.Version && !strings.HasSuffix(k.Version, ".hidden") {
+		if k.Path == m.Path && r.Max(k.Path, u.Version, k.Version) == k.Version && !strings.HasSuffix(k.Version, ".hidden") {
 			u = k
 		}
 	}
-	if u.ID == "" {
-		return module.Version{}, fmt.Errorf("missing module: %v", module.Version{ID: m.ID})
+	if u.Path == "" {
+		return module.Version{}, fmt.Errorf("missing module: %v", module.Version{Path: m.Path})
 	}
 	return u, nil
 }
@@ -616,12 +616,12 @@ func (r reqsMap) Upgrade(m module.Version) (module.Version, error) {
 func (r reqsMap) Previous(m module.Version) (module.Version, error) {
 	var p module.Version
 	for k := range r {
-		if k.ID == m.ID && p.Version < k.Version && k.Version < m.Version && !strings.HasSuffix(k.Version, ".hidden") {
+		if k.Path == m.Path && p.Version < k.Version && k.Version < m.Version && !strings.HasSuffix(k.Version, ".hidden") {
 			p = k
 		}
 	}
-	if p.ID == "" {
-		return module.Version{ID: m.ID, Version: "none"}, nil
+	if p.Path == "" {
+		return module.Version{Path: m.Path, Version: "none"}, nil
 	}
 	return p, nil
 }

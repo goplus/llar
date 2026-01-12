@@ -180,32 +180,32 @@ func TestLoadComparator_WithRealTestData(t *testing.T) {
 	}{
 		{
 			name: "v1 < v2",
-			v1:   module.Version{ID: "test", Version: "v1.0.0"},
-			v2:   module.Version{ID: "test", Version: "v2.0.0"},
+			v1:   module.Version{Path: "test", Version: "v1.0.0"},
+			v2:   module.Version{Path: "test", Version: "v2.0.0"},
 			want: -1,
 		},
 		{
 			name: "v1 > v2",
-			v1:   module.Version{ID: "test", Version: "v2.0.0"},
-			v2:   module.Version{ID: "test", Version: "v1.0.0"},
+			v1:   module.Version{Path: "test", Version: "v2.0.0"},
+			v2:   module.Version{Path: "test", Version: "v1.0.0"},
 			want: 1,
 		},
 		{
 			name: "v1 == v2",
-			v1:   module.Version{ID: "test", Version: "v1.0.0"},
-			v2:   module.Version{ID: "test", Version: "v1.0.0"},
+			v1:   module.Version{Path: "test", Version: "v1.0.0"},
+			v2:   module.Version{Path: "test", Version: "v1.0.0"},
 			want: 0,
 		},
 		{
 			name: "patch version comparison",
-			v1:   module.Version{ID: "test", Version: "v1.0.1"},
-			v2:   module.Version{ID: "test", Version: "v1.0.2"},
+			v1:   module.Version{Path: "test", Version: "v1.0.1"},
+			v2:   module.Version{Path: "test", Version: "v1.0.2"},
 			want: -1,
 		},
 		{
 			name: "minor version comparison",
-			v1:   module.Version{ID: "test", Version: "v1.2.0"},
-			v2:   module.Version{ID: "test", Version: "v1.1.0"},
+			v1:   module.Version{Path: "test", Version: "v1.2.0"},
+			v2:   module.Version{Path: "test", Version: "v1.1.0"},
 			want: 1,
 		},
 	}

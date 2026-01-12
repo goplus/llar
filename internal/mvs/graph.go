@@ -39,8 +39,8 @@ func NewGraph(cmp func(p, v1, v2 string) int, roots []module.Version) *Graph {
 
 	for _, m := range roots {
 		g.isRoot[m] = true
-		if g.cmp(m.ID, g.Selected(m.ID), m.Version) < 0 {
-			g.selected[m.ID] = m.Version
+		if g.cmp(m.Path, g.Selected(m.Path), m.Version) < 0 {
+			g.selected[m.Path] = m.Version
 		}
 	}
 
@@ -78,8 +78,8 @@ func (g *Graph) Require(m module.Version, reqs []module.Version) {
 			g.isRoot[dep] = false
 		}
 
-		if g.cmp(dep.ID, g.Selected(dep.ID), dep.Version) < 0 {
-			g.selected[dep.ID] = dep.Version
+		if g.cmp(dep.Path, g.Selected(dep.Path), dep.Version) < 0 {
+			g.selected[dep.Path] = dep.Version
 		}
 	}
 }
@@ -116,7 +116,7 @@ func (g *Graph) BuildList() []module.Version {
 
 	var list []module.Version
 	for _, r := range g.roots {
-		if seenRoot[r.ID] {
+		if seenRoot[r.Path] {
 			// Multiple copies of the same root, with the same or different versions,
 			// are a bit of a degenerate case: we will take the transitive
 			// requirements of both roots into account, but only the higher one can
@@ -126,16 +126,16 @@ func (g *Graph) BuildList() []module.Version {
 			continue
 		}
 
-		if v := g.Selected(r.ID); v != "none" {
-			list = append(list, module.Version{ID: r.ID, Version: v})
+		if v := g.Selected(r.Path); v != "none" {
+			list = append(list, module.Version{Path: r.Path, Version: v})
 		}
-		seenRoot[r.ID] = true
+		seenRoot[r.Path] = true
 	}
 	uniqueRoots := list
 
 	for path, version := range g.selected {
 		if !seenRoot[path] {
-			list = append(list, module.Version{ID: path, Version: version})
+			list = append(list, module.Version{Path: path, Version: version})
 		}
 	}
 	sortWith(g.cmp, list[len(uniqueRoots):])
@@ -195,7 +195,7 @@ func (g *Graph) FindPath(f func(module.Version) bool) []module.Version {
 			path := []module.Version{m}
 			for {
 				m = firstRequires[m]
-				if m.ID == "" {
+				if m.Path == "" {
 					break
 				}
 				path = append(path, m)

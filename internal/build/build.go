@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,9 +32,10 @@ func NewBuilder(matrx classfile.Matrix) *Builder {
 }
 
 func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets []*modules.Module) ([]Result, error) {
-	buildResults := make(map[module.Version]*classfile.BuildResult)
+	buildResults := make(map[module.Version]classfile.BuildResult)
 
 	build := func(target *modules.Module) (Result, error) {
+		// modID/.build/1.2.11/x86
 		sourceDir := filepath.Join(target.Dir, ".source")
 		outputDir := filepath.Join(target.Dir, ".build", target.Version, b.matrix.String())
 		cacheFilePath := filepath.Join(outputDir, cacheFile)
@@ -43,12 +45,6 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 			return Result{}, err
 		}
 
-		proj := &classfile.Project{
-			Deps:         moduleVersionsOf(target.Deps),
-			OutputDir:    outputDir, // Build output goes to .build/{version}/{matrix}
-			BuildResults: buildResults,
-			Matrix:       b.matrix,
-		}
 		if target.OnBuild == nil {
 			return Result{}, fmt.Errorf("failed to build %s: no onBuild", target.ID)
 		}
@@ -69,21 +65,30 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 
 		// Double-check cache after acquiring lock (another process may have built it)
 		if cache, err := loadBuildCache(cacheFilePath); err == nil {
-			buildResults[module.Version{target.ID, target.Version}] = &cache.BuildResult
+			buildResults[module.Version{target.ID, target.Version}] = cache.BuildResult
 			return Result{OutputDir: cache.BuildResult.OutputDir}, nil
 		}
 		if err := os.Chdir(sourceDir); err != nil {
 			return Result{}, err
 		}
-		results := &classfile.BuildResult{
-			OutputDir: outputDir,
+
+		var results classfile.BuildResult
+
+		ctx := &classfile.Context{
+			Matrix:       b.matrix,
+			BuildResults: buildResults,
 		}
-		if err := target.OnBuild(proj, results); err != nil {
+		proj := &classfile.Project{
+			Deps:   moduleVersionsOf(target.Deps),
+			FileFS: repo.At(target.Version, sourceDir).(fs.ReadFileFS),
+		}
+
+		if err := target.OnBuild(ctx, proj, &results); err != nil {
 			return Result{}, err
 		}
 		// Save build cache
 		cache := buildCache{
-			BuildResult: *results,
+			BuildResult: results,
 			BuildTime:   time.Now(),
 		}
 		if err := saveBuildCache(cacheFilePath, &cache); err != nil {
@@ -113,7 +118,7 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 	output := []Result{{}}
 
 	for _, target := range targets {
-		if target.ID == mainModule.ID && target.Version == mainModule.Version {
+		if target.ID == mainModule.Path && target.Version == mainModule.Version {
 			mainTarget = target
 			continue // skip main for now
 		}

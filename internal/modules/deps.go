@@ -21,12 +21,12 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 	var deps classfile.ModuleDeps
 
 	// TODO(MeteorsLiu): Support different code host sites.
-	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mainMod.ID))
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mainMod.Path))
 	if err != nil {
 		return nil, err
 	}
 
-	moduleDir, err := moduleDirOf(mainMod.ID)
+	moduleDir, err := moduleDirOf(mainMod.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 		}
 
 		vers = append(vers, module.Version{
-			ID:      dep.ModuleID,
+			Path:      dep.ModuleID,
 			Version: dep.Version,
 		})
 	}
@@ -77,7 +77,7 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 	for _, dep := range current {
 		if dep.Version != "" {
 			vers = append(vers, module.Version{
-				ID:      dep.ModuleID,
+				Path:      dep.ModuleID,
 				Version: dep.Version,
 			})
 		}

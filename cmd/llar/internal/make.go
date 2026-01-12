@@ -43,7 +43,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// Load packages using modload
-	modules, err := modules.Load(ctx, module.Version{ID: modID, Version: version}, modules.Options{
+	modules, err := modules.Load(ctx, module.Version{Path: modID, Version: version}, modules.Options{
 		FormulaRepo: formulaRepo,
 	})
 	if err != nil {
@@ -82,7 +82,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		}()
 	}
 
-	mainModule := module.Version{ID: modID, Version: version}
+	mainModule := module.Version{Path: modID, Version: version}
 	results, err := build.NewBuilder(matrix).Build(ctx, mainModule, modules)
 	if err != nil {
 		return fmt.Errorf("failed to build %s@%s: %w", modID, version, err)

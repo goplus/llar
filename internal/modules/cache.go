@@ -102,7 +102,7 @@ func (m *classfileCache) comparatorOf(modId string) (func(v1, v2 module.Version)
 // formulaOf returns the formula for the specified module version.
 // It finds the appropriate formula file based on version and caches the result.
 func (m *classfileCache) formulaOf(mod module.Version) (*formula.Formula, error) {
-	comparator, err := m.comparatorOf(mod.ID)
+	comparator, err := m.comparatorOf(mod.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (m *classfileCache) formulaOf(mod module.Version) (*formula.Formula, error)
 	if err != nil {
 		return nil, err
 	}
-	cacheKey := module.Version{ID: mod.ID, Version: maxFromVer}
+	cacheKey := module.Version{Path: mod.Path, Version: maxFromVer}
 	f, ok := m.formulas[cacheKey]
 	if ok {
 		return f, nil
@@ -126,7 +126,7 @@ func (m *classfileCache) formulaOf(mod module.Version) (*formula.Formula, error)
 // findMaxFromVer finds the formula file with the highest FromVer that is <= the target version.
 // It searches through all searchPaths in order, returning the first match.
 func (m *classfileCache) findMaxFromVer(mod module.Version, compare func(v1, v2 module.Version) int) (maxFromVer, formulaPath string, err error) {
-	moduleDir, err := moduleDirOf(mod.ID)
+	moduleDir, err := moduleDirOf(mod.Path)
 	if err != nil {
 		return "", "", err
 	}
@@ -149,12 +149,12 @@ func (m *classfileCache) findMaxFromVer(mod module.Version, compare func(v1, v2 
 			if err != nil {
 				return err
 			}
-			fromVerMod := module.Version{mod.ID, fromVer}
+			fromVerMod := module.Version{mod.Path, fromVer}
 
 			if compare(fromVerMod, mod) > 0 {
 				return nil
 			}
-			if maxFromVer == "" || compare(fromVerMod, module.Version{mod.ID, maxFromVer}) > 0 {
+			if maxFromVer == "" || compare(fromVerMod, module.Version{mod.Path, maxFromVer}) > 0 {
 				maxFromVer = fromVer
 				formulaPath = path
 			}
@@ -171,5 +171,5 @@ func (m *classfileCache) findMaxFromVer(mod module.Version, compare func(v1, v2 
 		}
 	}
 
-	return "", "", fmt.Errorf("failed to load formula: no formula found for %s", mod.ID)
+	return "", "", fmt.Errorf("failed to load formula: no formula found for %s", mod.Path)
 }

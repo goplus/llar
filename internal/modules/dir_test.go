@@ -39,7 +39,7 @@ func TestModuleDirOf(t *testing.T) {
 			}
 
 			// Verify the path contains the escaped module ID
-			escapedModId, _ := module.EscapeID(tt.modId)
+			escapedModId, _ := module.EscapePath(tt.modId)
 			if !strings.HasSuffix(dir, escapedModId) {
 				t.Errorf("moduleDirOf(%q) = %q, should contain escaped mod ID %q", tt.modId, dir, escapedModId)
 			}
@@ -49,7 +49,7 @@ func TestModuleDirOf(t *testing.T) {
 
 func TestSourceCacheDirOf(t *testing.T) {
 	// Skip if FormulaDir is not configured
-	mod := module.Version{ID: "test/pkg", Version: "v1.0.0"}
+	mod := module.Version{Path: "test/pkg", Version: "v1.0.0"}
 
 	dir, err := sourceCacheDirOf(mod)
 	if err != nil {
@@ -79,7 +79,7 @@ func TestSourceCacheDirOf(t *testing.T) {
 }
 
 func TestSourceCacheDirOf_CreatesDirectory(t *testing.T) {
-	mod := module.Version{ID: "test/newpkg", Version: "v2.0.0"}
+	mod := module.Version{Path: "test/newpkg", Version: "v2.0.0"}
 
 	dir, err := sourceCacheDirOf(mod)
 	if err != nil {
@@ -96,8 +96,8 @@ func TestSourceCacheDirOf_CreatesDirectory(t *testing.T) {
 }
 
 func TestSourceCacheDirOf_DifferentVersions(t *testing.T) {
-	modV1 := module.Version{ID: "test/multipkg", Version: "v1.0.0"}
-	modV2 := module.Version{ID: "test/multipkg", Version: "v2.0.0"}
+	modV1 := module.Version{Path: "test/multipkg", Version: "v1.0.0"}
+	modV2 := module.Version{Path: "test/multipkg", Version: "v2.0.0"}
 
 	dirV1, err := sourceCacheDirOf(modV1)
 	if err != nil {

@@ -21,7 +21,6 @@ func init() {
 			"github.com/qiniu/x/gsh":                   "gsh",
 			"io/fs":                                    "fs",
 			"os":                                       "os",
-			"path/filepath":                            "filepath",
 			"runtime":                                  "runtime",
 			"sort":                                     "sort",
 			"strings":                                  "strings",
@@ -29,6 +28,7 @@ func init() {
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{
 			"BuildResult": reflect.TypeOf((*q.BuildResult)(nil)).Elem(),
+			"Context":     reflect.TypeOf((*q.Context)(nil)).Elem(),
 			"Matrix":      reflect.TypeOf((*q.Matrix)(nil)).Elem(),
 			"ModuleDeps":  reflect.TypeOf((*q.ModuleDeps)(nil)).Elem(),
 			"ModuleF":     reflect.TypeOf((*q.ModuleF)(nil)).Elem(),

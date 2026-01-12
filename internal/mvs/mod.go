@@ -16,8 +16,8 @@ func sortWith(cmp func(p string, v1, v2 string) int, list []module.Version) {
 	sort.Slice(list, func(i, j int) bool {
 		mi := list[i]
 		mj := list[j]
-		if mi.ID != mj.ID {
-			return mi.ID < mj.ID
+		if mi.Path != mj.Path {
+			return mi.Path < mj.Path
 		}
 		vi := mi.Version
 		vj := mj.Version
@@ -29,7 +29,7 @@ func sortWith(cmp func(p string, v1, v2 string) int, list []module.Version) {
 			vj, fj = vj[:k], vj[k:]
 		}
 		if vi != vj {
-			return cmp(mi.ID, mi.Version, mj.Version) < 0
+			return cmp(mi.Path, mi.Version, mj.Version) < 0
 		}
 		return fi < fj
 	})

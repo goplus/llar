@@ -13,7 +13,7 @@ func moduleDirOf(modId string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	escapedModId, err := module.EscapeID(modId)
+	escapedModId, err := module.EscapePath(modId)
 	if err != nil {
 		return "", err
 	}
@@ -26,7 +26,7 @@ func moduleDirOf(modId string) (string, error) {
 }
 
 func sourceCacheDirOf(mod module.Version) (string, error) {
-	moduleDir, err := moduleDirOf(mod.ID)
+	moduleDir, err := moduleDirOf(mod.Path)
 	if err != nil {
 		return "", err
 	}

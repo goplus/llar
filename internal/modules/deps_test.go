@@ -11,7 +11,7 @@ import (
 
 func TestResolveDeps_WithNilOnRequire(t *testing.T) {
 	ctx := context.Background()
-	mod := module.Version{ID: "DaveGamble/cJSON", Version: "1.7.18"}
+	mod := module.Version{Path: "DaveGamble/cJSON", Version: "1.7.18"}
 
 	// Create a formula without OnRequire callback
 	f := &formula.Formula{
@@ -36,7 +36,7 @@ func TestResolveDeps_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	mod := module.Version{ID: "test/module", Version: "1.0.0"}
+	mod := module.Version{Path: "test/module", Version: "1.0.0"}
 	f := &formula.Formula{
 		ModId:   "test/module",
 		FromVer: "1.0.0",
@@ -53,7 +53,7 @@ func TestResolveDeps_CancelledContext(t *testing.T) {
 
 func TestResolveDeps_WithOnRequireCallback(t *testing.T) {
 	ctx := context.Background()
-	mod := module.Version{ID: "test/module", Version: "1.0.0"}
+	mod := module.Version{Path: "test/module", Version: "1.0.0"}
 
 	onRequireCalled := false
 	f := &formula.Formula{

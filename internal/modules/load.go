@@ -67,11 +67,11 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	cache := newClassfileCache(opts.FormulaRepo, opts.LocalDir)
 
 	if main.Version == "" {
-		cmp, err := cache.comparatorOf(main.ID)
+		cmp, err := cache.comparatorOf(main.Path)
 		if err != nil {
 			return nil, err
 		}
-		latest, err := latestVersion(main.ID, cmp)
+		latest, err := latestVersion(main.Path, cmp)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +117,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	reqs := &mvsReqs{
 		roots: mainDeps,
 		isMain: func(v module.Version) bool {
-			return v.ID == main.ID && v.Version == main.Version
+			return v.Path == main.Path && v.Version == main.Version
 		},
 		cmp:    cmp,
 		onLoad: onLoad,
@@ -150,13 +150,13 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 				return nil, err
 			}
 			// TODO(MeteorsLiu): Support custom module dir
-			moduleDir, err := moduleDirOf(mod.ID)
+			moduleDir, err := moduleDirOf(mod.Path)
 			if err != nil {
 				return nil, err
 			}
 			module := &Module{
 				Formula: f,
-				ID:      mod.ID,
+				ID:      mod.Path,
 				Dir:     moduleDir,
 				Version: mod.Version,
 			}
@@ -176,7 +176,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	for _, mod := range modules {
 		var deps []*Module
 
-		if mod.ID == main.ID && mod.Version == main.Version {
+		if mod.ID == main.Path && mod.Version == main.Version {
 			deps = modules[1:]
 		} else {
 			reqs, err := mvs.Req(module.Version{mod.ID, mod.Version}, []string{}, reqs)
@@ -200,7 +200,7 @@ func tidy(main module.Version, reqs *mvsReqs) error {
 	if err != nil {
 		return err
 	}
-	moduleDir, err := moduleDirOf(main.ID)
+	moduleDir, err := moduleDirOf(main.Path)
 	if err != nil {
 		return err
 	}
@@ -212,11 +212,11 @@ func tidy(main module.Version, reqs *mvsReqs) error {
 
 	var newDeps []versions.Dependency
 	for _, dep := range minDeps {
-		if dep.ID == main.ID {
+		if dep.Path == main.Path {
 			continue
 		}
 		newDeps = append(newDeps, versions.Dependency{
-			ModuleID: dep.ID,
+			ModuleID: dep.Path,
 			Version:  dep.Version,
 		})
 	}
