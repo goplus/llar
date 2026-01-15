@@ -7,6 +7,9 @@ package ixgo
 //go:generate qexp -outdir pkg github.com/goplus/llar/pkgs/gnu
 //go:generate qexp -outdir pkg github.com/goplus/llar/pkgs/mod/module
 //go:generate qexp -outdir pkg github.com/qiniu/x/gsh
+//go:generate qexp -outdir pkg github.com/goplus/llar/pkgs/buildsys/cmake
+//go:generate qexp -outdir pkg github.com/goplus/llar/pkgs/buildsys/autotools
+//go:generate qexp -outdir pkg github.com/goplus/llar/pkgs/buildsys
 import (
 	_ "github.com/goplus/ixgo/pkg/archive/tar"
 	_ "github.com/goplus/ixgo/pkg/archive/zip"
@@ -175,6 +178,9 @@ import (
 	// _ "github.com/goplus/ixgo/pkg/testing/slogtest"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/cmp"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/formula"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/buildsys"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/buildsys/autotools"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/buildsys/cmake"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/gnu"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/mod/module"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/pkgs/mod/versions"

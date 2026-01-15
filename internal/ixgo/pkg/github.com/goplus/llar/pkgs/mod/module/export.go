@@ -15,9 +15,7 @@ func init() {
 		Name: "module",
 		Path: "github.com/goplus/llar/pkgs/mod/module",
 		Deps: map[string]string{
-			"fmt":           "fmt",
 			"path/filepath": "filepath",
-			"strings":       "strings",
 		},
 		Interfaces: map[string]reflect.Type{},
 		NamedTypes: map[string]reflect.Type{
@@ -26,8 +24,7 @@ func init() {
 		AliasTypes: map[string]reflect.Type{},
 		Vars:       map[string]reflect.Value{},
 		Funcs: map[string]reflect.Value{
-			"EscapeID": reflect.ValueOf(q.EscapeID),
-			"SplitID":  reflect.ValueOf(q.SplitID),
+			"EscapePath": reflect.ValueOf(q.EscapePath),
 		},
 		TypedConsts:   map[string]ixgo.TypedConst{},
 		UntypedConsts: map[string]ixgo.UntypedConst{},
