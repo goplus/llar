@@ -1,35 +1,22 @@
-import (
-	"bytes"
-	"path/filepath"
-)
 id "pnggroup/libpng"
 
 fromVer "1.0.0"
 
 onRequire (proj, dep) => {
 	// You should use zlib 1.0.4 or later to run this
-	dep.require "madler/zlib", "v1.2.11"
+	dep.require "madler/zlib", "1.2.11"
 }
 
-onBuild (proj, out) => {
+onBuild (ctx, proj, out) => {
+	a := autotools.new(ctx)
 
 	for dep in proj.Deps {
-		proj.use dep
-		echo "use ${dep.ID} ${dep.Version}"
+		a.use dep
 	}
+	a.configure
+	a.build
+	a.install
 
-	capout => {
-		exec "./configure", "--prefix", proj.OutputDir
-		exec "make"
-		exec "make", "install"
-	}
-	echo output
-
-	if lastErr != nil {
-		return lastErr
-	}
-
-	echo proj.OutputDir
-
-	return nil
+	out.Err = lastErr
+	out.Dir = a.outputDir
 }

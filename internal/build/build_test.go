@@ -32,7 +32,7 @@ func TestBuildZlib(t *testing.T) {
 
 	t.Run("zlib", func(t *testing.T) {
 		ctx := context.TODO()
-		mainModule := module.Version{ID: "madler/zlib", Version: "v1.2.11"}
+		mainModule := module.Version{Path: "madler/zlib", Version: "v1.2.11"}
 
 		// Load packages with mock formula repo
 		modules, err := modules.Load(ctx, mainModule, modules.Options{
@@ -79,7 +79,7 @@ func TestBuildZlib(t *testing.T) {
 	})
 	t.Run("libpng", func(t *testing.T) {
 		ctx := context.TODO()
-		mainModule := module.Version{ID: "pnggroup/libpng", Version: "v1.6.53"}
+		mainModule := module.Version{Path: "pnggroup/libpng", Version: "v1.6.53"}
 
 		// Load packages with mock formula repo
 		modules, err := modules.Load(ctx, mainModule, modules.Options{
