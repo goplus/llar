@@ -23,5 +23,21 @@ func init() {
 			},
 		},
 	})
-	xgobuild.RegisterClassFileType("_llar.gox", "ModuleF", nil, "github.com/goplus/llar/formula")
+	xgobuild.RegisterProject(&modfile.Project{
+		Ext:   "_llar.gox",
+		Class: "ModuleF",
+		PkgPaths: []string{
+			"github.com/goplus/llar/formula",
+		},
+		Import: []*modfile.Import{
+			{
+				Name: "cmake",
+				Path: "github.com/goplus/llar/pkgs/buildsys/cmake",
+			},
+			{
+				Name: "autotools",
+				Path: "github.com/goplus/llar/pkgs/buildsys/autotools",
+			},
+		},
+	})
 }

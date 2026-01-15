@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/goplus/llar/internal/env"
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/lockedfile"
 	"github.com/goplus/llar/internal/vcs"
@@ -64,7 +65,11 @@ func (m *classfileCache) lazyDownloadFormula(modId string) error {
 	// 		├── libpng_cmp.gox
 	// 		└── versions.json
 	// so modId is the sub directory of a module
-	return m.formulaRepo.Sync(context.TODO(), "main", modId, moduleDir)
+	formulaDir, err := env.FormulaDir()
+	if err != nil {
+		return err
+	}
+	return m.formulaRepo.Sync(context.TODO(), "main", modId, formulaDir)
 }
 
 // comparatorOf returns a version comparator for the specified module.

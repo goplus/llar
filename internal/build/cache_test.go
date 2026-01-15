@@ -16,7 +16,7 @@ func TestSaveAndLoadBuildCache(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	cache := &buildCache{
 		BuildResult: formula.BuildResult{
-			OutputDir: "/tmp/output",
+			Dir: "/tmp/output",
 		},
 		BuildTime: now,
 	}
@@ -30,8 +30,8 @@ func TestSaveAndLoadBuildCache(t *testing.T) {
 		t.Fatalf("loadBuildCache failed: %v", err)
 	}
 
-	if loaded.BuildResult.OutputDir != cache.BuildResult.OutputDir {
-		t.Errorf("OutputDir mismatch: got %q, want %q", loaded.BuildResult.OutputDir, cache.BuildResult.OutputDir)
+	if loaded.BuildResult.Dir != cache.BuildResult.Dir {
+		t.Errorf("Dir mismatch: got %q, want %q", loaded.BuildResult.Dir, cache.BuildResult.Dir)
 	}
 	if !loaded.BuildTime.Truncate(time.Second).Equal(now) {
 		t.Errorf("BuildTime mismatch: got %v, want %v", loaded.BuildTime, now)

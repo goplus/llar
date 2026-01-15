@@ -28,7 +28,7 @@ type Formula struct {
 	ModId     string
 	FromVer   string
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
-	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult) error
+	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
 }
 
 // FromVerOf extracts the FromVer value from a LLAR formula file by parsing its AST.
@@ -87,7 +87,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		structElem: class,
 		ModId:      valueOf(class, "modID").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
-		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult) error),
+		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}, nil
 }

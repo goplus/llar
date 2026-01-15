@@ -21,7 +21,7 @@ onRequire (proj, deps) => {  # extract deps from this project
     }
 }
 
-onBuild (proj, out) => {  # build this project
+onBuild (ctx, proj, out) => {  # build this project
     ...
 }
 ```

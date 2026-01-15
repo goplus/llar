@@ -46,10 +46,10 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 		}
 
 		if target.OnBuild == nil {
-			return Result{}, fmt.Errorf("failed to build %s: no onBuild", target.ID)
+			return Result{}, fmt.Errorf("failed to build %s: no onBuild", target.Path)
 		}
 		// TODO(MeteorsLiu): Support different code host sites.
-		repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", target.ID))
+		repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", target.Path))
 		if err != nil {
 			return Result{}, err
 		}
@@ -65,8 +65,8 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 
 		// Double-check cache after acquiring lock (another process may have built it)
 		if cache, err := loadBuildCache(cacheFilePath); err == nil {
-			buildResults[module.Version{target.ID, target.Version}] = cache.BuildResult
-			return Result{OutputDir: cache.BuildResult.OutputDir}, nil
+			buildResults[module.Version{target.Path, target.Version}] = cache.BuildResult
+			return Result{OutputDir: cache.BuildResult.Dir}, nil
 		}
 		if err := os.Chdir(sourceDir); err != nil {
 			return Result{}, err
@@ -76,6 +76,7 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 
 		ctx := &classfile.Context{
 			Matrix:       b.matrix,
+			SourceDir:    sourceDir,
 			BuildResults: buildResults,
 		}
 		proj := &classfile.Project{
@@ -83,7 +84,9 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 			FileFS: repo.At(target.Version, sourceDir).(fs.ReadFileFS),
 		}
 
-		if err := target.OnBuild(ctx, proj, &results); err != nil {
+		target.OnBuild(ctx, proj, &results)
+
+		if results.Err != nil {
 			return Result{}, err
 		}
 		// Save build cache
@@ -95,7 +98,7 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 			return Result{}, err
 		}
 
-		buildResults[module.Version{target.ID, target.Version}] = results
+		buildResults[module.Version{target.Path, target.Version}] = results
 		return Result{OutputDir: outputDir}, nil
 	}
 
@@ -118,7 +121,7 @@ func (b *Builder) Build(ctx context.Context, mainModule module.Version, targets 
 	output := []Result{{}}
 
 	for _, target := range targets {
-		if target.ID == mainModule.Path && target.Version == mainModule.Version {
+		if target.Path == mainModule.Path && target.Version == mainModule.Version {
 			mainTarget = target
 			continue // skip main for now
 		}
@@ -151,7 +154,7 @@ func moduleVersionsOf(mod []*modules.Module) []module.Version {
 	var versions []module.Version
 
 	for _, m := range mod {
-		versions = append(versions, module.Version{m.ID, m.Version})
+		versions = append(versions, module.Version{m.Path, m.Version})
 	}
 
 	return versions

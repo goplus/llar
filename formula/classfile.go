@@ -19,7 +19,7 @@ type ModuleF struct {
 	gsh.App
 
 	fOnRequire func(proj *Project, deps *ModuleDeps)
-	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult) error
+	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
 
 	modID      string
 	modFromVer string
@@ -225,11 +225,12 @@ func (p *ModuleF) OnRequire(f func(proj *Project, deps *ModuleDeps)) {
 
 // BuildResult represents the result of building a project.
 type BuildResult struct {
-	OutputDir string
+	Err error
+	Dir string
 }
 
 // OnBuild event is used to instruct the Formula to compile a project.
-func (p *ModuleF) OnBuild(f func(ctx *Context, proj *Project, out *BuildResult) error) {
+func (p *ModuleF) OnBuild(f func(ctx *Context, proj *Project, out *BuildResult)) {
 	p.fOnBuild = f
 }
 

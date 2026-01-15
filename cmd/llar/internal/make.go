@@ -82,10 +82,10 @@ func runMake(cmd *cobra.Command, args []string) error {
 		}()
 	}
 
-	mainModule := module.Version{Path: modID, Version: version}
+	mainModule := module.Version{Path: modules[0].Path, Version: modules[0].Version}
 	results, err := build.NewBuilder(matrix).Build(ctx, mainModule, modules)
 	if err != nil {
-		return fmt.Errorf("failed to build %s@%s: %w", modID, version, err)
+		return fmt.Errorf("failed to build %s@%s: %w", mainModule.Path, mainModule.Version, err)
 	}
 
 	// Restore stdout/stderr before printing pkgconfig info

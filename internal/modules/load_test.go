@@ -34,14 +34,14 @@ func TestOptions_WithValues(t *testing.T) {
 
 func TestModule_Struct(t *testing.T) {
 	mod := &Module{
-		ID:      "owner/repo",
+		Path:    "owner/repo",
 		Dir:     "/path/to/module",
 		Version: "v1.0.0",
 		Deps:    nil,
 	}
 
-	if mod.ID != "owner/repo" {
-		t.Errorf("ID = %q, want %q", mod.ID, "owner/repo")
+	if mod.Path != "owner/repo" {
+		t.Errorf("Path = %q, want %q", mod.Path, "owner/repo")
 	}
 	if mod.Dir != "/path/to/module" {
 		t.Errorf("Dir = %q, want %q", mod.Dir, "/path/to/module")
@@ -55,11 +55,11 @@ func TestModule_Struct(t *testing.T) {
 }
 
 func TestModule_WithDeps(t *testing.T) {
-	dep1 := &Module{ID: "dep/one", Version: "v1.0.0"}
-	dep2 := &Module{ID: "dep/two", Version: "v2.0.0"}
+	dep1 := &Module{Path: "dep/one", Version: "v1.0.0"}
+	dep2 := &Module{Path: "dep/two", Version: "v2.0.0"}
 
 	mod := &Module{
-		ID:      "main/module",
+		Path:    "main/module",
 		Version: "v1.0.0",
 		Deps:    []*Module{dep1, dep2},
 	}
@@ -67,11 +67,11 @@ func TestModule_WithDeps(t *testing.T) {
 	if len(mod.Deps) != 2 {
 		t.Fatalf("expected 2 deps, got %d", len(mod.Deps))
 	}
-	if mod.Deps[0].ID != "dep/one" {
-		t.Errorf("Deps[0].ID = %q, want %q", mod.Deps[0].ID, "dep/one")
+	if mod.Deps[0].Path != "dep/one" {
+		t.Errorf("Deps[0].Path = %q, want %q", mod.Deps[0].Path, "dep/one")
 	}
-	if mod.Deps[1].ID != "dep/two" {
-		t.Errorf("Deps[1].ID = %q, want %q", mod.Deps[1].ID, "dep/two")
+	if mod.Deps[1].Path != "dep/two" {
+		t.Errorf("Deps[1].Path = %q, want %q", mod.Deps[1].Path, "dep/two")
 	}
 }
 

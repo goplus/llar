@@ -19,8 +19,8 @@ import (
 type Module struct {
 	*formula.Formula
 
-	ID      string
 	Dir     string
+	Path    string
 	Version string
 
 	Deps []*Module
@@ -40,7 +40,7 @@ type Options struct {
 
 func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (version string, err error) {
 	// TODO(MeteorsLiu): Support different code host sites
-	repo, err := vcs.NewRepo(fmt.Sprintf("https://github.com/%s", modID))
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modID))
 	if err != nil {
 		return "", err
 	}
@@ -56,7 +56,6 @@ func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (ve
 		// we want the max heap
 		return -comparator(module.Version{modID, a}, module.Version{modID, b})
 	})
-
 	return tags[0], nil
 }
 
@@ -156,7 +155,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 			}
 			module := &Module{
 				Formula: f,
-				ID:      mod.Path,
+				Path:    mod.Path,
 				Dir:     moduleDir,
 				Version: mod.Version,
 			}
@@ -176,10 +175,10 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	for _, mod := range modules {
 		var deps []*Module
 
-		if mod.ID == main.Path && mod.Version == main.Version {
+		if mod.Path == main.Path && mod.Version == main.Version {
 			deps = modules[1:]
 		} else {
-			reqs, err := mvs.Req(module.Version{mod.ID, mod.Version}, []string{}, reqs)
+			reqs, err := mvs.Req(module.Version{mod.Path, mod.Version}, []string{}, reqs)
 			if err != nil {
 				return nil, err
 			}

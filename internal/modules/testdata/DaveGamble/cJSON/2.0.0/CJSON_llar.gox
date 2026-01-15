@@ -6,7 +6,7 @@ onRequire (proj, deps) => {
    echo "hello cjson"
 }
 
-onBuild (proj, out) => {
+onBuild (ctx, proj, out) => {
     echo "hello"
-    return nil
+
 }
