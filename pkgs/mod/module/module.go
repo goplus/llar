@@ -14,6 +14,6 @@ type Version struct {
 
 // EscapePath returns the escaped form of the given module path as a valid
 // file system path. It fails if the module path is invalid.
-func EscapePath(modId string) (escaped string, err error) {
-	return filepath.Localize(modId)
+func EscapePath(path string) (escaped string, err error) {
+	return filepath.Localize(path)
 }
