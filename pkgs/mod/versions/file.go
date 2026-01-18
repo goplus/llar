@@ -6,18 +6,14 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-)
 
-// Dependency represents a single module dependency with its version information.
-type Dependency struct {
-	Path    string `json:"path"`    // Module Path
-	Version string `json:"version"` // Version string of the dependency (e.g., "v1.0.0")
-}
+	"github.com/goplus/llar/pkgs/mod/module"
+)
 
 // Versions represents a module's version file containing its dependencies.
 type Versions struct {
-	Path         string                  `json:"path"` // Module Path
-	Dependencies map[string][]Dependency `json:"deps"` // Map of dependency name to dependency details
+	Path         string                      `json:"path"` // Module Path
+	Dependencies map[string][]module.Version `json:"deps"` // Map of dependency name to dependency details
 }
 
 // Parse reads and parses a version file from either provided data or a file path.

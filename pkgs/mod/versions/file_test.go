@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/goplus/llar/pkgs/mod/module"
 )
 
 func TestParse_WithData(t *testing.T) {
@@ -25,7 +27,7 @@ func TestParse_WithData(t *testing.T) {
 			}`,
 			want: &Versions{
 				Path: "example/module",
-				Dependencies: map[string][]Dependency{
+				Dependencies: map[string][]module.Version{
 					"dep1": {{Path: "dep/one", Version: "v1.0.0"}},
 					"dep2": {{Path: "dep/two", Version: "v2.1.0"}},
 				},
@@ -37,7 +39,7 @@ func TestParse_WithData(t *testing.T) {
 			data: `{"path": "example/module", "deps": {}}`,
 			want: &Versions{
 				Path:         "example/module",
-				Dependencies: map[string][]Dependency{},
+				Dependencies: map[string][]module.Version{},
 			},
 			wantErr: false,
 		},
