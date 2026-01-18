@@ -25,7 +25,7 @@ import (
 type Formula struct {
 	structElem reflect.Value
 
-	ModId     string
+	ModPath   string
 	FromVer   string
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
@@ -85,7 +85,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 
 	return &Formula{
 		structElem: class,
-		ModId:      valueOf(class, "modID").(string),
+		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),

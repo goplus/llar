@@ -38,9 +38,9 @@ type Options struct {
 	FormulaRepo vcs.Repo
 }
 
-func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (version string, err error) {
+func latestVersion(modPath string, comparator func(v1, v2 module.Version) int) (version string, err error) {
 	// TODO(MeteorsLiu): Support different code host sites
-	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modID))
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modPath))
 	if err != nil {
 		return "", err
 	}
@@ -54,7 +54,7 @@ func latestVersion(modID string, comparator func(v1, v2 module.Version) int) (ve
 	}
 	slices.SortFunc(tags, func(a, b string) int {
 		// we want the max heap
-		return -comparator(module.Version{modID, a}, module.Version{modID, b})
+		return -comparator(module.Version{modPath, a}, module.Version{modPath, b})
 	})
 	return tags[0], nil
 }
@@ -215,8 +215,8 @@ func tidy(main module.Version, reqs *mvsReqs) error {
 			continue
 		}
 		newDeps = append(newDeps, versions.Dependency{
-			ModuleID: dep.Path,
-			Version:  dep.Version,
+			Path:    dep.Path,
+			Version: dep.Version,
 		})
 	}
 

@@ -34,7 +34,7 @@ func init() {
 }
 
 func runMake(cmd *cobra.Command, args []string) error {
-	modID, version := parseModuleArg(args[0])
+	modPath, version := parseModuleArg(args[0])
 
 	ctx := context.Background()
 
@@ -43,7 +43,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	// Load packages using modload
-	modules, err := modules.Load(ctx, module.Version{Path: modID, Version: version}, modules.Options{
+	modules, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaRepo: formulaRepo,
 	})
 	if err != nil {
@@ -104,7 +104,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 }
 
 // parseModuleArg parses a module argument in the form "owner/repo@version" or "owner/repo".
-func parseModuleArg(arg string) (modID, version string) {
+func parseModuleArg(arg string) (modPath, version string) {
 	for i := len(arg) - 1; i >= 0; i-- {
 		if arg[i] == '@' {
 			return arg[:i], arg[i+1:]

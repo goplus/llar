@@ -44,10 +44,10 @@ func TestLoad(t *testing.T) {
 		}
 
 		// Test that struct fields are populated
-		if formula.ModId == "" {
-			t.Error("ModId is empty")
+		if formula.ModPath == "" {
+			t.Error("ModPath is empty")
 		}
-		t.Logf("ModId: %s", formula.ModId)
+		t.Logf("ModPath: %s", formula.ModPath)
 
 		if formula.FromVer == "" {
 			t.Error("FromVer is empty")
@@ -135,10 +135,10 @@ func TestLoadFS(t *testing.T) {
 			t.Fatal("LoadFS returned nil formula")
 		}
 
-		if formula.ModId == "" {
-			t.Error("ModId is empty")
+		if formula.ModPath == "" {
+			t.Error("ModPath is empty")
 		}
-		t.Logf("ModId: %s", formula.ModId)
+		t.Logf("ModPath: %s", formula.ModPath)
 
 		if formula.FromVer == "" {
 			t.Error("FromVer is empty")

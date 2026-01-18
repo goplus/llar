@@ -21,7 +21,7 @@ type ModuleF struct {
 	fOnRequire func(proj *Project, deps *ModuleDeps)
 	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
 
-	modID      string
+	modPath    string
 	modFromVer string
 	matrix     Matrix
 }
@@ -190,10 +190,10 @@ func (p *ModuleF) Matrix(m Matrix) {
 	p.matrix = m
 }
 
-// Id sets the module ID that this formula serves.
-// modID should be in the form of "owner/repo".
-func (p *ModuleF) Id(modID string) {
-	p.modID = modID
+// Id sets the module path that this formula serves.
+// path should be in the form of "owner/repo".
+func (p *ModuleF) Id(path string) {
+	p.modPath = path
 }
 
 // FromVer sets the minimum version of the module that this formula serves.
@@ -209,9 +209,9 @@ type ModuleDeps struct {
 }
 
 // Require declares that the module being built depends on the specified
-// module (by its modID and version).
-func (p *ModuleDeps) Require(modID, ver string) {
-	p.Deps = append(p.Deps, versions.Dependency{ModuleID: modID, Version: ver})
+// module (by its path and version).
+func (p *ModuleDeps) Require(path, ver string) {
+	p.Deps = append(p.Deps, versions.Dependency{Path: path, Version: ver})
 }
 
 // OnRequire event is used to retrieve all direct dependencies of a

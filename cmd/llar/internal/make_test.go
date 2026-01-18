@@ -12,7 +12,7 @@ import (
 func TestParseModuleArg(t *testing.T) {
 	tests := []struct {
 		arg         string
-		wantModID   string
+		wantModPath   string
 		wantVersion string
 	}{
 		{"owner/repo@v1.0.0", "owner/repo", "v1.0.0"},
@@ -26,9 +26,9 @@ func TestParseModuleArg(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.arg, func(t *testing.T) {
-			modID, version := parseModuleArg(tt.arg)
-			if modID != tt.wantModID {
-				t.Errorf("parseModuleArg(%q) modID = %q, want %q", tt.arg, modID, tt.wantModID)
+			modPath, version := parseModuleArg(tt.arg)
+			if modPath != tt.wantModPath {
+				t.Errorf("parseModuleArg(%q) modPath = %q, want %q", tt.arg, modPath, tt.wantModPath)
 			}
 			if version != tt.wantVersion {
 				t.Errorf("parseModuleArg(%q) version = %q, want %q", tt.arg, version, tt.wantVersion)

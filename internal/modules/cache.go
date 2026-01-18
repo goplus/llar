@@ -40,8 +40,8 @@ func newClassfileCache(formulaRepo vcs.Repo, localDir string) *classfileCache {
 	}
 }
 
-func (m *classfileCache) lazyDownloadFormula(modId string) error {
-	moduleDir, err := moduleDirOf(modId)
+func (m *classfileCache) lazyDownloadFormula(modPath string) error {
+	moduleDir, err := moduleDirOf(modPath)
 	if err != nil {
 		return err
 	}
@@ -64,24 +64,24 @@ func (m *classfileCache) lazyDownloadFormula(modId string) error {
 	// 		│   └── libpng_llar.gox
 	// 		├── libpng_cmp.gox
 	// 		└── versions.json
-	// so modId is the sub directory of a module
+	// so modPath is the sub directory of a module
 	formulaDir, err := env.FormulaDir()
 	if err != nil {
 		return err
 	}
-	return m.formulaRepo.Sync(context.TODO(), "main", modId, formulaDir)
+	return m.formulaRepo.Sync(context.TODO(), "main", modPath, formulaDir)
 }
 
 // comparatorOf returns a version comparator for the specified module.
 // It caches comparators to avoid reloading them.
-func (m *classfileCache) comparatorOf(modId string) (func(v1, v2 module.Version) int, error) {
-	if comp, ok := m.comparators[modId]; ok {
+func (m *classfileCache) comparatorOf(modPath string) (func(v1, v2 module.Version) int, error) {
+	if comp, ok := m.comparators[modPath]; ok {
 		return comp, nil
 	}
-	if err := m.lazyDownloadFormula(modId); err != nil {
+	if err := m.lazyDownloadFormula(modPath); err != nil {
 		return nil, err
 	}
-	moduleDir, err := moduleDirOf(modId)
+	moduleDir, err := moduleDirOf(modPath)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func (m *classfileCache) comparatorOf(modId string) (func(v1, v2 module.Version)
 			return gnu.Compare(v1.Version, v2.Version)
 		}
 	}
-	m.comparators[modId] = comp
+	m.comparators[modPath] = comp
 	return comp, nil
 }
 

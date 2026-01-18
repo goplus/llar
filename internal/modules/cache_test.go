@@ -119,17 +119,17 @@ func TestClassfileCache_ComparatorOf_WithMock(t *testing.T) {
 		t.Fatalf("failed to copy testdata: %v", err)
 	}
 
-	modId := "github.com/DaveGamble/cJSON"
+	modPath := "github.com/DaveGamble/cJSON"
 
 	// This should use the custom comparator from CJSON_cmp.gox
-	comp, err := cache.comparatorOf(modId)
+	comp, err := cache.comparatorOf(modPath)
 	if err != nil {
 		t.Skipf("comparatorOf failed (env not configured): %v", err)
 	}
 
 	// Test the comparator works
-	v1 := module.Version{Path: modId, Version: "1.0"}
-	v2 := module.Version{Path: modId, Version: "2.0"}
+	v1 := module.Version{Path: modPath, Version: "1.0"}
+	v2 := module.Version{Path: modPath, Version: "2.0"}
 
 	if result := comp(v1, v2); result >= 0 {
 		t.Errorf("comp(1.0, 2.0) = %d, want < 0", result)
@@ -155,22 +155,22 @@ func TestClassfileCache_ComparatorOf_Caching(t *testing.T) {
 		t.Fatalf("failed to copy testdata: %v", err)
 	}
 
-	modId := "github.com/madler/zlib"
+	modPath := "github.com/madler/zlib"
 
-	comp1, err := cache.comparatorOf(modId)
+	comp1, err := cache.comparatorOf(modPath)
 	if err != nil {
 		t.Skipf("comparatorOf failed: %v", err)
 	}
 
 	// Second call should return cached comparator
-	comp2, err := cache.comparatorOf(modId)
+	comp2, err := cache.comparatorOf(modPath)
 	if err != nil {
 		t.Fatalf("second comparatorOf failed: %v", err)
 	}
 
 	// Both should produce same results
-	v1 := module.Version{Path: modId, Version: "1.0"}
-	v2 := module.Version{Path: modId, Version: "2.0"}
+	v1 := module.Version{Path: modPath, Version: "1.0"}
+	v2 := module.Version{Path: modPath, Version: "2.0"}
 
 	if comp1(v1, v2) != comp2(v1, v2) {
 		t.Error("cached comparator produces different results")

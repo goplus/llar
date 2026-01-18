@@ -8,16 +8,16 @@ import (
 	"github.com/goplus/llar/pkgs/mod/module"
 )
 
-func moduleDirOf(modId string) (string, error) {
+func moduleDirOf(modPath string) (string, error) {
 	formulaDir, err := env.FormulaDir()
 	if err != nil {
 		return "", err
 	}
-	escapedModId, err := module.EscapePath(modId)
+	escapedModPath, err := module.EscapePath(modPath)
 	if err != nil {
 		return "", err
 	}
-	moduleDir := filepath.Join(formulaDir, escapedModId)
+	moduleDir := filepath.Join(formulaDir, escapedModPath)
 
 	if err := os.MkdirAll(moduleDir, 0700); err != nil {
 		return "", err

@@ -15,7 +15,7 @@ func TestResolveDeps_WithNilOnRequire(t *testing.T) {
 
 	// Create a formula without OnRequire callback
 	f := &formula.Formula{
-		ModId:     "DaveGamble/cJSON",
+		ModPath:     "DaveGamble/cJSON",
 		FromVer:   "1.0.0",
 		OnRequire: nil,
 	}
@@ -38,7 +38,7 @@ func TestResolveDeps_CancelledContext(t *testing.T) {
 
 	mod := module.Version{Path: "test/module", Version: "1.0.0"}
 	f := &formula.Formula{
-		ModId:   "test/module",
+		ModPath:   "test/module",
 		FromVer: "1.0.0",
 	}
 
@@ -57,7 +57,7 @@ func TestResolveDeps_WithOnRequireCallback(t *testing.T) {
 
 	onRequireCalled := false
 	f := &formula.Formula{
-		ModId:   "test/module",
+		ModPath:   "test/module",
 		FromVer: "1.0.0",
 		OnRequire: func(proj *classfile.Project, deps *classfile.ModuleDeps) {
 			onRequireCalled = true

@@ -9,19 +9,19 @@ import (
 func TestEscapePath(t *testing.T) {
 	tests := []struct {
 		name        string
-		modId       string
+		modPath     string
 		wantEscaped string
 		wantErr     bool
 	}{
 		{
 			name:        "simple path",
-			modId:       "owner/repo",
+			modPath:     "owner/repo",
 			wantEscaped: filepath.Join("owner", "repo"),
 			wantErr:     false,
 		},
 		{
 			name:        "empty string",
-			modId:       "",
+			modPath:     "",
 			wantEscaped: "",
 			wantErr:     true,
 		},
@@ -29,7 +29,7 @@ func TestEscapePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			escaped, err := EscapePath(tt.modId)
+			escaped, err := EscapePath(tt.modPath)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("EscapePath() error = %v, wantErr %v", err, tt.wantErr)
 				return

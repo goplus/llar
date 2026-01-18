@@ -12,26 +12,26 @@ import (
 func TestModuleDirOf(t *testing.T) {
 	tests := []struct {
 		name    string
-		modId   string
+		modPath   string
 		wantErr bool
 	}{
 		{
-			name:    "valid module id",
-			modId:   "owner/repo",
+			name:    "valid module path",
+			modPath:   "owner/repo",
 			wantErr: false,
 		},
 		{
-			name:    "nested module id",
-			modId:   "github.com/owner/repo",
+			name:    "nested module path",
+			modPath:   "github.com/owner/repo",
 			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir, err := moduleDirOf(tt.modId)
+			dir, err := moduleDirOf(tt.modPath)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("moduleDirOf(%q) error = %v, wantErr %v", tt.modId, err, tt.wantErr)
+				t.Errorf("moduleDirOf(%q) error = %v, wantErr %v", tt.modPath, err, tt.wantErr)
 				return
 			}
 			if err != nil {
@@ -39,9 +39,9 @@ func TestModuleDirOf(t *testing.T) {
 			}
 
 			// Verify the path contains the escaped module ID
-			escapedModId, _ := module.EscapePath(tt.modId)
-			if !strings.HasSuffix(dir, escapedModId) {
-				t.Errorf("moduleDirOf(%q) = %q, should contain escaped mod ID %q", tt.modId, dir, escapedModId)
+			escapedModPath, _ := module.EscapePath(tt.modPath)
+			if !strings.HasSuffix(dir, escapedModPath) {
+				t.Errorf("moduleDirOf(%q) = %q, should contain escaped mod path %q", tt.modPath, dir, escapedModPath)
 			}
 		})
 	}

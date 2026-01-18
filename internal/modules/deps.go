@@ -55,7 +55,7 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 		if dep.Version == "" {
 			// if a version of a dep input by onRequire is empty, try our best to resolve it.
 			idx := slices.IndexFunc[[]versions.Dependency](current, func(depInTable versions.Dependency) bool {
-				return depInTable.ModuleID == dep.ModuleID
+				return depInTable.Path == dep.Path
 			})
 			if idx < 0 {
 				// It seems safe to drop deps here, because we resolve deps recursively and finally we will find that dep.
@@ -65,7 +65,7 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 		}
 
 		vers = append(vers, module.Version{
-			Path:      dep.ModuleID,
+			Path:    dep.Path,
 			Version: dep.Version,
 		})
 	}
@@ -77,7 +77,7 @@ func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formu
 	for _, dep := range current {
 		if dep.Version != "" {
 			vers = append(vers, module.Version{
-				Path:      dep.ModuleID,
+				Path:    dep.Path,
 				Version: dep.Version,
 			})
 		}
