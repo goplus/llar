@@ -1,7 +1,7 @@
 package formula
 
 import (
-	"github.com/goplus/llar/pkgs/mod/versions"
+	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/qiniu/x/gsh"
 )
 
@@ -35,13 +35,13 @@ func (p *ModuleF) FromVer(ver string) {
 
 // ModuleDeps represents the dependencies of a module.
 type ModuleDeps struct {
-	Deps []versions.Dependency
+	Deps []module.Version
 }
 
 // Require declares that the module being built depends on the specified
 // module (by its modID and version).
 func (p *ModuleDeps) Require(modID, ver string) {
-	p.Deps = append(p.Deps, versions.Dependency{ModuleID: modID, Version: ver})
+	p.Deps = append(p.Deps, module.Version{Path: modID, Version: ver})
 }
 
 // OnRequire event is used to retrieve all direct dependencies of a

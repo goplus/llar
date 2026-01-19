@@ -3,18 +3,22 @@ on:
   push:
     branches:
       - "**"
+      - "!dependabot/**"
+      - "!xgopilot/**"
   pull_request:
-    branches:
-      - "**"
+    branches: [ "**" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         go:
-          - 1.22.x
-          - 1.23.x
           - 1.24.x
+          - 1.25.x
 
     steps:
       - name: Check out code
