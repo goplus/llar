@@ -4,64 +4,6 @@ import (
 	"testing"
 )
 
-func TestMatrix_String(t *testing.T) {
-	tests := []struct {
-		name   string
-		matrix Matrix
-		want   string
-	}{
-		{
-			name: "single value per key",
-			matrix: Matrix{
-				Require: map[string][]string{
-					"os":   {"linux"},
-					"arch": {"x86_64"},
-					"lang": {"c"},
-				},
-			},
-			want: "x86_64-c-linux", // sorted: arch, lang, os
-		},
-		{
-			name: "with options",
-			matrix: Matrix{
-				Require: map[string][]string{
-					"os":   {"linux"},
-					"arch": {"x86_64"},
-					"lang": {"c"},
-				},
-				Options: map[string][]string{
-					"zlib": {"zlibON"},
-				},
-			},
-			want: "x86_64-c-linux|zlibON",
-		},
-		{
-			name: "only options",
-			matrix: Matrix{
-				Options: map[string][]string{
-					"zlib": {"zlibON"},
-					"ssl":  {"sslON"},
-				},
-			},
-			want: "sslON-zlibON", // sorted: ssl, zlib
-		},
-		{
-			name:   "empty matrix",
-			matrix: Matrix{},
-			want:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.matrix.String()
-			if got != tt.want {
-				t.Errorf("Matrix.String() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMatrix_CombinationCount(t *testing.T) {
 	tests := []struct {
 		name   string

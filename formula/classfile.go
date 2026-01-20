@@ -2,7 +2,6 @@ package formula
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/goplus/llar/pkgs/mod/module"
 	"github.com/qiniu/x/gsh"
@@ -28,45 +27,6 @@ type Matrix struct {
 	Require        map[string][]string
 	Options        map[string][]string
 	DefaultOptions map[string][]string
-}
-
-// String returns the string representation of a single matrix.
-// Keys are sorted alphabetically, values are joined with "-".
-// Require and options are joined with "|".
-func (m *Matrix) String() string {
-	// Helper function to build string for a map (single value per key)
-	buildPart := func(kvs map[string][]string) string {
-		if len(kvs) == 0 {
-			return ""
-		}
-
-		// Sort keys alphabetically
-		keys := make([]string, 0, len(kvs))
-		for k := range kvs {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-
-		// Build result by joining values with "-"
-		parts := make([]string, 0, len(keys))
-		for _, k := range keys {
-			if len(kvs[k]) > 0 {
-				parts = append(parts, kvs[k][0])
-			}
-		}
-		return strings.Join(parts, "-")
-	}
-
-	requirePart := buildPart(m.Require)
-	optionsPart := buildPart(m.Options)
-
-	if requirePart == "" {
-		return optionsPart
-	}
-	if optionsPart == "" {
-		return requirePart
-	}
-	return requirePart + "|" + optionsPart
 }
 
 // Combinations returns all cartesian product combinations of the matrix.
