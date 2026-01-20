@@ -168,7 +168,7 @@ func (p *ModuleF) OnBuild(f func(proj *Project, out *BuildResult)) {
 
 // -----------------------------------------------------------------------------
 
-// Gopt_App_Main is main entry of this classfile.
+// Gopt_ModuleF_Main is main entry of this classfile.
 func Gopt_ModuleF_Main(this interface {
 	app() *gsh.App
 	MainEntry()
