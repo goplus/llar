@@ -4,6 +4,7 @@
 
 # LLAR
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/goplus/llar)](https://goreportcard.com/report/github.com/goplus/llar)
 [![codecov](https://codecov.io/gh/goplus/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/goplus/llar)
 
 LLAR, a cloud-based package management service
