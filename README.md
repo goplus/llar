@@ -4,6 +4,8 @@
 
 # LLAR
 
+[![codecov](https://codecov.io/gh/goplus/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/goplus/llar)
+
 LLAR, a cloud-based package management service
 
 ## LLAR Design
