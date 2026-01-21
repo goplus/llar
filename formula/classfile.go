@@ -1,6 +1,7 @@
 package formula
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/goplus/llar/pkgs/mod/module"
@@ -144,7 +145,7 @@ type ModuleDeps struct {
 
 // Deps returns the collected module dependencies.
 func (p *ModuleDeps) Deps() []module.Version {
-	return p.deps
+	return slices.Clone(p.deps)
 }
 
 // Require declares that the module being built depends on the specified
