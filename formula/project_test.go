@@ -94,7 +94,6 @@ func TestContext_BuildResult(t *testing.T) {
 		t.Fatalf("Context.BuildResult() ok = true, want false")
 	}
 
-	ctx.buildResults = map[module.Version]BuildResult{}
 	result := BuildResult{}
 	result.SetMetadata("metadata")
 

@@ -45,6 +45,9 @@ func (c *Context) BuildResult(mod module.Version) (BuildResult, bool) {
 
 // SetBuildResult stores the build result for the given module.
 func (c *Context) SetBuildResult(mod module.Version, result BuildResult) {
+	if c.buildResults == nil {
+		c.buildResults = make(map[module.Version]BuildResult)
+	}
 	c.buildResults[mod] = result
 }
 
