@@ -27,19 +27,23 @@ type Context struct {
 	buildResults map[module.Version]BuildResult
 }
 
+// CurrentMatrix returns the active build matrix for this context.
 func (c *Context) CurrentMatrix() Matrix {
 	return c.matrix
 }
 
+// SetCurrentMatrix sets the active build matrix for this context.
 func (c *Context) SetCurrentMatrix(m Matrix) {
 	c.matrix = m
 }
 
+// BuildResult returns the stored build result for the module, if any.
 func (c *Context) BuildResult(mod module.Version) (BuildResult, bool) {
 	r, ok := c.buildResults[mod]
 	return r, ok
 }
 
+// SetBuildResult stores the build result for the given module.
 func (c *Context) SetBuildResult(mod module.Version, result BuildResult) {
 	c.buildResults[mod] = result
 }

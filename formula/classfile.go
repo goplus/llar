@@ -142,6 +142,7 @@ type ModuleDeps struct {
 	deps []module.Version
 }
 
+// Deps returns the collected module dependencies.
 func (p *ModuleDeps) Deps() []module.Version {
 	return p.deps
 }
@@ -167,18 +168,22 @@ type BuildResult struct {
 	metadata string // build output metadata, for C/C++ it's the result of pkg-config.
 }
 
+// AddErr records a build error.
 func (b *BuildResult) AddErr(err error) {
 	b.errs = append(b.errs, err)
 }
 
+// Errs returns all errors collected during build.
 func (b *BuildResult) Errs() []error {
 	return b.errs
 }
 
+// Metadata returns the build output metadata.
 func (b *BuildResult) Metadata() string {
 	return b.metadata
 }
 
+// SetMetadata sets the build output metadata.
 func (b *BuildResult) SetMetadata(metadata string) {
 	b.metadata = metadata
 }
