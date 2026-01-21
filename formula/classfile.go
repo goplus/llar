@@ -16,9 +16,9 @@ type ModuleF struct {
 	gsh.App
 
 	fOnRequire func(proj *Project, deps *ModuleDeps)
-	fOnBuild   func(proj *Project, out *BuildResult)
+	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
 
-	modID      string
+	modPath    string
 	modFromVer string
 	matrix     Matrix
 }
@@ -124,10 +124,10 @@ func (p *ModuleF) Matrix(m Matrix) {
 	p.matrix = m
 }
 
-// Id sets the module ID that this formula serves.
-// modID should be in the form of "owner/repo".
-func (p *ModuleF) Id(modID string) {
-	p.modID = modID
+// Id sets the module path that this formula serves.
+// path should be in the form of "owner/repo".
+func (p *ModuleF) Id(path string) {
+	p.modPath = path
 }
 
 // FromVer sets the minimum version of the module that this formula serves.
@@ -139,13 +139,17 @@ func (p *ModuleF) FromVer(ver string) {
 
 // ModuleDeps represents the dependencies of a module.
 type ModuleDeps struct {
-	Deps []module.Version
+	deps []module.Version
+}
+
+func (p *ModuleDeps) Deps() []module.Version {
+	return p.deps
 }
 
 // Require declares that the module being built depends on the specified
-// module (by its modID and version).
-func (p *ModuleDeps) Require(modID, ver string) {
-	p.Deps = append(p.Deps, module.Version{Path: modID, Version: ver})
+// module (by its path and version).
+func (p *ModuleDeps) Require(path, ver string) {
+	p.deps = append(p.deps, module.Version{Path: path, Version: ver})
 }
 
 // OnRequire event is used to retrieve all direct dependencies of a
@@ -159,10 +163,28 @@ func (p *ModuleF) OnRequire(f func(proj *Project, deps *ModuleDeps)) {
 
 // BuildResult represents the result of building a project.
 type BuildResult struct {
+	errs     []error
+	metadata string // build output metadata, for C/C++ it's the result of pkg-config.
+}
+
+func (b *BuildResult) AddErr(err error) {
+	b.errs = append(b.errs, err)
+}
+
+func (b *BuildResult) Errs() []error {
+	return b.errs
+}
+
+func (b *BuildResult) Metadata() string {
+	return b.metadata
+}
+
+func (b *BuildResult) SetMetadata(metadata string) {
+	b.metadata = metadata
 }
 
 // OnBuild event is used to instruct the Formula to compile a project.
-func (p *ModuleF) OnBuild(f func(proj *Project, out *BuildResult)) {
+func (p *ModuleF) OnBuild(f func(ctx *Context, proj *Project, out *BuildResult)) {
 	p.fOnBuild = f
 }
 
