@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/goplus/llar/pkgs/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 func TestParse_WithData(t *testing.T) {

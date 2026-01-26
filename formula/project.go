@@ -3,7 +3,7 @@ package formula
 import (
 	"io/fs"
 
-	"github.com/goplus/llar/pkgs/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 // -----------------------------------------------------------------------------
