@@ -4,7 +4,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/goplus/llar/pkgs/mod/module"
+	"github.com/goplus/llar/mod/module"
 	"github.com/qiniu/x/gsh"
 )
 
