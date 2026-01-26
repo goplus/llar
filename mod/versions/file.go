@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/goplus/llar/pkgs/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 // Versions represents a module's version file containing its dependencies.
