@@ -97,7 +97,7 @@ func TestContext_BuildResult(t *testing.T) {
 	result := BuildResult{}
 	result.SetMetadata("metadata")
 
-	ctx.SetBuildResult(mod, result)
+	ctx.AddBuildResult(mod, result)
 	got, ok := ctx.BuildResult(mod)
 	if !ok {
 		t.Fatalf("Context.BuildResult() ok = false, want true")
