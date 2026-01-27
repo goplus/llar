@@ -1,8 +1,7 @@
-package mvs
-
 // Copyright 2023 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
+package mvs
 
 import (
 	"sort"
@@ -11,7 +10,9 @@ import (
 	"github.com/goplus/llar/mod/module"
 )
 
-// modules and their version ordering.
+// sortWith sorts a list of modules first by module path (ID), then by version.
+// For versions with suffixes separated by "/", the base versions are compared
+// using cmp, and equal base versions are ordered lexicographically by suffix.
 func sortWith(cmp func(p string, v1, v2 string) int, list []module.Version) {
 	sort.Slice(list, func(i, j int) bool {
 		mi := list[i]
