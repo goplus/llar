@@ -3,7 +3,6 @@ package formula
 import (
 	"io/fs"
 	"os"
-	"strings"
 	"testing"
 
 	formulapkg "github.com/goplus/llar/formula"
@@ -84,17 +83,25 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
-	t.Run("ExactParentDir", func(t *testing.T) {
+	t.Run("PathTraversal", func(t *testing.T) {
 		formulaDir, err := Dir()
 		if err != nil {
 			t.Skipf("Could not get formula dir: %v", err)
 		}
-		_, err = Load(formulaDir + "/..")
-		if err == nil {
-			t.Error("Load should return error for parent directory access")
+
+		testCases := []string{
+			formulaDir + "/..",                   // exact ".."
+			formulaDir + "/../foo",               // ../foo
+			formulaDir + "/../../../etc/passwd",  // deep traversal
+			formulaDir + "/foo/../../../etc",     // embedded traversal
+			"/tmp/evil.gox",                      // completely outside
 		}
-		if err != nil && strings.Contains(err.Error(), "disallow non formula dir access") {
-			// Expected error message
+
+		for _, path := range testCases {
+			_, err := Load(path)
+			if err == nil {
+				t.Errorf("Load(%q) should return error for path traversal", path)
+			}
 		}
 	})
 

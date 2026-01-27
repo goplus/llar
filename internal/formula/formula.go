@@ -120,7 +120,7 @@ func Load(path string) (*Formula, error) {
 		return nil, err
 	}
 	relPath, err := filepath.Rel(formulaDir, path)
-	if err != nil || relPath == ".." {
+	if err != nil || strings.HasPrefix(relPath, "..") {
 		if err == nil {
 			return nil, fmt.Errorf("failed to load formula: disallow non formula dir access")
 		}
