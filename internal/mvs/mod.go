@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/goplus/llar/pkgs/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 // modules and their version ordering.

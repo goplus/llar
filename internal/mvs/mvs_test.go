@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/pkgs/mod/module"
+	"github.com/goplus/llar/mod/module"
 )
 
 var tests = `
