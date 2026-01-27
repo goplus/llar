@@ -1,0 +1,11 @@
+id "DaveGamble/cJSON"
+
+fromVer "v1.0.0"
+
+onRequire (proj, deps) => {
+   echo "hello"
+}
+
+onBuild (ctx, proj, out) => {
+    echo "hello"
+}
