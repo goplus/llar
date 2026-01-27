@@ -30,7 +30,7 @@ jobs:
       - name: Download Go modules
         run: go mod download
       - name: Test Go code
-        run: go test -v -race -covermode atomic -coverprofile coverage.out ./...
+        run: go test -v -ldflags="-checklinkname=0" -race -covermode atomic -coverprofile coverage.out ./...
       - name: Upload code coverage
         uses: codecov/codecov-action@v5
         with:
