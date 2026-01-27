@@ -86,7 +86,6 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer interp.UnsafeRelease()
 
 	if err = interp.RunInit(); err != nil {
 		return nil, err
