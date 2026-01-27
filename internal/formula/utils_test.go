@@ -215,6 +215,68 @@ func TestUnexportValueOf(t *testing.T) {
 	}
 }
 
+func TestSetValueNil(t *testing.T) {
+	t.Run("NilValueExportedField", func(t *testing.T) {
+		str := "initial"
+		ts := testStruct{
+			ExportedField: &str,
+		}
+		elem := reflect.ValueOf(&ts).Elem()
+
+		// Set exported field to nil
+		setValue(elem, "ExportedField", nil)
+		if ts.ExportedField != nil {
+			t.Errorf("after setValue(nil), ExportedField = %v, want nil", ts.ExportedField)
+		}
+	})
+
+	t.Run("NilValueUnexportedField", func(t *testing.T) {
+		num := 42
+		ts := testStruct{
+			unexportedField: &num,
+		}
+		elem := reflect.ValueOf(&ts).Elem()
+
+		// Set unexported field to nil
+		setValue(elem, "unexportedField", nil)
+		if ts.unexportedField != nil {
+			t.Errorf("after setValue(nil), unexportedField = %v, want nil", ts.unexportedField)
+		}
+	})
+
+	t.Run("NilValueNonPointerExported", func(t *testing.T) {
+		ts := testStructNonPtr{
+			ExportedField:   "initial",
+			AnotherExported: true,
+		}
+		elem := reflect.ValueOf(&ts).Elem()
+
+		// Set exported non-pointer field to nil (should set to zero value)
+		setValue(elem, "ExportedField", nil)
+		if ts.ExportedField != "" {
+			t.Errorf("after setValue(nil), ExportedField = %v, want empty string", ts.ExportedField)
+		}
+
+		setValue(elem, "AnotherExported", nil)
+		if ts.AnotherExported != false {
+			t.Errorf("after setValue(nil), AnotherExported = %v, want false", ts.AnotherExported)
+		}
+	})
+
+	t.Run("NilValueNonPointerUnexported", func(t *testing.T) {
+		ts := testStructNonPtr{
+			unexportedField: 42,
+		}
+		elem := reflect.ValueOf(&ts).Elem()
+
+		// Set unexported non-pointer field to nil (should set to zero value)
+		setValue(elem, "unexportedField", nil)
+		if ts.unexportedField != 0 {
+			t.Errorf("after setValue(nil), unexportedField = %v, want 0", ts.unexportedField)
+		}
+	})
+}
+
 func TestClassfile(t *testing.T) {
 	t.Run("ixgo", func(t *testing.T) {
 		ctx := ixgo.NewContext(0)
