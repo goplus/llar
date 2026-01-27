@@ -43,4 +43,3 @@ func setValue(elem reflect.Value, name string, value any) {
 	}
 	field.Set(val)
 }
-}
