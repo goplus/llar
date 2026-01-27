@@ -30,23 +30,17 @@ func valueOf(elem reflect.Value, name string) any {
 // It handles both exported and unexported fields, and nil values.
 // For nil values, it creates a zero value of the field's type.
 func setValue(elem reflect.Value, name string, value any) {
+	field := elem.FieldByName(name)
+	if !ast.IsExported(name) {
+		field = unexportValueOf(field)
+	}
+
 	var val reflect.Value
 	if value == nil {
-		// For nil values, we need to create a zero value of the field's type
-		field := elem.FieldByName(name)
-		if ast.IsExported(name) {
-			val = reflect.Zero(field.Type())
-		} else {
-			field = unexportValueOf(field)
-			val = reflect.Zero(field.Type())
-		}
+		val = reflect.Zero(field.Type())
 	} else {
 		val = reflect.ValueOf(value)
 	}
-
-	if ast.IsExported(name) {
-		elem.FieldByName(name).Set(val)
-		return
-	}
-	unexportValueOf(elem.FieldByName(name)).Set(val)
+	field.Set(val)
+}
 }
