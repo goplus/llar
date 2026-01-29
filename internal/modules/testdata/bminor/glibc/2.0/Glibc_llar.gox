@@ -1,0 +1,12 @@
+id "bminor/glibc"
+
+fromVer "2.0"
+
+onRequire (proj, deps) => {
+   echo "hello glibc"
+}
+
+onBuild (proj, out) => {
+    echo "hello"
+    return nil
+}

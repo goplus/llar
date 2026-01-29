@@ -1,0 +1,12 @@
+id "DaveGamble/cJSON"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+   echo "hello cjson"
+}
+
+onBuild (proj, out) => {
+    echo "hello"
+    return nil
+}
