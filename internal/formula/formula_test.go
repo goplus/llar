@@ -6,29 +6,7 @@ import (
 	"testing"
 
 	formulapkg "github.com/goplus/llar/formula"
-	"github.com/goplus/xgo/ast"
-	"github.com/goplus/xgo/parser"
-	"github.com/goplus/xgo/token"
 )
-
-func TestFromVerOf(t *testing.T) {
-	t.Run("ValidFormula", func(t *testing.T) {
-		fromVer, err := FromVerOf("testdata/formula/hello_llar.gox")
-		if err != nil {
-			t.Fatalf("FromVerOf failed: %v", err)
-		}
-		if fromVer != "v1.0.0" {
-			t.Errorf("Expected fromVer 'v1.0.0', got '%s'", fromVer)
-		}
-	})
-
-	t.Run("NonExistentFile", func(t *testing.T) {
-		_, err := FromVerOf("testdata/nonexistent.gox")
-		if err == nil {
-			t.Error("FromVerOf should return error for non-existent file")
-		}
-	})
-}
 
 func TestLoadFS(t *testing.T) {
 	t.Run("ValidFormula", func(t *testing.T) {
@@ -90,11 +68,11 @@ func TestLoad(t *testing.T) {
 		}
 
 		testCases := []string{
-			formulaDir + "/..",                   // exact ".."
-			formulaDir + "/../foo",               // ../foo
-			formulaDir + "/../../../etc/passwd",  // deep traversal
-			formulaDir + "/foo/../../../etc",     // embedded traversal
-			"/tmp/evil.gox",                      // completely outside
+			formulaDir + "/..",                  // exact ".."
+			formulaDir + "/../foo",              // ../foo
+			formulaDir + "/../../../etc/passwd", // deep traversal
+			formulaDir + "/foo/../../../etc",    // embedded traversal
+			"/tmp/evil.gox",                     // completely outside
 		}
 
 		for _, path := range testCases {
@@ -166,96 +144,6 @@ func TestFormula_SetStderr(t *testing.T) {
 	var buf []byte
 	formula.SetStderr(&mockWriter{buf: &buf})
 	formula.SetStderr(nil)
-}
-
-func TestFromVerFrom(t *testing.T) {
-	t.Run("WithFromVer", func(t *testing.T) {
-		testCode := `package main
-func Main() { fromVer("v1.0.0") }
-`
-		fs := token.NewFileSet()
-		astFile, _ := parser.ParseFile(fs, "test.gox", testCode, 0)
-		fromVer, err := fromVerFrom(astFile)
-		if err != nil {
-			t.Fatalf("fromVerFrom failed: %v", err)
-		}
-		if fromVer != "v1.0.0" {
-			t.Errorf("Expected 'v1.0.0', got '%s'", fromVer)
-		}
-	})
-
-	t.Run("WithoutFromVer", func(t *testing.T) {
-		testCode := `package main
-func Main() { println("hello") }
-`
-		fs := token.NewFileSet()
-		astFile, _ := parser.ParseFile(fs, "test.gox", testCode, 0)
-		fromVer, _ := fromVerFrom(astFile)
-		if fromVer != "" {
-			t.Errorf("Expected empty fromVer, got '%s'", fromVer)
-		}
-	})
-}
-
-func TestParseCallArg(t *testing.T) {
-	findCallExpr := func(code string, fnName string) *ast.CallExpr {
-		fs := token.NewFileSet()
-		astFile, _ := parser.ParseFile(fs, "test.gox", code, 0)
-		var callExpr *ast.CallExpr
-		ast.Inspect(astFile, func(n ast.Node) bool {
-			if c, ok := n.(*ast.CallExpr); ok {
-				if ident, ok := c.Fun.(*ast.Ident); ok && ident.Name == fnName {
-					callExpr = c
-					return false
-				}
-			}
-			return true
-		})
-		return callExpr
-	}
-
-	t.Run("ValidArgument", func(t *testing.T) {
-		callExpr := findCallExpr(`package main; func Main() { fromVer("v1.2.3") }`, "fromVer")
-		result, err := parseCallArg(callExpr, "fromVer")
-		if err != nil {
-			t.Fatalf("parseCallArg failed: %v", err)
-		}
-		if result != "v1.2.3" {
-			t.Errorf("Expected 'v1.2.3', got '%s'", result)
-		}
-	})
-
-	t.Run("NoArguments", func(t *testing.T) {
-		callExpr := findCallExpr(`package main; func Main() { fromVer() }`, "fromVer")
-		_, err := parseCallArg(callExpr, "fromVer")
-		if err == nil {
-			t.Error("parseCallArg should return error for no arguments")
-		}
-	})
-
-	t.Run("EmptyString", func(t *testing.T) {
-		callExpr := findCallExpr(`package main; func Main() { fromVer("") }`, "fromVer")
-		_, err := parseCallArg(callExpr, "fromVer")
-		if err == nil {
-			t.Error("parseCallArg should return error for empty string")
-		}
-	})
-
-	t.Run("BacktickEmptyString", func(t *testing.T) {
-		callExpr := findCallExpr("package main; func Main() { fromVer(``) }", "fromVer")
-		_, err := parseCallArg(callExpr, "fromVer")
-		if err == nil {
-			t.Error("parseCallArg should return error for empty backtick string")
-		}
-	})
-
-	t.Run("NonBasicLitArg", func(t *testing.T) {
-		callExpr := findCallExpr(`package main; var v = "x"; func Main() { fromVer(v) }`, "fromVer")
-		result, _ := parseCallArg(callExpr, "fromVer")
-		if result != "" {
-			t.Errorf("Expected empty string for non-BasicLit arg, got '%s'", result)
-		}
-	})
 }
 
 type mockWriter struct {
