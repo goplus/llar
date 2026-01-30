@@ -1,3 +1,7 @@
+// Copyright (c) 2026 The XGo Authors (xgo.dev). All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package ixgo
 
 //go:generate qexp -outdir pkg github.com/goplus/llar/formula

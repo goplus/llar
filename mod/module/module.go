@@ -1,3 +1,7 @@
+// Copyright (c) 2026 The XGo Authors (xgo.dev). All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Package module defines the module.Version type along with support code.
 package module
 
