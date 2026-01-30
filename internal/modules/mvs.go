@@ -44,15 +44,13 @@ func (r *mvsReqs) Max(p string, v1, v2 string) string {
 }
 
 // Upgrade is a no-op, here to implement mvs.Reqs.
-// The upgrade logic for go get -u is in ../modget/get.go.
 func (*mvsReqs) Upgrade(m module.Version) (module.Version, error) {
 	return m, nil
 }
 
 // cmpVersion implements the comparison for versions in the module loader.
 //
-// It is consistent with gover.ModCompare except that as a special case,
-// the version "" is considered higher than all other versions.
+// As a special case, the version "" is considered higher than all other versions.
 // The main module (also known as the target) has no version and must be chosen
 // over other versions of the same module in the module dependency graph.
 func (m *mvsReqs) cmpVersion(p string, v1, v2 string) int {
