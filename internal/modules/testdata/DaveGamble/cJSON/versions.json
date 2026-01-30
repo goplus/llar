@@ -1,0 +1,11 @@
+{
+    "id": "DaveGamble/cJSON",
+    "deps": {
+        "1.7.18": [
+            {
+                "id": "madler/zlib",
+                "version": "1.2.1"
+            }
+        ]
+    }
+}
