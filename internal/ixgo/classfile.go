@@ -14,7 +14,7 @@ func init() {
 		Ext:   "_cmp.gox",
 		Class: "CmpApp",
 		PkgPaths: []string{
-			"github.com/goplus/llar/formula",
+			"github.com/goplus/llar/cmp",
 		},
 		Import: []*modfile.Import{
 			{
