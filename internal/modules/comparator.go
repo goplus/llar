@@ -41,11 +41,11 @@ func loadComparator(path string) (comparator func(v1, v2 module.Version) int, er
 	}
 	structName, _, ok := strings.Cut(filepath.Base(path), "_")
 	if !ok {
-		return nil, fmt.Errorf("failed to load formula: file name is not valid: %s", path)
+		return nil, fmt.Errorf("failed to load: file name is not valid: %s", path)
 	}
 	typ, ok := interp.GetType(structName)
 	if !ok {
-		return nil, fmt.Errorf("failed to load formula: struct name not found: %s", structName)
+		return nil, fmt.Errorf("failed to load: struct name not found: %s", structName)
 	}
 	val := reflect.New(typ)
 	class := val.Elem()
