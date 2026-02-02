@@ -13,11 +13,10 @@ import (
 	"github.com/goplus/llar/mod/module"
 )
 
-// loadComparator loads a version comparator for a module.
-// If a custom comparator (*_cmp.gox) exists, it loads that;
-// otherwise returns a default GNU version comparator.
+// loadComparator loads a version comparator from a .gox file at the given path.
+// Returns an error if the file cannot be loaded or parsed.
 //
-// The returned comparator compares two version strings and returns:
+// The returned comparator compares two module versions and returns:
 //   - a negative value if v1 < v2
 //   - zero if v1 == v2
 //   - a positive value if v1 > v2
