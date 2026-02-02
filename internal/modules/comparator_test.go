@@ -140,7 +140,8 @@ func TestLoadComparator_Fake(t *testing.T) {
 	// Test with non-existent file
 	cmp, err := loadComparator("testdata/fakecomp/fakecomp_cmp.gox")
 	if err != nil {
-		t.Error("loadComparator should return error for non-existent file")
+		t.Error(err)
+		return
 	}
 	if cmp(module.Version{"a", "v1"}, module.Version{"b", "v1"}) != -1 {
 		t.Error("unexpected result")
