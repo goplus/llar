@@ -1,12 +1,14 @@
 package modules
 
 import (
+	"fmt"
 	"go/token"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/goplus/ixgo/xgobuild"
+	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/xgo/ast"
 	"github.com/goplus/xgo/parser"
@@ -405,4 +407,183 @@ func TestParseCallArg_NonStringArg(t *testing.T) {
 	if got != "" {
 		t.Errorf("parseCallArg() = %q, want empty string for non-BasicLit arg", got)
 	}
+}
+
+func TestFormulaOf_Success(t *testing.T) {
+	// Setup: copy testdata to formula.Dir()
+	formulaDir, err := setupTestFormulaDir(t)
+	if err != nil {
+		t.Fatalf("failed to setup formula dir: %v", err)
+	}
+
+	cache := newClassfileCache(formulaDir, nil)
+	mod := module.Version{Path: "github.com/DaveGamble/cJSON", Version: "1.7.18"}
+
+	f, err := cache.formulaOf(mod)
+	if err != nil {
+		t.Fatalf("formulaOf failed: %v", err)
+	}
+	if f == nil {
+		t.Error("formulaOf returned nil formula")
+	}
+}
+
+func TestFormulaOf_Caching(t *testing.T) {
+	// Setup: copy testdata to formula.Dir()
+	formulaDir, err := setupTestFormulaDir(t)
+	if err != nil {
+		t.Fatalf("failed to setup formula dir: %v", err)
+	}
+
+	cache := newClassfileCache(formulaDir, nil)
+	mod := module.Version{Path: "github.com/DaveGamble/cJSON", Version: "1.7.18"}
+
+	// First call - loads from file
+	f1, err := cache.formulaOf(mod)
+	if err != nil {
+		t.Fatalf("first formulaOf failed: %v", err)
+	}
+
+	// Second call - should return cached formula
+	f2, err := cache.formulaOf(mod)
+	if err != nil {
+		t.Fatalf("second formulaOf failed: %v", err)
+	}
+
+	// Both should return the same cached formula instance
+	if f1 != f2 {
+		t.Error("formulaOf did not return cached formula on second call")
+	}
+}
+
+func TestFormulaOf_ComparatorError(t *testing.T) {
+	// Use a cache with a loadRemoteFormula that always fails
+	cache := newClassfileCache("/nonexistent", func(modPath string) error {
+		return fmt.Errorf("mock remote load error")
+	})
+
+	mod := module.Version{Path: "github.com/nonexistent/pkg", Version: "1.0.0"}
+
+	_, err := cache.formulaOf(mod)
+	if err == nil {
+		t.Error("formulaOf should fail when comparatorOf fails")
+	}
+}
+
+func TestFormulaOf_FindMaxFromVerError(t *testing.T) {
+	// Create cache with empty search path (no formulas)
+	tempDir := t.TempDir()
+	cache := newClassfileCache(tempDir, nil)
+
+	mod := module.Version{Path: "github.com/nonexistent/pkg", Version: "1.0.0"}
+
+	_, err := cache.formulaOf(mod)
+	if err == nil {
+		t.Error("formulaOf should fail when no formula found")
+	}
+}
+
+func TestFormulaOf_LoadError(t *testing.T) {
+	// formula.Load() requires files to be under formula.Dir()
+	// Create a valid formula syntax file in formula.Dir() but with invalid classfile structure
+	formulaDir, err := formula.Dir()
+	if err != nil {
+		t.Fatalf("failed to get formula dir: %v", err)
+	}
+
+	// Create formula structure under formula.Dir()
+	destDir := filepath.Join(formulaDir, "invalid", "pkg", "1.0.0")
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		t.Fatalf("failed to create dest dir: %v", err)
+	}
+
+	t.Cleanup(func() {
+		os.RemoveAll(filepath.Join(formulaDir, "invalid"))
+	})
+
+	// Create a formula file with valid DSL syntax but that will fail during Load
+	// (e.g., missing required classfile setup or invalid formula structure)
+	// Using a file that parses but fails at ixgo build stage
+	formulaContent := `id "invalid/pkg"
+fromVer "1.0.0"
+onBuild (ctx, proj, out) => {
+    undefinedFunction()
+}
+`
+	if err := os.WriteFile(filepath.Join(destDir, "Invalid_llar.gox"), []byte(formulaContent), 0644); err != nil {
+		t.Fatalf("failed to write formula: %v", err)
+	}
+
+	cache := newClassfileCache(formulaDir, nil)
+	mod := module.Version{Path: "github.com/invalid/pkg", Version: "1.0.0"}
+
+	_, err = cache.formulaOf(mod)
+	if err == nil {
+		t.Error("formulaOf should fail when formula.Load fails")
+	}
+}
+
+func TestFormulaOf_DifferentVersionsSameFormula(t *testing.T) {
+	// Setup: copy testdata to formula.Dir()
+	formulaDir, err := setupTestFormulaDir(t)
+	if err != nil {
+		t.Fatalf("failed to setup formula dir: %v", err)
+	}
+
+	cache := newClassfileCache(formulaDir, nil)
+
+	// Both versions should use the same formula (1.5.0) since it's the max <= requested
+	mod1 := module.Version{Path: "github.com/DaveGamble/cJSON", Version: "1.7.18"}
+	mod2 := module.Version{Path: "github.com/DaveGamble/cJSON", Version: "1.6.0"}
+
+	f1, err := cache.formulaOf(mod1)
+	if err != nil {
+		t.Fatalf("formulaOf(1.7.18) failed: %v", err)
+	}
+
+	f2, err := cache.formulaOf(mod2)
+	if err != nil {
+		t.Fatalf("formulaOf(1.6.0) failed: %v", err)
+	}
+
+	// Both should return the same cached formula (fromVer 1.5.0)
+	if f1 != f2 {
+		t.Error("different versions mapping to same fromVer should return same cached formula")
+	}
+}
+
+// setupTestFormulaDir copies testdata to formula.Dir() for testing
+func setupTestFormulaDir(t *testing.T) (string, error) {
+	t.Helper()
+
+	formulaDir, err := formula.Dir()
+	if err != nil {
+		return "", err
+	}
+
+	testdataDir, err := filepath.Abs("testdata")
+	if err != nil {
+		return "", err
+	}
+
+	// Copy DaveGamble/cJSON to formula dir
+	srcDir := filepath.Join(testdataDir, "DaveGamble", "cJSON")
+	destDir := filepath.Join(formulaDir, "DaveGamble", "cJSON")
+
+	// Clean up any existing test data
+	os.RemoveAll(destDir)
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", err
+	}
+	if err := os.CopyFS(destDir, os.DirFS(srcDir)); err != nil {
+		return "", err
+	}
+
+	// Register cleanup
+	t.Cleanup(func() {
+		os.RemoveAll(destDir)
+	})
+
+	return formulaDir, nil
 }
