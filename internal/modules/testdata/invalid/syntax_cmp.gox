@@ -1,0 +1,2 @@
+// Invalid Go code that will cause ctx.LoadFile to fail
+func broken {{{ invalid syntax

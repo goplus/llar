@@ -1,0 +1,12 @@
+id "bminor/glibc"
+
+fromVer "2.0"
+
+onRequire (proj, deps) => {
+   echo "hello glibc"
+}
+
+onBuild (ctx, proj, out) => {
+    echo "hello"
+
+}
