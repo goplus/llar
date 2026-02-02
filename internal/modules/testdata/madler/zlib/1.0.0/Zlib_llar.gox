@@ -1,0 +1,12 @@
+id "madler/zlib"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+   echo "hello zlib"
+}
+
+onBuild (ctx, proj, out) => {
+    echo "hello"
+
+}
