@@ -170,6 +170,22 @@ func TestLoadComparator_EmptyDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadComparator_NoUnderscore(t *testing.T) {
+	// Test with filename that has no underscore - cannot extract struct name
+	_, err := loadComparator("testdata/invalid/nounderscore.gox")
+	if err == nil {
+		t.Error("loadComparator should return error for filename without underscore")
+	}
+}
+
+func TestLoadComparator_InvalidSyntax(t *testing.T) {
+	// Test with file containing invalid Go syntax
+	_, err := loadComparator("testdata/invalid/syntax_cmp.gox")
+	if err == nil {
+		t.Error("loadComparator should return error for file with syntax errors")
+	}
+}
+
 func TestLoadComparator_WithRealTestData(t *testing.T) {
 	// Use the real testdata comparator file
 	cmpPath := "testdata/DaveGamble/cJSON/CJSON_cmp.gox"
