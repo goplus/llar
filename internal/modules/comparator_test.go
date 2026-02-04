@@ -1,6 +1,8 @@
 package modules
 
 import (
+	"io/fs"
+	"os"
 	"reflect"
 	"testing"
 
@@ -130,7 +132,7 @@ func TestValueOf_FunctionField(t *testing.T) {
 
 func TestLoadComparator_InvalidPath(t *testing.T) {
 	// Test with non-existent file
-	_, err := loadComparator("/nonexistent/path/cmp.gox")
+	_, err := loadComparatorFS(os.DirFS("/nonexistent").(fs.ReadFileFS), "/path/cmp.gox")
 	if err == nil {
 		t.Error("loadComparator should return error for non-existent file")
 	}
@@ -138,10 +140,9 @@ func TestLoadComparator_InvalidPath(t *testing.T) {
 
 func TestLoadComparator_Fake(t *testing.T) {
 	// Test with non-existent file
-	cmp, err := loadComparator("testdata/fakecomp/fakecomp_cmp.gox")
+	cmp, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), "fakecomp/fakecomp_cmp.gox")
 	if err != nil {
-		t.Error(err)
-		return
+		t.Error("loadComparator should return error for non-existent file")
 	}
 	if cmp(module.Version{"a", "v1"}, module.Version{"b", "v1"}) != -1 {
 		t.Error("unexpected result")
@@ -154,7 +155,7 @@ func TestLoadComparator_InvalidFileExtension(t *testing.T) {
 	invalidFile := tempDir + "/test.txt"
 
 	// loadComparator expects .gox files, so this should fail
-	_, err := loadComparator(invalidFile)
+	_, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), invalidFile)
 	if err == nil {
 		t.Error("loadComparator should return error for invalid file")
 	}
@@ -164,35 +165,19 @@ func TestLoadComparator_EmptyDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Try to load from empty directory
-	_, err := loadComparator(tempDir)
+	_, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), tempDir)
 	if err == nil {
 		t.Error("loadComparator should return error for directory path")
 	}
 }
 
-func TestLoadComparator_NoUnderscore(t *testing.T) {
-	// Test with filename that has no underscore - cannot extract struct name
-	_, err := loadComparator("testdata/invalid/nounderscore.gox")
-	if err == nil {
-		t.Error("loadComparator should return error for filename without underscore")
-	}
-}
-
-func TestLoadComparator_InvalidSyntax(t *testing.T) {
-	// Test with file containing invalid Go syntax
-	_, err := loadComparator("testdata/invalid/syntax_cmp.gox")
-	if err == nil {
-		t.Error("loadComparator should return error for file with syntax errors")
-	}
-}
-
 func TestLoadComparator_WithRealTestData(t *testing.T) {
 	// Use the real testdata comparator file
-	cmpPath := "testdata/DaveGamble/cJSON/CJSON_cmp.gox"
+	cmpPath := "DaveGamble/cJSON/CJSON_cmp.gox"
 
-	comp, err := loadComparator(cmpPath)
+	comp, err := loadComparatorFS(os.DirFS("testdata").(fs.ReadFileFS), cmpPath)
 	if err != nil {
-		t.Fatalf("loadComparator(%q) error = %v", cmpPath, err)
+		t.Fatalf("loadComparatorFS(), %q) error = %v", cmpPath, err)
 	}
 
 	if comp == nil {

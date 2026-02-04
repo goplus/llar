@@ -1,0 +1,334 @@
+package modules
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"slices"
+	"time"
+
+	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/mvs"
+	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/mod/versions"
+
+	classfile "github.com/goplus/llar/formula"
+)
+
+type Module struct {
+	*formula.Formula
+
+	Dir     string
+	Path    string
+	Version string
+
+	Deps []*Module
+}
+
+// Options contains options for LoadPackages.
+type Options struct {
+	// Tidy, if true, computes minimal dependencies using mvs.Req
+	// and updates the versions.json file.
+	Tidy bool
+	// LocalDir specifies the local directory to fallback when formula
+	// is not found in FormulaDir. If empty, defaults to current directory.
+	LocalDir string
+	// FormulaRepo is the vcs.Repo for downloading formulas.
+	FormulaRepo vcs.Repo
+}
+
+func latestVersion(modPath string, comparator func(v1, v2 module.Version) int) (version string, err error) {
+	// TODO(MeteorsLiu): Support different code host sites
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modPath))
+	if err != nil {
+		return "", err
+	}
+
+	tags, err := repo.Tags(context.TODO())
+	if err != nil {
+		return "", err
+	}
+	if len(tags) == 0 {
+		return "", fmt.Errorf("failed to retrieve the latest version: no tags found")
+	}
+	slices.SortFunc(tags, func(a, b string) int {
+		// we want the max heap
+		return -comparator(module.Version{modPath, a}, module.Version{modPath, b})
+	})
+	return tags[0], nil
+}
+
+// LoadPackages loads all packages required by the main module and resolves
+// their dependencies using the MVS algorithm. It returns formulas for all
+// modules in the computed build list.
+func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
+	formulaDir, err := formula.Dir()
+	if err != nil {
+		return nil, err
+	}
+	source := newModuleSource(opts.FormulaRepo.At("", formulaDir), func(modPath string) error {
+		modDir, err := moduleDirOf(main.Path)
+		if err != nil {
+			return err
+		}
+		return opts.FormulaRepo.Sync(context.TODO(), "", main.Path, modDir)
+	})
+
+	mainMod, err := source.module(main.Path)
+	if err != nil {
+		return nil, err
+	}
+	if main.Version == "" {
+		cmp, err := mainMod.comparator()
+		if err != nil {
+			return nil, err
+		}
+		latest, err := latestVersion(main.Path, cmp)
+		if err != nil {
+			return nil, err
+		}
+		main.Version = latest
+	}
+	mainFormula, err := mainMod.at(main.Version)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	mainDeps, err := resolveDeps(ctx, main, mainFormula)
+	if err != nil {
+		return nil, err
+	}
+	cmp := func(p, v1, v2 string) int {
+		// none is an internal version for MVS, which means the smallest
+		if v1 == "none" && v2 != "none" {
+			return -1
+		} else if v1 != "none" && v2 == "none" {
+			return +1
+		} else if v1 == "none" && v2 == "none" {
+			return 0
+		}
+		mod, err := source.module(p)
+		if err != nil {
+			// should not have errors
+			panic(err)
+		}
+		compare, err := mod.comparator()
+		if err != nil {
+			// should not have errors
+			panic(err)
+		}
+		return compare(module.Version{p, v1}, module.Version{p, v2})
+	}
+	onLoad := func(mod module.Version) ([]module.Version, error) {
+		thisMod, err := source.module(mod.Path)
+		if err != nil {
+			return nil, err
+		}
+		f, err := thisMod.at(mod.Version)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+
+		return resolveDeps(ctx, mod, f)
+	}
+
+	reqs := &mvsReqs{
+		roots: mainDeps,
+		isMain: func(v module.Version) bool {
+			return v.Path == main.Path && v.Version == main.Version
+		},
+		cmp:    cmp,
+		onLoad: onLoad,
+	}
+
+	buildList, err := mvs.BuildList([]module.Version{main}, reqs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Tidy: compute minimal dependencies and update versions.json
+	if opts.Tidy {
+		if err := tidy(main, reqs); err != nil {
+			return nil, err
+		}
+	}
+
+	modCache := make(map[module.Version]*Module)
+
+	convertToModules := func(modList []module.Version) ([]*Module, error) {
+		var modules []*Module
+
+		for _, mod := range modList {
+			if cacheMod, ok := modCache[mod]; ok {
+				modules = append(modules, cacheMod)
+				continue
+			}
+			thisMod, err := source.module(mod.Path)
+			if err != nil {
+				return nil, err
+			}
+			f, err := thisMod.at(mod.Version)
+			if err != nil {
+				return nil, err
+			}
+			// TODO(MeteorsLiu): Support custom module dir
+			moduleDir, err := moduleDirOf(mod.Path)
+			if err != nil {
+				return nil, err
+			}
+			module := &Module{
+				Formula: f,
+				Dir:     moduleDir,
+				Path:    mod.Path,
+				Version: mod.Version,
+			}
+			modCache[mod] = module
+			modules = append(modules, module)
+		}
+
+		return modules, nil
+	}
+
+	modules, err := convertToModules(buildList)
+	if err != nil {
+		return nil, err
+	}
+
+	// fill the deps
+	for _, mod := range modules {
+		var deps []*Module
+
+		if mod.Path == main.Path && mod.Version == main.Version {
+			deps = modules[1:]
+		} else {
+			reqs, err := mvs.Req(module.Version{mod.Path, mod.Version}, []string{}, reqs)
+			if err != nil {
+				return nil, err
+			}
+			deps, err = convertToModules(reqs)
+			if err != nil {
+				return nil, err
+			}
+		}
+		mod.Deps = deps
+	}
+
+	return modules, nil
+}
+
+// tidy computes minimal dependencies using mvs.Req and updates versions.json.
+func tidy(main module.Version, reqs *mvsReqs) error {
+	minDeps, err := mvs.Req(main, []string{}, reqs)
+	if err != nil {
+		return err
+	}
+	moduleDir, err := moduleDirOf(main.Path)
+	if err != nil {
+		return err
+	}
+	versionsFile := filepath.Join(moduleDir, "versions.json")
+	v, err := versions.Parse(versionsFile, nil)
+	if err != nil {
+		return err
+	}
+
+	var newDeps []module.Version
+	for _, dep := range minDeps {
+		if dep.Path == main.Path {
+			continue
+		}
+		newDeps = append(newDeps, module.Version{
+			Path:    dep.Path,
+			Version: dep.Version,
+		})
+	}
+
+	v.Dependencies[main.Version] = newDeps
+
+	data, err := json.MarshalIndent(v, "", "\t")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(versionsFile, data, 0644)
+}
+
+// resolveDeps resolves the dependencies for a formula.
+// It first tries to get dependencies from the OnRequire callback,
+// then falls back to parsing versions.json if no dependencies are found.
+func resolveDeps(ctx context.Context, mainMod module.Version, mainFormula *formula.Formula) ([]module.Version, error) {
+	var deps classfile.ModuleDeps
+
+	// TODO(MeteorsLiu): Support different code host sites.
+	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mainMod.Path))
+	if err != nil {
+		return nil, err
+	}
+
+	moduleDir, err := moduleDirOf(mainMod.Path)
+	if err != nil {
+		return nil, err
+	}
+	sourceCacheDir, err := sourceCacheDirOf(mainMod)
+	if err != nil {
+		return nil, err
+	}
+	repoFS := repo.At(mainMod.Version, sourceCacheDir)
+	proj := &classfile.Project{
+		SourceFS: repoFS.(fs.ReadFileFS),
+	}
+	// onRequire is optional
+	if mainFormula.OnRequire != nil {
+		mainFormula.OnRequire(proj, &deps)
+	}
+
+	depTable, err := versions.Parse(filepath.Join(moduleDir, "versions.json"), nil)
+	if err != nil {
+		return nil, err
+	}
+	current := depTable.Dependencies[mainMod.Version]
+
+	var vers []module.Version
+
+	for _, dep := range deps.Deps() {
+		if dep.Version == "" {
+			// if a version of a dep input by onRequire is empty, try our best to resolve it.
+			idx := slices.IndexFunc[[]module.Version](current, func(depInTable module.Version) bool {
+				return depInTable.Path == dep.Path
+			})
+			if idx < 0 {
+				// It seems safe to drop deps here, because we resolve deps recursively and finally we will find that dep.
+				continue
+			}
+			dep.Version = current[idx].Version
+		}
+
+		vers = append(vers, module.Version{
+			Path:    dep.Path,
+			Version: dep.Version,
+		})
+	}
+
+	if len(vers) > 0 {
+		return vers, nil
+	}
+
+	for _, dep := range current {
+		if dep.Version != "" {
+			vers = append(vers, module.Version{
+				Path:    dep.Path,
+				Version: dep.Version,
+			})
+		}
+	}
+
+	return vers, nil
+}
