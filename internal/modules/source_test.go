@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/goplus/ixgo/xgobuild"
@@ -33,10 +34,7 @@ func TestModuleSource_Module(t *testing.T) {
 	source := newModuleSource(fsys, nil)
 
 	// First call should create new formulaModule
-	mod, err := source.module("DaveGamble/cJSON")
-	if err != nil {
-		t.Fatalf("module() failed: %v", err)
-	}
+	mod := source.module("DaveGamble/cJSON")
 	if mod == nil {
 		t.Fatal("module() returned nil")
 	}
@@ -45,10 +43,7 @@ func TestModuleSource_Module(t *testing.T) {
 	}
 
 	// Second call should return cached formulaModule
-	mod2, err := source.module("DaveGamble/cJSON")
-	if err != nil {
-		t.Fatalf("second module() failed: %v", err)
-	}
+	mod2 := source.module("DaveGamble/cJSON")
 	if mod != mod2 {
 		t.Error("module() did not return cached instance")
 	}
@@ -66,21 +61,21 @@ func TestModuleSource_ModuleWithSyncFn(t *testing.T) {
 	}
 
 	source := newModuleSource(fsys, syncFn)
-	_, err := source.module("DaveGamble/cJSON")
-	if err != nil {
-		t.Fatalf("module() failed: %v", err)
-	}
+	mod := source.module("DaveGamble/cJSON")
 
 	if !syncCalled {
 		t.Error("syncFn was not called")
 	}
 
+	// Verify no error stored
+	_, err := mod.comparator()
+	if err != nil {
+		t.Fatalf("comparator() failed: %v", err)
+	}
+
 	// Second call should use cache, not call syncFn again
 	syncCalled = false
-	_, err = source.module("DaveGamble/cJSON")
-	if err != nil {
-		t.Fatalf("second module() failed: %v", err)
-	}
+	_ = source.module("DaveGamble/cJSON")
 	if syncCalled {
 		t.Error("syncFn should not be called for cached module")
 	}
@@ -94,9 +89,66 @@ func TestModuleSource_ModuleSyncError(t *testing.T) {
 	}
 
 	source := newModuleSource(fsys, syncFn)
-	_, err := source.module("DaveGamble/cJSON")
+	mod := source.module("DaveGamble/cJSON")
+
+	// Error should be deferred to comparator() or at()
+	_, err := mod.comparator()
 	if err != expectedErr {
-		t.Errorf("module() error = %v, want %v", err, expectedErr)
+		t.Errorf("comparator() error = %v, want %v", err, expectedErr)
+	}
+
+	_, err = mod.at("1.0.0")
+	if err != expectedErr {
+		t.Errorf("at() error = %v, want %v", err, expectedErr)
+	}
+}
+
+func TestModuleSource_SyncWritePermissionDenied(t *testing.T) {
+	// Create a read-only directory to simulate permission denied
+	tmpDir := t.TempDir()
+	readonlyDir := filepath.Join(tmpDir, "readonly")
+	if err := os.MkdirAll(readonlyDir, 0555); err != nil {
+		t.Fatalf("failed to create readonly dir: %v", err)
+	}
+
+	fsys := os.DirFS(tmpDir)
+	syncFn := func(modPath string) error {
+		// Try to create a file in the readonly directory
+		targetPath := filepath.Join(readonlyDir, "test.txt")
+		_, err := os.Create(targetPath)
+		return err
+	}
+
+	source := newModuleSource(fsys, syncFn)
+	mod := source.module("test/module")
+
+	_, err := mod.comparator()
+	if err == nil {
+		t.Error("comparator() should fail when sync has permission error")
+	}
+	if !os.IsPermission(err) {
+		t.Errorf("expected permission error, got: %v", err)
+	}
+}
+
+func TestModuleSource_SyncModuleNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	fsys := os.DirFS(tmpDir)
+
+	syncFn := func(modPath string) error {
+		// Simulate module not found in remote repository
+		return fs.ErrNotExist
+	}
+
+	source := newModuleSource(fsys, syncFn)
+	mod := source.module("nonexistent/module")
+
+	_, err := mod.at("1.0.0")
+	if err == nil {
+		t.Error("at() should fail when module not found")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("expected fs.ErrNotExist, got: %v", err)
 	}
 }
 
@@ -480,14 +532,8 @@ func TestIntegration_ModuleSourceToFormula(t *testing.T) {
 	fsys := os.DirFS("testdata")
 	source := newModuleSource(fsys, nil)
 
-	// Get module
-	mod, err := source.module("DaveGamble/cJSON")
-	if err != nil {
-		t.Fatalf("module() failed: %v", err)
-	}
-
-	// Get formula
-	f, err := mod.at("1.7.18")
+	// Get formula via chained call
+	f, err := source.module("DaveGamble/cJSON").at("1.7.18")
 	if err != nil {
 		t.Fatalf("at() failed: %v", err)
 	}
@@ -514,13 +560,7 @@ func TestIntegration_MultipleModules(t *testing.T) {
 	}
 
 	for _, m := range modules {
-		mod, err := source.module(m.path)
-		if err != nil {
-			t.Errorf("module(%q) failed: %v", m.path, err)
-			continue
-		}
-
-		f, err := mod.at(m.version)
+		f, err := source.module(m.path).at(m.version)
 		if err != nil {
 			t.Errorf("at(%q) for %q failed: %v", m.version, m.path, err)
 			continue

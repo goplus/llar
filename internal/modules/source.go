@@ -36,20 +36,20 @@ func newModuleSource(fsys fs.FS, syncFn func(modPath string) error) *moduleSourc
 
 // module returns the formulaModule for the given module path.
 // It synchronizes the module from remote if needed and caches the result.
-func (s *moduleSource) module(modPath string) (*formulaModule, error) {
+// Any sync error is stored and returned by subsequent calls to comparator() or at().
+func (s *moduleSource) module(modPath string) *formulaModule {
 	if m, ok := s.modules[modPath]; ok {
-		return m, nil
-	}
-
-	if s.syncFn != nil {
-		if err := s.syncFn(modPath); err != nil {
-			return nil, err
-		}
+		return m
 	}
 
 	m := newFormulaModule(s.fsys, modPath)
+
+	if s.syncFn != nil {
+		m.err = s.syncFn(modPath)
+	}
+
 	s.modules[modPath] = m
-	return m, nil
+	return m
 }
 
 // formulaModule represents a single module's formula collection.
@@ -57,6 +57,7 @@ func (s *moduleSource) module(modPath string) (*formulaModule, error) {
 type formulaModule struct {
 	fsys     fs.FS
 	modPath  string
+	err      error // stores sync error, returned by comparator() or at()
 	cmp      func(v1, v2 module.Version) int
 	formulas map[string]*formula.Formula
 }
@@ -73,6 +74,10 @@ func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
 // comparator returns the version comparator for this module.
 // It loads the comparator lazily and caches the result.
 func (m *formulaModule) comparator() (func(v1, v2 module.Version) int, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+
 	if m.cmp != nil {
 		return m.cmp, nil
 	}
@@ -96,6 +101,10 @@ func (m *formulaModule) comparator() (func(v1, v2 module.Version) int, error) {
 // at returns the formula for the specified version.
 // It finds the appropriate formula based on version matching and caches the result.
 func (m *formulaModule) at(version string) (*formula.Formula, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+
 	cmp, err := m.comparator()
 	if err != nil {
 		return nil, err
