@@ -1,0 +1,229 @@
+// Copyright (c) 2026 The XGo Authors (xgo.dev). All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package repo
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/goplus/llar/internal/vcs"
+)
+
+// mockRepo is a mock implementation of vcs.Repo for testing
+type mockRepo struct {
+	syncFn func(ctx context.Context, ref, path, localDir string) error
+}
+
+func (m *mockRepo) Tags(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockRepo) Latest(ctx context.Context) (string, error) {
+	return "", nil
+}
+
+func (m *mockRepo) At(ref, localDir string) fs.FS {
+	return nil
+}
+
+func (m *mockRepo) Sync(ctx context.Context, ref, path, localDir string) error {
+	if m.syncFn != nil {
+		return m.syncFn(ctx, ref, path, localDir)
+	}
+	return nil
+}
+
+func TestNew(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo := &mockRepo{}
+
+	store := New(tmpDir, repo)
+	if store == nil {
+		t.Fatal("New returned nil")
+	}
+	if store.dir != tmpDir {
+		t.Errorf("dir = %q, want %q", store.dir, tmpDir)
+	}
+}
+
+func TestDefaultDir(t *testing.T) {
+	dir, err := DefaultDir()
+	if err != nil {
+		t.Fatalf("DefaultDir() failed: %v", err)
+	}
+	if dir == "" {
+		t.Error("DefaultDir() returned empty string")
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Errorf("DefaultDir() returned non-existent path: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("DefaultDir() returned non-directory path: %s", dir)
+	}
+}
+
+func TestStore_ModuleFS(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create module directory with a test file
+	modDir := filepath.Join(tmpDir, "DaveGamble", "cJSON")
+	if err := os.MkdirAll(modDir, 0755); err != nil {
+		t.Fatalf("failed to create module dir: %v", err)
+	}
+	testFile := filepath.Join(modDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	syncCalled := false
+	repo := &mockRepo{
+		syncFn: func(ctx context.Context, ref, path, localDir string) error {
+			syncCalled = true
+			if path != "DaveGamble/cJSON" {
+				t.Errorf("syncFn path = %q, want %q", path, "DaveGamble/cJSON")
+			}
+			return nil
+		},
+	}
+
+	store := New(tmpDir, repo)
+	fsys, err := store.ModuleFS(context.Background(), "DaveGamble/cJSON")
+	if err != nil {
+		t.Fatalf("ModuleFS() failed: %v", err)
+	}
+
+	if !syncCalled {
+		t.Error("syncFn was not called")
+	}
+
+	// Verify fs.FS works
+	f, err := fsys.Open("test.txt")
+	if err != nil {
+		t.Fatalf("failed to open file from fs.FS: %v", err)
+	}
+	f.Close()
+}
+
+func TestStore_ModuleFS_SyncError(t *testing.T) {
+	tmpDir := t.TempDir()
+	expectedErr := errors.New("sync failed")
+
+	repo := &mockRepo{
+		syncFn: func(ctx context.Context, ref, path, localDir string) error {
+			return expectedErr
+		},
+	}
+
+	store := New(tmpDir, repo)
+	_, err := store.ModuleFS(context.Background(), "test/module")
+	if err != expectedErr {
+		t.Errorf("ModuleFS() error = %v, want %v", err, expectedErr)
+	}
+}
+
+func TestStore_moduleDirOf(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := New(tmpDir, &mockRepo{})
+
+	tests := []struct {
+		modPath string
+		wantDir string
+	}{
+		{"DaveGamble/cJSON", filepath.Join(tmpDir, "DaveGamble", "cJSON")},
+		{"madler/zlib", filepath.Join(tmpDir, "madler", "zlib")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modPath, func(t *testing.T) {
+			got, err := store.moduleDirOf(tt.modPath)
+			if err != nil {
+				t.Fatalf("moduleDirOf() failed: %v", err)
+			}
+			if got != tt.wantDir {
+				t.Errorf("moduleDirOf() = %q, want %q", got, tt.wantDir)
+			}
+
+			// Verify directory was created
+			info, err := os.Stat(got)
+			if err != nil {
+				t.Errorf("moduleDirOf() directory not created: %v", err)
+			}
+			if !info.IsDir() {
+				t.Errorf("moduleDirOf() path is not a directory")
+			}
+		})
+	}
+}
+
+func TestStore_ModuleFS_RealRepo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real repo test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+
+	// Use real vcs.Repo with llarmvp-formula repository
+	repo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		t.Fatalf("failed to create vcs.Repo: %v", err)
+	}
+
+	store := New(tmpDir, repo)
+
+	// Test syncing madler/zlib module (exists in llarmvp-formula)
+	ctx := context.Background()
+	fsys, err := store.ModuleFS(ctx, "madler/zlib")
+	if err != nil {
+		t.Fatalf("ModuleFS() failed: %v", err)
+	}
+
+	// Verify formula file exists
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		t.Fatalf("failed to read module directory: %v", err)
+	}
+
+	if len(entries) == 0 {
+		t.Error("module directory is empty after sync")
+	}
+
+	// Look for formula files
+	hasFormulaFile := false
+	for _, entry := range entries {
+		t.Logf("found entry: %s", entry.Name())
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".gox" {
+			hasFormulaFile = true
+		}
+	}
+
+	if !hasFormulaFile {
+		// Check subdirectories for formula files
+		for _, entry := range entries {
+			if entry.IsDir() {
+				subEntries, err := fs.ReadDir(fsys, entry.Name())
+				if err != nil {
+					continue
+				}
+				for _, subEntry := range subEntries {
+					t.Logf("found subentry: %s/%s", entry.Name(), subEntry.Name())
+					if filepath.Ext(subEntry.Name()) == ".gox" {
+						hasFormulaFile = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if !hasFormulaFile {
+		t.Error("no formula files (.gox) found in synced module")
+	}
+}
