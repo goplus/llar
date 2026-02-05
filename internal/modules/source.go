@@ -73,6 +73,7 @@ func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
 
 // comparator returns the version comparator for this module.
 // It loads the comparator lazily and caches the result.
+// If the custom comparator cannot be loaded, it falls back to GNU version comparison.
 func (m *formulaModule) comparator() (func(v1, v2 module.Version) int, error) {
 	if m.err != nil {
 		return nil, m.err
