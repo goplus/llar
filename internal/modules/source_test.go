@@ -396,12 +396,12 @@ onBuild (ctx, proj, out) => {
     echo "hello"
 }
 `,
-			wantFromVer: "",
+			wantErr: true,
 		},
 		{
-			name:        "empty source",
-			source:      "",
-			wantFromVer: "",
+			name:    "empty source",
+			source:  "",
+			wantErr: true,
 		},
 	}
 
