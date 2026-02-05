@@ -213,14 +213,15 @@ func parseCallArg(c *ast.CallExpr, fnName string) (string, error) {
 	if len(c.Args) == 0 {
 		return "", fmt.Errorf("failed to parse %s from AST: no argument", fnName)
 	}
-
-	if arg, ok := c.Args[0].(*ast.BasicLit); ok {
-		result := strings.Trim(strings.Trim(arg.Value, `"`), "`")
-		if result == "" {
+	var argResult string
+	switch arg := c.Args[0].(type) {
+	case *ast.BasicLit:
+		argResult = strings.Trim(strings.Trim(arg.Value, `"`), "`")
+		if argResult == "" {
 			return "", fmt.Errorf("failed to parse %s from AST: empty argument", fnName)
 		}
-		return result, nil
+	default:
+		return "", fmt.Errorf("failed to parse %s from AST: argument is not a string literal", fnName)
 	}
-
-	return "", nil
+	return argResult, nil
 }

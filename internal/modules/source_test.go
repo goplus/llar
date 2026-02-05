@@ -519,12 +519,9 @@ func TestParseCallArg_NonStringArg(t *testing.T) {
 		},
 	}
 
-	got, err := parseCallArg(callExpr, "testFunc")
-	if err != nil {
-		t.Errorf("parseCallArg() unexpected error = %v", err)
-	}
-	if got != "" {
-		t.Errorf("parseCallArg() = %q, want empty string for non-BasicLit arg", got)
+	_, err := parseCallArg(callExpr, "testFunc")
+	if err == nil {
+		t.Error("parseCallArg() expected error for non-string argument")
 	}
 }
 
