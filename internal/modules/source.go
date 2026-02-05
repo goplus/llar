@@ -112,6 +112,7 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 	}
 
 	mod := module.Version{Path: m.modPath, Version: version}
+	// TODO(MeteorsLiu): Optimize the max fromVer searching with the trie tree
 	fromVer, formulaPath, err := m.findMaxFromVer(mod, cmp)
 	if err != nil {
 		return nil, err
@@ -205,6 +206,10 @@ func fromVerFrom(formulaAST *ast.File) (string, error) {
 		}
 		return true
 	})
+
+	if fromVer == "" {
+		return "", fmt.Errorf("failed to parse fromVer from AST: cannot match any fromVer expr")
+	}
 
 	return fromVer, err
 }
