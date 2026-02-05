@@ -1,159 +1,22 @@
 package modules
 
 import (
-	"errors"
+	"context"
 	"go/token"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/goplus/ixgo/xgobuild"
+	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/xgo/ast"
 	"github.com/goplus/xgo/parser"
 )
 
-func TestNewModuleSource(t *testing.T) {
-	fsys := os.DirFS("testdata")
-	source := newModuleSource(fsys, nil)
-
-	if source == nil {
-		t.Fatal("newModuleSource returned nil")
-	}
-	if source.fsys != fsys {
-		t.Error("fsys not set correctly")
-	}
-	if source.modules == nil {
-		t.Error("modules map is nil")
-	}
-}
-
-func TestModuleSource_Module(t *testing.T) {
-	fsys := os.DirFS("testdata")
-	source := newModuleSource(fsys, nil)
-
-	// First call should create new formulaModule
-	mod := source.module("DaveGamble/cJSON")
-	if mod == nil {
-		t.Fatal("module() returned nil")
-	}
-	if mod.modPath != "DaveGamble/cJSON" {
-		t.Errorf("modPath = %q, want %q", mod.modPath, "DaveGamble/cJSON")
-	}
-
-	// Second call should return cached formulaModule
-	mod2 := source.module("DaveGamble/cJSON")
-	if mod != mod2 {
-		t.Error("module() did not return cached instance")
-	}
-}
-
-func TestModuleSource_ModuleWithSyncFn(t *testing.T) {
-	fsys := os.DirFS("testdata")
-	syncCalled := false
-	syncFn := func(modPath string) error {
-		syncCalled = true
-		if modPath != "DaveGamble/cJSON" {
-			t.Errorf("syncFn called with %q, want %q", modPath, "DaveGamble/cJSON")
-		}
-		return nil
-	}
-
-	source := newModuleSource(fsys, syncFn)
-	mod := source.module("DaveGamble/cJSON")
-
-	if !syncCalled {
-		t.Error("syncFn was not called")
-	}
-
-	// Verify no error stored
-	_, err := mod.comparator()
-	if err != nil {
-		t.Fatalf("comparator() failed: %v", err)
-	}
-
-	// Second call should use cache, not call syncFn again
-	syncCalled = false
-	_ = source.module("DaveGamble/cJSON")
-	if syncCalled {
-		t.Error("syncFn should not be called for cached module")
-	}
-}
-
-func TestModuleSource_ModuleSyncError(t *testing.T) {
-	fsys := os.DirFS("testdata")
-	expectedErr := errors.New("sync failed")
-	syncFn := func(modPath string) error {
-		return expectedErr
-	}
-
-	source := newModuleSource(fsys, syncFn)
-	mod := source.module("DaveGamble/cJSON")
-
-	// Error should be deferred to comparator() or at()
-	_, err := mod.comparator()
-	if err != expectedErr {
-		t.Errorf("comparator() error = %v, want %v", err, expectedErr)
-	}
-
-	_, err = mod.at("1.0.0")
-	if err != expectedErr {
-		t.Errorf("at() error = %v, want %v", err, expectedErr)
-	}
-}
-
-func TestModuleSource_SyncWritePermissionDenied(t *testing.T) {
-	// Create a read-only directory to simulate permission denied
-	tmpDir := t.TempDir()
-	readonlyDir := filepath.Join(tmpDir, "readonly")
-	if err := os.MkdirAll(readonlyDir, 0555); err != nil {
-		t.Fatalf("failed to create readonly dir: %v", err)
-	}
-
-	fsys := os.DirFS(tmpDir)
-	syncFn := func(modPath string) error {
-		// Try to create a file in the readonly directory
-		targetPath := filepath.Join(readonlyDir, "test.txt")
-		_, err := os.Create(targetPath)
-		return err
-	}
-
-	source := newModuleSource(fsys, syncFn)
-	mod := source.module("test/module")
-
-	_, err := mod.comparator()
-	if err == nil {
-		t.Error("comparator() should fail when sync has permission error")
-	}
-	if !os.IsPermission(err) {
-		t.Errorf("expected permission error, got: %v", err)
-	}
-}
-
-func TestModuleSource_SyncModuleNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	fsys := os.DirFS(tmpDir)
-
-	syncFn := func(modPath string) error {
-		// Simulate module not found in remote repository
-		return fs.ErrNotExist
-	}
-
-	source := newModuleSource(fsys, syncFn)
-	mod := source.module("nonexistent/module")
-
-	_, err := mod.at("1.0.0")
-	if err == nil {
-		t.Error("at() should fail when module not found")
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("expected fs.ErrNotExist, got: %v", err)
-	}
-}
-
 func TestNewFormulaModule(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	if mod == nil {
@@ -171,7 +34,7 @@ func TestNewFormulaModule(t *testing.T) {
 }
 
 func TestFormulaModule_Comparator(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	// First call should load comparator
@@ -208,7 +71,7 @@ func TestFormulaModule_Comparator(t *testing.T) {
 }
 
 func TestFormulaModule_ComparatorDefaultFallback(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/madler/zlib")
 	// madler/zlib has no comparator file, should use default
 	mod := newFormulaModule(fsys, "madler/zlib")
 
@@ -229,7 +92,7 @@ func TestFormulaModule_ComparatorDefaultFallback(t *testing.T) {
 }
 
 func TestFormulaModule_At(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	// Test getting formula for version 1.7.18 (should match fromVer 1.5.0)
@@ -255,7 +118,7 @@ func TestFormulaModule_At(t *testing.T) {
 }
 
 func TestFormulaModule_AtVersionMatching(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	tests := []struct {
@@ -284,7 +147,7 @@ func TestFormulaModule_AtVersionMatching(t *testing.T) {
 }
 
 func TestFormulaModule_AtNoFormula(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	// Version lower than all fromVer should fail
@@ -295,7 +158,7 @@ func TestFormulaModule_AtNoFormula(t *testing.T) {
 }
 
 func TestFormulaModule_AtNonexistentModule(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/nonexistent")
 	mod := newFormulaModule(fsys, "nonexistent/module")
 
 	_, err := mod.at("1.0.0")
@@ -305,7 +168,7 @@ func TestFormulaModule_AtNonexistentModule(t *testing.T) {
 }
 
 func TestFormulaModule_FindMaxFromVer(t *testing.T) {
-	fsys := os.DirFS("testdata")
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	cmp, _ := mod.comparator()
@@ -324,7 +187,7 @@ func TestFormulaModule_FindMaxFromVer(t *testing.T) {
 }
 
 func TestFromVerOf(t *testing.T) {
-	fsys := os.DirFS("testdata").(fs.ReadFileFS)
+	fsys := os.DirFS("testdata/DaveGamble/cJSON").(fs.ReadFileFS)
 
 	tests := []struct {
 		name        string
@@ -334,17 +197,17 @@ func TestFromVerOf(t *testing.T) {
 	}{
 		{
 			name:        "cJSON 1.0.0",
-			path:        "DaveGamble/cJSON/1.0.0/CJSON_llar.gox",
+			path:        "1.0.0/CJSON_llar.gox",
 			wantFromVer: "1.0.0",
 		},
 		{
 			name:        "cJSON 1.5.0",
-			path:        "DaveGamble/cJSON/1.5.0/CJSON_llar.gox",
+			path:        "1.5.0/CJSON_llar.gox",
 			wantFromVer: "1.5.0",
 		},
 		{
 			name:        "cJSON 2.0.0",
-			path:        "DaveGamble/cJSON/2.0.0/CJSON_llar.gox",
+			path:        "2.0.0/CJSON_llar.gox",
 			wantFromVer: "2.0.0",
 		},
 		{
@@ -525,12 +388,12 @@ func TestParseCallArg_NonStringArg(t *testing.T) {
 	}
 }
 
-func TestIntegration_ModuleSourceToFormula(t *testing.T) {
-	fsys := os.DirFS("testdata")
-	source := newModuleSource(fsys, nil)
+func TestIntegration_FormulaModuleToFormula(t *testing.T) {
+	fsys := os.DirFS("testdata/DaveGamble/cJSON")
+	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
-	// Get formula via chained call
-	f, err := source.module("DaveGamble/cJSON").at("1.7.18")
+	// Get formula
+	f, err := mod.at("1.7.18")
 	if err != nil {
 		t.Fatalf("at() failed: %v", err)
 	}
@@ -545,19 +408,20 @@ func TestIntegration_ModuleSourceToFormula(t *testing.T) {
 }
 
 func TestIntegration_MultipleModules(t *testing.T) {
-	fsys := os.DirFS("testdata")
-	source := newModuleSource(fsys, nil)
-
 	modules := []struct {
+		dir     string
 		path    string
 		version string
 	}{
-		{"DaveGamble/cJSON", "1.7.18"},
-		{"madler/zlib", "1.5.0"},
+		{"testdata/DaveGamble/cJSON", "DaveGamble/cJSON", "1.7.18"},
+		{"testdata/madler/zlib", "madler/zlib", "1.5.0"},
 	}
 
 	for _, m := range modules {
-		f, err := source.module(m.path).at(m.version)
+		fsys := os.DirFS(m.dir)
+		mod := newFormulaModule(fsys, m.path)
+
+		f, err := mod.at(m.version)
 		if err != nil {
 			t.Errorf("at(%q) for %q failed: %v", m.version, m.path, err)
 			continue
@@ -567,4 +431,56 @@ func TestIntegration_MultipleModules(t *testing.T) {
 			t.Errorf("at(%q) for %q returned nil", m.version, m.path)
 		}
 	}
+}
+
+func TestIntegration_RealRepo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real repo test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+
+	// Use real vcs.Repo with llarmvp-formula repository
+	vcsRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		t.Fatalf("failed to create vcs.Repo: %v", err)
+	}
+
+	store := repo.New(tmpDir, vcsRepo)
+
+	// Test madler/zlib module
+	ctx := context.Background()
+	fsys, err := store.ModuleFS(ctx, "madler/zlib")
+	if err != nil {
+		t.Fatalf("ModuleFS() failed: %v", err)
+	}
+
+	mod := newFormulaModule(fsys, "madler/zlib")
+
+	// Test comparator (should fall back to GNU version comparison)
+	cmp, err := mod.comparator()
+	if err != nil {
+		t.Fatalf("comparator() failed: %v", err)
+	}
+
+	v1 := module.Version{Path: "madler/zlib", Version: "1.0.0"}
+	v2 := module.Version{Path: "madler/zlib", Version: "2.0.0"}
+	if result := cmp(v1, v2); result >= 0 {
+		t.Errorf("cmp(1.0.0, 2.0.0) = %d, want < 0", result)
+	}
+
+	// Test findMaxFromVer (version matching without loading full formula)
+	target := module.Version{Path: "madler/zlib", Version: "1.3.0"}
+	fromVer, formulaPath, err := mod.findMaxFromVer(target, cmp)
+	if err != nil {
+		t.Fatalf("findMaxFromVer() failed: %v", err)
+	}
+
+	if fromVer == "" {
+		t.Error("fromVer is empty")
+	}
+	if formulaPath == "" {
+		t.Error("formulaPath is empty")
+	}
+	t.Logf("found formula: fromVer=%s, path=%s", fromVer, formulaPath)
 }

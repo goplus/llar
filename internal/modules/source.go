@@ -1,3 +1,7 @@
+// Copyright (c) 2026 The XGo Authors (xgo.dev). All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package modules
 
 import (
@@ -16,53 +20,19 @@ import (
 
 const defaultFormulaSuffix = "_llar.gox"
 
-// moduleSource manages formula repositories and provides access to individual modules.
-// It handles synchronization of remote formulas and caches formulaModule instances.
-type moduleSource struct {
-	fsys    fs.FS
-	syncFn  func(modPath string) error
-	modules map[string]*formulaModule
-}
-
-// newModuleSource creates a new moduleSource with the given filesystem and sync function.
-// The syncFn is called to synchronize formulas from remote before accessing a module.
-func newModuleSource(fsys fs.FS, syncFn func(modPath string) error) *moduleSource {
-	return &moduleSource{
-		fsys:    fsys,
-		syncFn:  syncFn,
-		modules: make(map[string]*formulaModule),
-	}
-}
-
-// module returns the formulaModule for the given module path.
-// It synchronizes the module from remote if needed and caches the result.
-// Any sync error is stored and returned by subsequent calls to comparator() or at().
-func (s *moduleSource) module(modPath string) *formulaModule {
-	if m, ok := s.modules[modPath]; ok {
-		return m
-	}
-
-	m := newFormulaModule(s.fsys, modPath)
-
-	if s.syncFn != nil {
-		m.err = s.syncFn(modPath)
-	}
-
-	s.modules[modPath] = m
-	return m
-}
-
 // formulaModule represents a single module's formula collection.
 // It provides access to the module's version comparator and formulas.
+// The fsys should be rooted at the module's directory within the formula repository.
 type formulaModule struct {
 	fsys     fs.FS
 	modPath  string
-	err      error // stores sync error, returned by comparator() or at()
 	cmp      func(v1, v2 module.Version) int
 	formulas map[string]*formula.Formula
 }
 
-// newFormulaModule creates a new formulaModule for the given module path.
+// newFormulaModule creates a new formulaModule for the given module.
+// The fsys should be rooted at the module's directory (already positioned by the caller).
+// The modPath is used for constructing module.Version in version comparisons.
 func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
 	return &formulaModule{
 		fsys:     fsys,
@@ -75,20 +45,11 @@ func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
 // It loads the comparator lazily and caches the result.
 // If the custom comparator cannot be loaded, it falls back to GNU version comparison.
 func (m *formulaModule) comparator() (func(v1, v2 module.Version) int, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-
 	if m.cmp != nil {
 		return m.cmp, nil
 	}
 
-	modDir, err := module.EscapePath(m.modPath)
-	if err != nil {
-		return nil, err
-	}
-
-	cmp, err := loadComparatorFS(m.fsys.(fs.ReadFileFS), modDir)
+	cmp, err := loadComparatorFS(m.fsys.(fs.ReadFileFS), ".")
 	if err != nil {
 		cmp = func(v1, v2 module.Version) int {
 			return gnu.Compare(v1.Version, v2.Version)
@@ -102,10 +63,6 @@ func (m *formulaModule) comparator() (func(v1, v2 module.Version) int, error) {
 // at returns the formula for the specified version.
 // It finds the appropriate formula based on version matching and caches the result.
 func (m *formulaModule) at(version string) (*formula.Formula, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-
 	cmp, err := m.comparator()
 	if err != nil {
 		return nil, err
@@ -133,12 +90,7 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 
 // findMaxFromVer finds the formula file with the highest fromVer that is <= the target version.
 func (m *formulaModule) findMaxFromVer(mod module.Version, compare func(v1, v2 module.Version) int) (maxFromVer, formulaPath string, err error) {
-	modDir, err := module.EscapePath(mod.Path)
-	if err != nil {
-		return "", "", err
-	}
-
-	err = fs.WalkDir(m.fsys, modDir, func(path string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(m.fsys, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
