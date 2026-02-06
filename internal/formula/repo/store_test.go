@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/goplus/llar/internal/vcs"
@@ -87,8 +88,14 @@ func TestStore_ModuleFS(t *testing.T) {
 	repo := &mockRepo{
 		syncFn: func(ctx context.Context, ref, path, localDir string) error {
 			syncCalled = true
+			if ref != "" {
+				t.Errorf("syncFn ref = %q, want empty string", ref)
+			}
 			if path != "DaveGamble/cJSON" {
 				t.Errorf("syncFn path = %q, want %q", path, "DaveGamble/cJSON")
+			}
+			if localDir != tmpDir {
+				t.Errorf("syncFn localDir = %q, want %q", localDir, tmpDir)
 			}
 			return nil
 		},
@@ -129,6 +136,26 @@ func TestStore_ModuleFS_SyncError(t *testing.T) {
 	}
 }
 
+func TestStore_ModuleFS_InvalidModulePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	syncCalled := false
+	repo := &mockRepo{
+		syncFn: func(ctx context.Context, ref, path, localDir string) error {
+			syncCalled = true
+			return nil
+		},
+	}
+
+	store := New(tmpDir, repo)
+	_, err := store.ModuleFS(context.Background(), "owner//repo")
+	if err == nil {
+		t.Fatal("ModuleFS() expected error for invalid module path")
+	}
+	if syncCalled {
+		t.Error("syncFn should not be called for invalid module path")
+	}
+}
+
 func TestStore_moduleDirOf(t *testing.T) {
 	tmpDir := t.TempDir()
 	store := New(tmpDir, &mockRepo{})
@@ -160,6 +187,69 @@ func TestStore_moduleDirOf(t *testing.T) {
 				t.Errorf("moduleDirOf() path is not a directory")
 			}
 		})
+	}
+}
+
+func TestStore_moduleDirOf_MkdirAllError(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := New(tmpDir, &mockRepo{})
+
+	parent := filepath.Join(tmpDir, "owner")
+	if err := os.WriteFile(parent, []byte("not-a-dir"), 0600); err != nil {
+		t.Fatalf("failed to create parent file: %v", err)
+	}
+
+	_, err := store.moduleDirOf("owner/repo")
+	if err == nil {
+		t.Fatal("moduleDirOf() expected error when parent path is a file")
+	}
+}
+
+func TestDefaultDir_UserCacheDirError(t *testing.T) {
+	switch runtime.GOOS {
+	case "darwin":
+		t.Setenv("HOME", "")
+	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris", "aix":
+		t.Setenv("XDG_CACHE_HOME", "relative/path")
+	case "windows":
+		t.Setenv("LocalAppData", "")
+	default:
+		t.Skipf("unsupported GOOS: %s", runtime.GOOS)
+	}
+
+	_, err := DefaultDir()
+	if err == nil {
+		t.Fatal("DefaultDir() expected error from os.UserCacheDir")
+	}
+}
+
+func TestDefaultDir_MkdirAllError(t *testing.T) {
+	switch runtime.GOOS {
+	case "darwin":
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, "Library"), []byte("not-a-dir"), 0600); err != nil {
+			t.Fatalf("failed to create blocking file: %v", err)
+		}
+		t.Setenv("HOME", home)
+	case "linux", "freebsd", "openbsd", "netbsd", "dragonfly", "solaris", "aix":
+		cacheFile := filepath.Join(t.TempDir(), "cache-file")
+		if err := os.WriteFile(cacheFile, []byte("not-a-dir"), 0600); err != nil {
+			t.Fatalf("failed to create cache file: %v", err)
+		}
+		t.Setenv("XDG_CACHE_HOME", cacheFile)
+	case "windows":
+		cacheFile := filepath.Join(t.TempDir(), "cache-file")
+		if err := os.WriteFile(cacheFile, []byte("not-a-dir"), 0600); err != nil {
+			t.Fatalf("failed to create cache file: %v", err)
+		}
+		t.Setenv("LocalAppData", cacheFile)
+	default:
+		t.Skipf("unsupported GOOS: %s", runtime.GOOS)
+	}
+
+	_, err := DefaultDir()
+	if err == nil {
+		t.Fatal("DefaultDir() expected MkdirAll error")
 	}
 }
 
