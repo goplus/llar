@@ -137,22 +137,28 @@ func TestStore_ModuleFS_SyncError(t *testing.T) {
 }
 
 func TestStore_ModuleFS_InvalidModulePath(t *testing.T) {
-	tmpDir := t.TempDir()
-	syncCalled := false
-	repo := &mockRepo{
-		syncFn: func(ctx context.Context, ref, path, localDir string) error {
-			syncCalled = true
-			return nil
-		},
-	}
+	tests := []string{"", "../../../etc", "owner//repo"}
 
-	store := New(tmpDir, repo)
-	_, err := store.ModuleFS(context.Background(), "owner//repo")
-	if err == nil {
-		t.Fatal("ModuleFS() expected error for invalid module path")
-	}
-	if syncCalled {
-		t.Error("syncFn should not be called for invalid module path")
+	for _, modPath := range tests {
+		t.Run(modPath, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			syncCalled := false
+			repo := &mockRepo{
+				syncFn: func(ctx context.Context, ref, path, localDir string) error {
+					syncCalled = true
+					return nil
+				},
+			}
+
+			store := New(tmpDir, repo)
+			_, err := store.ModuleFS(context.Background(), modPath)
+			if err == nil {
+				t.Fatalf("ModuleFS() expected error for invalid module path %q", modPath)
+			}
+			if syncCalled {
+				t.Errorf("syncFn should not be called for invalid module path %q", modPath)
+			}
+		})
 	}
 }
 
