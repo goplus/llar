@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -31,26 +30,6 @@ type Formula struct {
 	FromVer   string
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
-}
-
-// Dir returns the directory path where formulas are stored.
-// It creates the directory with 0700 permissions if it doesn't exist.
-// The directory is located at <UserCacheDir>/.llar/formulas.
-//
-// Returns:
-//   - string: The absolute path to the formulas directory
-//   - error: An error if the user cache directory cannot be determined or the directory cannot be created
-func Dir() (string, error) {
-	userCacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", err
-	}
-	formulaDir := filepath.Join(userCacheDir, ".llar", "formulas")
-
-	if err := os.MkdirAll(formulaDir, 0700); err != nil {
-		return "", err
-	}
-	return formulaDir, nil
 }
 
 // loadFS is the internal implementation for loading a formula from a filesystem.
@@ -158,23 +137,6 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}, nil
-}
-
-// Load loads a formula from the local filesystem.
-// The path must be within the formula directory (env.FormulaDir).
-func Load(path string) (*Formula, error) {
-	formulaDir, err := Dir()
-	if err != nil {
-		return nil, err
-	}
-	relPath, err := filepath.Rel(formulaDir, path)
-	if err != nil || strings.HasPrefix(relPath, "..") {
-		if err == nil {
-			return nil, fmt.Errorf("failed to load formula: disallow non formula dir access")
-		}
-		return nil, err
-	}
-	return loadFS(os.DirFS(formulaDir).(fs.ReadFileFS), relPath)
 }
 
 // LoadFS loads a formula from a filesystem interface.
