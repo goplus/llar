@@ -2,6 +2,7 @@ package modules
 
 import (
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -20,10 +21,15 @@ import (
 //   - a negative value if v1 < v2
 //   - zero if v1 == v2
 //   - a positive value if v1 > v2
-func loadComparator(path string) (comparator func(v1, v2 module.Version) int, err error) {
+func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 module.Version) int, err error) {
 	ctx := ixgo.NewContext(0)
 
-	source, err := xgobuild.BuildFile(ctx, path, nil)
+	content, err := fs.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	source, err := xgobuild.BuildFile(ctx, path, content)
 	if err != nil {
 		return nil, err
 	}
