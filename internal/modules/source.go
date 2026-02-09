@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"strings"
+	"sync"
 
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/internal/formula"
@@ -18,15 +19,23 @@ import (
 	"github.com/goplus/xgo/parser"
 )
 
+// loadMu serializes ixgo interpreter loading (formula.LoadFS, loadComparatorFS).
+// The ixgo interpreter has internal race conditions during concurrent loading,
+// so all load operations must be serialized.
+var loadMu sync.Mutex
+
 const defaultFormulaSuffix = "_llar.gox"
+const defaultComparatorSuffix = "_cmp.gox"
 
 // formulaModule represents a single module's formula collection.
 // It provides access to the module's version comparator and formulas.
 // The fsys should be rooted at the module's directory within the formula repository.
 type formulaModule struct {
-	fsys     fs.FS
-	modPath  string
-	cmp      func(v1, v2 module.Version) int
+	fsys       fs.FS
+	modPath    string
+	comparator func() (func(v1, v2 module.Version) int, error)
+
+	mu       sync.Mutex
 	formulas map[string]*formula.Formula
 }
 
@@ -34,30 +43,31 @@ type formulaModule struct {
 // The fsys should be rooted at the module's directory (already positioned by the caller).
 // The modPath is used for constructing module.Version in version comparisons.
 func newFormulaModule(fsys fs.FS, modPath string) *formulaModule {
-	return &formulaModule{
+	m := &formulaModule{
 		fsys:     fsys,
 		modPath:  modPath,
 		formulas: make(map[string]*formula.Formula),
 	}
+	m.comparator = sync.OnceValues(func() (func(v1, v2 module.Version) int, error) {
+		return loadOrDefaultComparator(m.fsys)
+	})
+	return m
 }
 
-// comparator returns the version comparator for this module.
-// It loads the comparator lazily and caches the result.
-// If the custom comparator cannot be loaded, it falls back to GNU version comparison.
-func (m *formulaModule) comparator() (func(v1, v2 module.Version) int, error) {
-	if m.cmp != nil {
-		return m.cmp, nil
-	}
-
-	cmp, err := loadComparatorFS(m.fsys.(fs.ReadFileFS), ".")
-	if err != nil {
-		cmp = func(v1, v2 module.Version) int {
+// loadOrDefaultComparator searches for a _cmp.gox comparator file in fsys.
+// If found, it loads and returns the custom comparator.
+// If no comparator file exists, it falls back to GNU version comparison.
+// If a comparator file exists but fails to load, the error is returned.
+func loadOrDefaultComparator(fsys fs.FS) (func(v1, v2 module.Version) int, error) {
+	matches, _ := fs.Glob(fsys, "*"+defaultComparatorSuffix)
+	if len(matches) == 0 {
+		return func(v1, v2 module.Version) int {
 			return gnu.Compare(v1.Version, v2.Version)
-		}
+		}, nil
 	}
-
-	m.cmp = cmp
-	return m.cmp, nil
+	loadMu.Lock()
+	defer loadMu.Unlock()
+	return loadComparatorFS(fsys.(fs.ReadFileFS), matches[0])
 }
 
 // at returns the formula for the specified version.
@@ -75,15 +85,19 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 		return nil, err
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if f, ok := m.formulas[fromVer]; ok {
 		return f, nil
 	}
-
+	loadMu.Lock()
 	f, err := formula.LoadFS(m.fsys.(fs.ReadFileFS), formulaPath)
+	loadMu.Unlock()
+
 	if err != nil {
 		return nil, err
 	}
-
 	m.formulas[fromVer] = f
 	return f, nil
 }
