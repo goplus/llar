@@ -21,6 +21,9 @@ import (
 	classfile "github.com/goplus/llar/formula"
 )
 
+// Module represents a loaded module with its formula, filesystem, and resolved dependencies.
+// The embedded Formula contains build instructions, while Deps contains pointers to
+// all transitive dependencies in the build list.
 type Module struct {
 	*formula.Formula
 
@@ -31,12 +34,12 @@ type Module struct {
 	Deps []*Module
 }
 
-// Options contains options for LoadPackages.
+// Options contains options for Load.
 type Options struct {
 	// Tidy, if true, computes minimal dependencies using mvs.Req
 	// and updates the versions.json file.
 	Tidy bool
-	// FormulaRepo is the vcs.Repo for downloading formulas.
+	// FormulaStore is the store for downloading and caching formulas.
 	FormulaStore *repo.Store
 }
 
@@ -55,9 +58,9 @@ func latestVersion(modPath string, repo vcs.Repo, comparator func(v1, v2 module.
 	return tags[0], nil
 }
 
-// LoadPackages loads all packages required by the main module and resolves
-// their dependencies using the MVS algorithm. It returns formulas for all
-// modules in the computed build list.
+// Load loads all packages required by the main module and resolves
+// their dependencies using the MVS algorithm. It returns modules for all
+// packages in the computed build list.
 func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
 	var moduleCache sync.Map
 
