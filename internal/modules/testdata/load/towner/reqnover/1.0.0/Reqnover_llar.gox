@@ -1,0 +1,11 @@
+id "towner/reqnover"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+    deps.require "towner/depmod", ""
+}
+
+onBuild (ctx, proj, out) => {
+    echo "building reqnover"
+}

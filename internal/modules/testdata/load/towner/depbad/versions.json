@@ -1,0 +1,8 @@
+{
+	"path": "towner/depbad",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/baddep", "version": "1.0.0"}
+		]
+	}
+}

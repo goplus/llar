@@ -1,0 +1,11 @@
+id "towner/withreq"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+    echo "checking deps for withreq"
+}
+
+onBuild (ctx, proj, out) => {
+    echo "building withreq"
+}

@@ -1,0 +1,9 @@
+{
+	"path": "towner/diamond",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/depmod", "version": "1.0.0"},
+			{"path": "towner/altdep", "version": "1.0.0"}
+		]
+	}
+}
