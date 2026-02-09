@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goplus/llar/internal/formula"
@@ -64,18 +65,19 @@ func latestVersion(modPath string, comparator func(v1, v2 module.Version) int) (
 // their dependencies using the MVS algorithm. It returns formulas for all
 // modules in the computed build list.
 func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
-	moduleCache := make(map[string]*formulaModule)
+	var moduleCache sync.Map
+
 	moduleOf := func(modPath string) (*formulaModule, error) {
-		if fm, ok := moduleCache[modPath]; ok {
-			return fm, nil
+		if fm, ok := moduleCache.Load(modPath); ok {
+			return fm.(*formulaModule), nil
 		}
 		fs, err := opts.FormulaStore.ModuleFS(context.TODO(), modPath)
 		if err != nil {
 			return nil, err
 		}
 		fm := newFormulaModule(fs, modPath)
-		moduleCache[modPath] = fm
-		return fm, nil
+		actual, _ := moduleCache.LoadOrStore(modPath, fm)
+		return actual.(*formulaModule), nil
 	}
 
 	mainMod, err := moduleOf(main.Path)

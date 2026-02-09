@@ -1,6 +1,6 @@
 id "DaveGamble/cJSON"
 
-fromVer "1.0.0"
+fromVer "v1.0.0"
 
 onRequire (proj, deps) => {
    echo "hello cjson"
