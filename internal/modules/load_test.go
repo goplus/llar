@@ -21,7 +21,7 @@ var _ vcs.Repo = (*mockVCSRepo)(nil)
 
 func (m *mockVCSRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *mockVCSRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *mockVCSRepo) At(ref, localDir string) fs.FS             { return os.DirFS(localDir) }
+func (m *mockVCSRepo) At(ref, localDir string) fs.FS              { return os.DirFS(localDir) }
 func (m *mockVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	return nil
 }
@@ -497,7 +497,7 @@ type failingSyncRepo struct {
 
 func (m *failingSyncRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
 func (m *failingSyncRepo) Latest(ctx context.Context) (string, error) { return "", nil }
-func (m *failingSyncRepo) At(ref, localDir string) fs.FS             { return os.DirFS(localDir) }
+func (m *failingSyncRepo) At(ref, localDir string) fs.FS              { return os.DirFS(localDir) }
 func (m *failingSyncRepo) Sync(ctx context.Context, ref, path, localDir string) error {
 	if m.failPaths[path] {
 		return fmt.Errorf("sync failed for %s", path)
@@ -670,7 +670,12 @@ func TestIntegration_LatestVersion(t *testing.T) {
 		return 0
 	}
 
-	version, err := latestVersion("madler/zlib", cmp)
+	latestRepo, err := vcs.NewRepo("github.com/madler/zlib")
+	if err != nil {
+		t.Fatalf("create latest version repo failed: %v", err)
+	}
+
+	version, err := latestVersion("madler/zlib", latestRepo, cmp)
 	if err != nil {
 		t.Fatalf("latestVersion failed: %v", err)
 	}
