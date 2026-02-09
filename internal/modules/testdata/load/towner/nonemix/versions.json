@@ -1,0 +1,9 @@
+{
+	"path": "towner/nonemix",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/leafmod", "version": "1.0.0"},
+			{"path": "towner/leafmod", "version": "none"}
+		]
+	}
+}

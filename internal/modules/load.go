@@ -40,13 +40,7 @@ type Options struct {
 	FormulaStore *repo.Store
 }
 
-func latestVersion(modPath string, comparator func(v1, v2 module.Version) int) (version string, err error) {
-	// TODO(MeteorsLiu): Support different code host sites
-	repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", modPath))
-	if err != nil {
-		return "", err
-	}
-
+func latestVersion(modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
 	tags, err := repo.Tags(context.TODO())
 	if err != nil {
 		return "", err
@@ -89,7 +83,12 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if err != nil {
 			return nil, err
 		}
-		latest, err := latestVersion(main.Path, cmp)
+		// TODO(MeteorsLiu): Support different code host sites
+		latestRepo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", main.Path))
+		if err != nil {
+			return nil, err
+		}
+		latest, err := latestVersion(main.Path, latestRepo, cmp)
 		if err != nil {
 			return nil, err
 		}
