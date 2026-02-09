@@ -1,0 +1,717 @@
+package modules
+
+import (
+	"context"
+	"fmt"
+	"io/fs"
+	"os"
+	"testing"
+
+	"github.com/goplus/llar/internal/formula"
+	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
+)
+
+// mockVCSRepo implements vcs.Repo for testing without network access.
+// Sync is a no-op because the testdata is pre-populated in the store directory.
+type mockVCSRepo struct{}
+
+var _ vcs.Repo = (*mockVCSRepo)(nil)
+
+func (m *mockVCSRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
+func (m *mockVCSRepo) Latest(ctx context.Context) (string, error) { return "", nil }
+func (m *mockVCSRepo) At(ref, localDir string) fs.FS             { return os.DirFS(localDir) }
+func (m *mockVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error {
+	return nil
+}
+
+// setupTestStore creates a repo.Store backed by a copy of testdataDir.
+func setupTestStore(t *testing.T, testdataDir string) *repo.Store {
+	t.Helper()
+	tmpDir := t.TempDir()
+	if err := os.CopyFS(tmpDir, os.DirFS(testdataDir)); err != nil {
+		t.Fatalf("failed to copy testdata: %v", err)
+	}
+	return repo.New(tmpDir, &mockVCSRepo{})
+}
+
+// loadTestFormula loads a formula from a local testdata directory.
+func loadTestFormula(t *testing.T, moduleDir, modPath, version string) *formula.Formula {
+	t.Helper()
+	fsys := os.DirFS(moduleDir)
+	mod := newFormulaModule(fsys, modPath)
+	f, err := mod.at(version)
+	if err != nil {
+		t.Fatalf("failed to load formula for %s@%s: %v", modPath, version, err)
+	}
+	return f
+}
+
+// =============================================
+// resolveDeps tests
+// =============================================
+
+func TestResolveDeps_NoOnRequire_DepsFromVersionsJson(t *testing.T) {
+	modFS := os.DirFS("testdata/load/towner/mainmod").(fs.ReadFileFS)
+	frla := &formula.Formula{
+		ModPath: "towner/mainmod",
+		FromVer: "1.0.0",
+	}
+	mod := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep, got %d: %v", len(deps), deps)
+	}
+	if deps[0].Path != "towner/depmod" || deps[0].Version != "1.0.0" {
+		t.Errorf("dep = %v, want {towner/depmod 1.0.0}", deps[0])
+	}
+}
+
+func TestResolveDeps_NoOnRequire_NoDeps(t *testing.T) {
+	modFS := os.DirFS("testdata/load/towner/leafmod").(fs.ReadFileFS)
+	frla := &formula.Formula{
+		ModPath: "towner/leafmod",
+		FromVer: "1.0.0",
+	}
+	mod := module.Version{Path: "towner/leafmod", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	if len(deps) != 0 {
+		t.Errorf("expected 0 deps, got %d: %v", len(deps), deps)
+	}
+}
+
+func TestResolveDeps_VersionNotInDepsTable(t *testing.T) {
+	modFS := os.DirFS("testdata/load/towner/mainmod").(fs.ReadFileFS)
+	frla := &formula.Formula{
+		ModPath: "towner/mainmod",
+		FromVer: "1.0.0",
+	}
+	// Version 9.9.9 doesn't exist in versions.json deps table
+	mod := module.Version{Path: "towner/mainmod", Version: "9.9.9"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	if len(deps) != 0 {
+		t.Errorf("expected 0 deps for unknown version, got %d: %v", len(deps), deps)
+	}
+}
+
+func TestResolveDeps_WithOnRequire_EchoOnly_FallbackToVersionsJson(t *testing.T) {
+	frla := loadTestFormula(t, "testdata/load/towner/withreq", "towner/withreq", "1.0.0")
+	modFS := os.DirFS("testdata/load/towner/withreq").(fs.ReadFileFS)
+	mod := module.Version{Path: "towner/withreq", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	// OnRequire echoes but doesn't add deps, so fallback to versions.json
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep (from versions.json fallback), got %d: %v", len(deps), deps)
+	}
+	if deps[0].Path != "towner/depmod" {
+		t.Errorf("dep path = %q, want %q (from versions.json)", deps[0].Path, "towner/depmod")
+	}
+}
+
+func TestResolveDeps_WithOnRequire_AddsDeps(t *testing.T) {
+	frla := loadTestFormula(t, "testdata/load/towner/withdeps", "towner/withdeps", "1.0.0")
+	modFS := os.DirFS("testdata/load/towner/withdeps").(fs.ReadFileFS)
+	mod := module.Version{Path: "towner/withdeps", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	// OnRequire adds depmod@1.0.0; versions.json has leafmod@1.0.0 (shouldn't be used)
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep (from OnRequire), got %d: %v", len(deps), deps)
+	}
+	if deps[0].Path != "towner/depmod" {
+		t.Errorf("dep path = %q, want %q (from OnRequire, not versions.json)", deps[0].Path, "towner/depmod")
+	}
+}
+
+func TestResolveDeps_TransitiveDeps(t *testing.T) {
+	// depmod has deps: leafmod@1.0.0
+	modFS := os.DirFS("testdata/load/towner/depmod").(fs.ReadFileFS)
+	frla := &formula.Formula{
+		ModPath: "towner/depmod",
+		FromVer: "1.0.0",
+	}
+	mod := module.Version{Path: "towner/depmod", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep, got %d: %v", len(deps), deps)
+	}
+	if deps[0].Path != "towner/leafmod" || deps[0].Version != "1.0.0" {
+		t.Errorf("dep = %v, want {towner/leafmod 1.0.0}", deps[0])
+	}
+}
+
+func TestResolveDeps_WithOnRequire_EmptyVersionFallback(t *testing.T) {
+	// OnRequire adds dep with empty version; resolveDeps resolves from versions.json
+	frla := loadTestFormula(t, "testdata/load/towner/reqnover", "towner/reqnover", "1.0.0")
+	modFS := os.DirFS("testdata/load/towner/reqnover").(fs.ReadFileFS)
+	mod := module.Version{Path: "towner/reqnover", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep, got %d: %v", len(deps), deps)
+	}
+	// OnRequire adds "towner/depmod" with empty version
+	// versions.json has "towner/depmod" @ "2.0.0"
+	// resolveDeps should resolve the version from versions.json
+	if deps[0].Path != "towner/depmod" {
+		t.Errorf("dep path = %q, want %q", deps[0].Path, "towner/depmod")
+	}
+	if deps[0].Version != "2.0.0" {
+		t.Errorf("dep version = %q, want %q (resolved from versions.json)", deps[0].Version, "2.0.0")
+	}
+}
+
+func TestResolveDeps_WithOnRequire_UnknownDepDropped(t *testing.T) {
+	// OnRequire adds dep with empty version that doesn't exist in versions.json
+	// This dep should be dropped (idx < 0 path)
+	frla := loadTestFormula(t, "testdata/load/towner/reqdrop", "towner/reqdrop", "1.0.0")
+	modFS := os.DirFS("testdata/load/towner/reqdrop").(fs.ReadFileFS)
+	mod := module.Version{Path: "towner/reqdrop", Version: "1.0.0"}
+
+	deps, err := resolveDeps(mod, modFS, frla)
+	if err != nil {
+		t.Fatalf("resolveDeps failed: %v", err)
+	}
+	// OnRequire adds "towner/unknown" with empty version, which isn't in versions.json
+	// so it gets dropped. Since OnRequire returned deps (even though dropped),
+	// len(vers) == 0, so we fall back to versions.json which has depmod@1.0.0
+	// Wait - actually the vers would be empty after dropping, so fallback kicks in
+	if len(deps) != 1 {
+		t.Fatalf("expected 1 dep (from versions.json fallback), got %d: %v", len(deps), deps)
+	}
+	if deps[0].Path != "towner/depmod" {
+		t.Errorf("dep path = %q, want %q", deps[0].Path, "towner/depmod")
+	}
+}
+
+// =============================================
+// Load tests (unit, no network)
+// =============================================
+
+func TestLoad_SingleModuleNoDeps(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(modules) != 1 {
+		t.Fatalf("expected 1 module, got %d", len(modules))
+	}
+	if modules[0].Path != "towner/standalone" {
+		t.Errorf("module path = %q, want %q", modules[0].Path, "towner/standalone")
+	}
+	if modules[0].Version != "1.0.0" {
+		t.Errorf("module version = %q, want %q", modules[0].Version, "1.0.0")
+	}
+	if len(modules[0].Deps) != 0 {
+		t.Errorf("expected 0 deps, got %d", len(modules[0].Deps))
+	}
+}
+
+func TestLoad_ChainDeps(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Expect 3 modules: mainmod, depmod, leafmod
+	if len(modules) != 3 {
+		for _, m := range modules {
+			t.Logf("  %s@%s", m.Path, m.Version)
+		}
+		t.Fatalf("expected 3 modules, got %d", len(modules))
+	}
+
+	// First module must be the main module
+	if modules[0].Path != "towner/mainmod" {
+		t.Errorf("modules[0].Path = %q, want %q", modules[0].Path, "towner/mainmod")
+	}
+
+	// Build path -> module map
+	modMap := make(map[string]*Module)
+	for _, m := range modules {
+		modMap[m.Path] = m
+	}
+
+	// Verify all 3 modules exist
+	for _, path := range []string{"towner/mainmod", "towner/depmod", "towner/leafmod"} {
+		if _, ok := modMap[path]; !ok {
+			t.Errorf("missing module %q in build list", path)
+		}
+	}
+
+	// Verify dependency structure
+	mainMod := modMap["towner/mainmod"]
+	if len(mainMod.Deps) != 2 {
+		t.Errorf("mainmod deps count = %d, want 2", len(mainMod.Deps))
+	}
+
+	depMod := modMap["towner/depmod"]
+	if len(depMod.Deps) != 1 {
+		t.Errorf("depmod deps count = %d, want 1", len(depMod.Deps))
+	} else if depMod.Deps[0].Path != "towner/leafmod" {
+		t.Errorf("depmod dep = %q, want %q", depMod.Deps[0].Path, "towner/leafmod")
+	}
+
+	leafMod := modMap["towner/leafmod"]
+	if len(leafMod.Deps) != 0 {
+		t.Errorf("leafmod deps count = %d, want 0", len(leafMod.Deps))
+	}
+}
+
+func TestLoad_ModuleFields(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(modules) < 1 {
+		t.Fatal("expected at least 1 module")
+	}
+
+	mod := modules[0]
+	if mod.Formula == nil {
+		t.Error("Formula is nil")
+	}
+	if mod.FS == nil {
+		t.Error("FS is nil")
+	}
+	if mod.Path != "towner/standalone" {
+		t.Errorf("Path = %q, want %q", mod.Path, "towner/standalone")
+	}
+	if mod.Version != "1.0.0" {
+		t.Errorf("Version = %q, want %q", mod.Version, "1.0.0")
+	}
+}
+
+func TestLoad_FormulaContent(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	f := modules[0].Formula
+	if f.ModPath != "towner/standalone" {
+		t.Errorf("Formula.ModPath = %q, want %q", f.ModPath, "towner/standalone")
+	}
+	if f.FromVer != "1.0.0" {
+		t.Errorf("Formula.FromVer = %q, want %q", f.FromVer, "1.0.0")
+	}
+	if f.OnBuild == nil {
+		t.Error("Formula.OnBuild is nil")
+	}
+}
+
+func TestLoad_ErrorNoFormulaForVersion(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	// Version 0.1.0 is lower than all fromVer values (1.0.0)
+	main := module.Version{Path: "towner/standalone", Version: "0.1.0"}
+
+	_, err := Load(ctx, main, Options{FormulaStore: store})
+	if err == nil {
+		t.Error("expected error for version lower than all fromVer")
+	}
+}
+
+func TestLoad_WithTidy(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
+
+	// tidy writes "versions.json" to CWD (a known hack in the codebase).
+	// Use t.Chdir to isolate the write.
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	modules, err := Load(ctx, main, Options{
+		FormulaStore: store,
+		Tidy:         true,
+	})
+	if err != nil {
+		t.Fatalf("Load with Tidy failed: %v", err)
+	}
+
+	if len(modules) != 3 {
+		t.Fatalf("expected 3 modules, got %d", len(modules))
+	}
+
+	// Verify tidy wrote a versions.json
+	data, err := os.ReadFile("versions.json")
+	if err != nil {
+		t.Fatalf("tidy did not write versions.json: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("tidy wrote empty versions.json")
+	}
+}
+
+func TestLoad_ModuleCaching(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
+
+	// Load twice - second load should use cached modules
+	modules1, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("first Load failed: %v", err)
+	}
+	modules2, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("second Load failed: %v", err)
+	}
+
+	if len(modules1) != len(modules2) {
+		t.Errorf("module counts differ: %d vs %d", len(modules1), len(modules2))
+	}
+	for i := range modules1 {
+		if modules1[i].Path != modules2[i].Path || modules1[i].Version != modules2[i].Version {
+			t.Errorf("module %d differs: %s@%s vs %s@%s",
+				i, modules1[i].Path, modules1[i].Version,
+				modules2[i].Path, modules2[i].Version)
+		}
+	}
+}
+
+func TestLoad_BuildListOrder(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// MVS guarantees: first element is the target, rest are sorted by path
+	if modules[0].Path != "towner/mainmod" {
+		t.Errorf("first module = %q, want main module %q", modules[0].Path, "towner/mainmod")
+	}
+	// Remaining modules should be sorted by path
+	for i := 2; i < len(modules); i++ {
+		if modules[i].Path < modules[i-1].Path {
+			t.Errorf("modules not sorted: %q before %q", modules[i-1].Path, modules[i].Path)
+		}
+	}
+}
+
+func TestLoad_DiamondDeps(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	// diamond depends on depmod@1.0.0 and altdep@1.0.0
+	// depmod@1.0.0 depends on leafmod@1.0.0
+	// altdep@1.0.0 depends on leafmod@2.0.0
+	// MVS should select leafmod@2.0.0 (max of 1.0.0 and 2.0.0)
+	main := module.Version{Path: "towner/diamond", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Expect 4 modules: diamond, depmod, altdep, leafmod
+	if len(modules) != 4 {
+		for _, m := range modules {
+			t.Logf("  %s@%s", m.Path, m.Version)
+		}
+		t.Fatalf("expected 4 modules, got %d", len(modules))
+	}
+
+	// First module must be the main module
+	if modules[0].Path != "towner/diamond" {
+		t.Errorf("modules[0].Path = %q, want %q", modules[0].Path, "towner/diamond")
+	}
+
+	// Verify leafmod was resolved to 2.0.0 (max version from diamond dependency)
+	modMap := make(map[string]*Module)
+	for _, m := range modules {
+		modMap[m.Path] = m
+	}
+
+	leafMod, ok := modMap["towner/leafmod"]
+	if !ok {
+		t.Fatal("missing towner/leafmod in build list")
+	}
+	if leafMod.Version != "2.0.0" {
+		t.Errorf("leafmod version = %q, want %q (MVS should select max)", leafMod.Version, "2.0.0")
+	}
+}
+
+func TestLoad_ErrorDepFormulaNotFound(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	// depbad depends on baddep@1.0.0, but baddep has no formula files
+	main := module.Version{Path: "towner/depbad", Version: "1.0.0"}
+
+	_, err := Load(ctx, main, Options{FormulaStore: store})
+	if err == nil {
+		t.Error("expected error when dependency has no formula")
+	}
+}
+
+// failingSyncRepo is a mock VCS repo that fails Sync for specific module paths.
+type failingSyncRepo struct {
+	failPaths map[string]bool
+}
+
+func (m *failingSyncRepo) Tags(ctx context.Context) ([]string, error) { return nil, nil }
+func (m *failingSyncRepo) Latest(ctx context.Context) (string, error) { return "", nil }
+func (m *failingSyncRepo) At(ref, localDir string) fs.FS             { return os.DirFS(localDir) }
+func (m *failingSyncRepo) Sync(ctx context.Context, ref, path, localDir string) error {
+	if m.failPaths[path] {
+		return fmt.Errorf("sync failed for %s", path)
+	}
+	return nil
+}
+
+func TestLoad_ErrorModuleOfFails(t *testing.T) {
+	// Use a custom VCS repo that fails Sync for "towner/baddep"
+	tmpDir := t.TempDir()
+	if err := os.CopyFS(tmpDir, os.DirFS("testdata/load")); err != nil {
+		t.Fatalf("failed to copy testdata: %v", err)
+	}
+	store := repo.New(tmpDir, &failingSyncRepo{
+		failPaths: map[string]bool{"towner/baddep": true},
+	})
+	ctx := context.Background()
+
+	// depbad depends on baddep@1.0.0, Sync for baddep will fail
+	main := module.Version{Path: "towner/depbad", Version: "1.0.0"}
+
+	_, err := Load(ctx, main, Options{FormulaStore: store})
+	if err == nil {
+		t.Error("expected error when dependency module sync fails")
+	}
+}
+
+func TestLoad_ErrorResolveDepsMainModule(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+	// brokenver has a valid formula but broken versions.json,
+	// so resolveDeps will fail for the main module
+	main := module.Version{Path: "towner/brokenver", Version: "1.0.0"}
+
+	_, err := Load(ctx, main, Options{FormulaStore: store})
+	if err == nil {
+		t.Error("expected error when main module has broken versions.json")
+	}
+}
+
+func TestLoad_ErrorMainModuleNotFound(t *testing.T) {
+	// Use a custom VCS repo that fails for the main module itself
+	tmpDir := t.TempDir()
+	store := repo.New(tmpDir, &failingSyncRepo{
+		failPaths: map[string]bool{"towner/nonexistent": true},
+	})
+	ctx := context.Background()
+
+	main := module.Version{Path: "towner/nonexistent", Version: "1.0.0"}
+
+	_, err := Load(ctx, main, Options{FormulaStore: store})
+	if err == nil {
+		t.Error("expected error when main module sync fails")
+	}
+}
+
+// =============================================
+// Integration tests (require network)
+// =============================================
+
+func TestIntegration_LoadFromRealRepo_Zlib(t *testing.T) {
+	t.Skip("skipping: real formulas use autotools which is not yet implemented")
+
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	vcsRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		t.Fatalf("failed to create vcs.Repo: %v", err)
+	}
+
+	store := repo.New(tmpDir, vcsRepo)
+	ctx := context.Background()
+
+	// Load madler/zlib (no OnRequire deps, no transitive deps)
+	main := module.Version{Path: "madler/zlib", Version: "1.3.1"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(modules) < 1 {
+		t.Fatal("expected at least 1 module")
+	}
+	if modules[0].Path != "madler/zlib" {
+		t.Errorf("main module = %q, want %q", modules[0].Path, "madler/zlib")
+	}
+	if modules[0].Version != "1.3.1" {
+		t.Errorf("main version = %q, want %q", modules[0].Version, "1.3.1")
+	}
+
+	t.Logf("loaded %d modules", len(modules))
+	for _, m := range modules {
+		t.Logf("  %s@%s (fromVer=%s)", m.Path, m.Version, m.Formula.FromVer)
+	}
+}
+
+func TestIntegration_LoadWithDeps_Libpng(t *testing.T) {
+	t.Skip("skipping: real formulas use autotools which is not yet implemented")
+
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	vcsRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		t.Fatalf("failed to create vcs.Repo: %v", err)
+	}
+
+	store := repo.New(tmpDir, vcsRepo)
+	ctx := context.Background()
+
+	// Load pnggroup/libpng which depends on madler/zlib via OnRequire
+	main := module.Version{Path: "pnggroup/libpng", Version: "1.6.44"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Expect at least 2 modules: libpng and zlib
+	if len(modules) < 2 {
+		t.Errorf("expected at least 2 modules, got %d", len(modules))
+	}
+
+	// Main module should be libpng
+	if modules[0].Path != "pnggroup/libpng" {
+		t.Errorf("main module = %q, want %q", modules[0].Path, "pnggroup/libpng")
+	}
+
+	// Verify zlib is in the build list
+	var zlibFound bool
+	for _, m := range modules {
+		if m.Path == "madler/zlib" {
+			zlibFound = true
+			break
+		}
+	}
+	if !zlibFound {
+		t.Error("expected madler/zlib in build list")
+	}
+
+	// Verify main module's deps include zlib
+	if len(modules[0].Deps) == 0 {
+		t.Error("main module has no deps, expected at least zlib")
+	}
+
+	t.Logf("loaded %d modules:", len(modules))
+	for _, m := range modules {
+		t.Logf("  %s@%s (fromVer=%s, deps=%d)", m.Path, m.Version, m.Formula.FromVer, len(m.Deps))
+	}
+}
+
+func TestIntegration_LatestVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	cmp := func(v1, v2 module.Version) int {
+		if v1.Version < v2.Version {
+			return -1
+		}
+		if v1.Version > v2.Version {
+			return 1
+		}
+		return 0
+	}
+
+	version, err := latestVersion("madler/zlib", cmp)
+	if err != nil {
+		t.Fatalf("latestVersion failed: %v", err)
+	}
+	if version == "" {
+		t.Error("latestVersion returned empty string")
+	}
+	t.Logf("latest version of madler/zlib: %s", version)
+}
+
+func TestIntegration_LoadWithEmptyVersion(t *testing.T) {
+	t.Skip("skipping: real formulas use autotools which is not yet implemented")
+
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	vcsRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		t.Fatalf("failed to create vcs.Repo: %v", err)
+	}
+
+	store := repo.New(tmpDir, vcsRepo)
+	ctx := context.Background()
+
+	// Load with empty version - should resolve to latest
+	main := module.Version{Path: "madler/zlib", Version: ""}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load with empty version failed: %v", err)
+	}
+
+	if len(modules) < 1 {
+		t.Fatal("expected at least 1 module")
+	}
+	if modules[0].Path != "madler/zlib" {
+		t.Errorf("main module = %q, want %q", modules[0].Path, "madler/zlib")
+	}
+	if modules[0].Version == "" {
+		t.Error("resolved version is still empty")
+	}
+	t.Logf("resolved version: %s", modules[0].Version)
+}

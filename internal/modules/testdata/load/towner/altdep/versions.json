@@ -1,0 +1,8 @@
+{
+	"path": "towner/altdep",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/leafmod", "version": "2.0.0"}
+		]
+	}
+}

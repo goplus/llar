@@ -1,0 +1,7 @@
+id "towner/depbad"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+    echo "building depbad"
+}

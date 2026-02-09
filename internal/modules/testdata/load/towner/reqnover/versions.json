@@ -1,0 +1,8 @@
+{
+	"path": "towner/reqnover",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/depmod", "version": "2.0.0"}
+		]
+	}
+}

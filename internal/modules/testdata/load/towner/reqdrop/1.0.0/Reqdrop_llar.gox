@@ -1,0 +1,11 @@
+id "towner/reqdrop"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+    deps.require "towner/unknown", ""
+}
+
+onBuild (ctx, proj, out) => {
+    echo "building reqdrop"
+}
