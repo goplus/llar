@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -65,7 +64,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if fm, ok := moduleCache.Load(modPath); ok {
 			return fm.(*formulaModule), nil
 		}
-		fs, err := opts.FormulaStore.ModuleFS(context.TODO(), modPath)
+		fs, err := opts.FormulaStore.ModuleFS(ctx, modPath)
 		if err != nil {
 			return nil, err
 		}
@@ -98,9 +97,6 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-
 	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
 	if err != nil {
 		return nil, err
