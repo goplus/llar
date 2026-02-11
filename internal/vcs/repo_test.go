@@ -6,11 +6,13 @@ package vcs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseRepoPath(t *testing.T) {
@@ -584,6 +586,332 @@ func TestGitHubClientSyncDirShallowCloneUpdate(t *testing.T) {
 	readme := filepath.Join(destDir, "README.md")
 	if _, err := os.Stat(readme); os.IsNotExist(err) {
 		t.Error("README.md should exist after update")
+	}
+}
+
+// Unit tests with mock client (no network required)
+
+func TestFileInfo(t *testing.T) {
+	now := time.Now()
+	fi := &fileInfo{
+		name:    "test.txt",
+		size:    42,
+		mode:    0644,
+		modTime: now,
+		isDir:   false,
+	}
+
+	if fi.Name() != "test.txt" {
+		t.Errorf("Name() = %q, want %q", fi.Name(), "test.txt")
+	}
+	if fi.Size() != 42 {
+		t.Errorf("Size() = %d, want 42", fi.Size())
+	}
+	if fi.Mode() != 0644 {
+		t.Errorf("Mode() = %v, want 0644", fi.Mode())
+	}
+	if !fi.ModTime().Equal(now) {
+		t.Errorf("ModTime() = %v, want %v", fi.ModTime(), now)
+	}
+	if fi.IsDir() {
+		t.Error("IsDir() = true, want false")
+	}
+	if fi.Sys() != nil {
+		t.Errorf("Sys() = %v, want nil", fi.Sys())
+	}
+
+	// Test directory
+	dir := &fileInfo{name: "dir", isDir: true}
+	if !dir.IsDir() {
+		t.Error("IsDir() = false, want true")
+	}
+}
+
+func TestNewRepo_InvalidPath(t *testing.T) {
+	// Too few parts
+	_, err := NewRepo("x")
+	if err == nil {
+		t.Error("NewRepo(\"x\") should return error")
+	}
+
+	_, err = NewRepo("only/two")
+	if err == nil {
+		t.Error("NewRepo(\"only/two\") should return error")
+	}
+}
+
+func newMockRepo(mc *mockClient) *repo {
+	return &repo{
+		client: mc,
+		host:   "mock.com",
+		owner:  "owner",
+		name:   "repo",
+	}
+}
+
+func TestRepoFSReadFile_LoadError(t *testing.T) {
+	mc := &mockClient{
+		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
+			return nil, fmt.Errorf("remote read error")
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	fsys := r.At("v1.0", localDir).(fs.ReadFileFS)
+
+	_, err := fsys.ReadFile("missing.txt")
+	if err == nil {
+		t.Error("ReadFile should fail when remote returns error")
+	}
+	if err.Error() != "remote read error" {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRepoFSReadFile_LoadMkdirError(t *testing.T) {
+	mc := &mockClient{
+		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	// Use a path where MkdirAll will fail (file exists where dir is expected)
+	localDir := t.TempDir()
+	blockingFile := filepath.Join(localDir, "sub")
+	os.WriteFile(blockingFile, []byte("block"), 0644)
+
+	fsys := r.At("v1.0", localDir)
+	rfs := fsys.(*repoFS)
+
+	f, _ := rfs.Open("sub/file.txt")
+	_, err := io.ReadAll(f)
+	if err == nil {
+		t.Error("ReadFile should fail when MkdirAll fails")
+	}
+}
+
+func TestRepoFSReadFile_LoadWriteError(t *testing.T) {
+	mc := &mockClient{
+		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
+			return []byte("data"), nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	// Use a read-only directory to trigger WriteFile error
+	localDir := t.TempDir()
+	os.Chmod(localDir, 0555)
+	defer os.Chmod(localDir, 0755) // restore for cleanup
+
+	fsys := r.At("v1.0", localDir)
+	rfs := fsys.(*repoFS)
+
+	f, _ := rfs.Open("file.txt")
+	_, err := io.ReadAll(f)
+	if err == nil {
+		t.Error("ReadFile should fail when WriteFile fails")
+	}
+}
+
+func TestRepoFSReadDir_RemoteFallback(t *testing.T) {
+	syncCalled := false
+	mc := &mockClient{
+		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
+			syncCalled = true
+			// Create a file in destDir to simulate successful sync
+			os.MkdirAll(destDir, 0755)
+			os.WriteFile(filepath.Join(destDir, "synced.txt"), []byte("ok"), 0644)
+			return nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	fsys := r.At("v1.0", localDir).(fs.ReadDirFS)
+
+	entries, err := fsys.ReadDir("subdir")
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	if !syncCalled {
+		t.Error("SyncDir should be called when local dir is empty")
+	}
+	if len(entries) != 1 || entries[0].Name() != "synced.txt" {
+		t.Errorf("unexpected entries: %v", entries)
+	}
+}
+
+func TestRepoFSReadDir_SyncError(t *testing.T) {
+	mc := &mockClient{
+		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
+			return fmt.Errorf("sync failed")
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	fsys := r.At("v1.0", localDir).(fs.ReadDirFS)
+
+	_, err := fsys.ReadDir("missing")
+	if err == nil {
+		t.Error("ReadDir should fail when SyncDir fails")
+	}
+}
+
+func TestRepoFSOpen_StatRemote(t *testing.T) {
+	mc := &mockClient{
+		statFunc: func(ctx context.Context, owner, repo, ref, path string) (fs.FileInfo, error) {
+			return &fileInfo{name: "remote.txt", size: 100, mode: 0644}, nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	fsys := r.At("v1.0", localDir)
+
+	f, err := fsys.Open("remote.txt")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	// Stat before Read — no local file, goes to remote
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	if info.Name() != "remote.txt" {
+		t.Errorf("Stat Name = %q, want %q", info.Name(), "remote.txt")
+	}
+	if info.Size() != 100 {
+		t.Errorf("Stat Size = %d, want 100", info.Size())
+	}
+}
+
+func TestRepoFSOpen_StatRemoteError(t *testing.T) {
+	mc := &mockClient{
+		statFunc: func(ctx context.Context, owner, repo, ref, path string) (fs.FileInfo, error) {
+			return nil, fmt.Errorf("stat error")
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	fsys := r.At("v1.0", localDir)
+
+	f, _ := fsys.Open("nope.txt")
+	defer f.Close()
+
+	_, err := f.Stat()
+	if err == nil {
+		t.Error("Stat should fail when remote Stat fails")
+	}
+}
+
+func TestRepoTags_Mock(t *testing.T) {
+	mc := &mockClient{
+		tagsFunc: func(ctx context.Context, owner, repo string) ([]string, error) {
+			return []string{"v1.0", "v2.0"}, nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	tags, err := r.Tags(context.Background())
+	if err != nil {
+		t.Fatalf("Tags failed: %v", err)
+	}
+	if len(tags) != 2 {
+		t.Errorf("expected 2 tags, got %d", len(tags))
+	}
+}
+
+func TestRepoLatest_Mock(t *testing.T) {
+	mc := &mockClient{
+		latestFunc: func(ctx context.Context, owner, repo string) (string, error) {
+			return "abc123", nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	latest, err := r.Latest(context.Background())
+	if err != nil {
+		t.Fatalf("Latest failed: %v", err)
+	}
+	if latest != "abc123" {
+		t.Errorf("Latest = %q, want %q", latest, "abc123")
+	}
+}
+
+func TestRepoSync_Mock(t *testing.T) {
+	syncCalled := false
+	mc := &mockClient{
+		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
+			syncCalled = true
+			return nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	err := r.Sync(context.Background(), "v1.0", "path", "/tmp/test")
+	if err != nil {
+		t.Fatalf("Sync failed: %v", err)
+	}
+	if !syncCalled {
+		t.Error("SyncDir should be called")
+	}
+}
+
+func TestRepoFSReadDir_LocalNotEmpty(t *testing.T) {
+	mc := &mockClient{
+		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
+			t.Error("SyncDir should not be called when local dir has entries")
+			return nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	// Pre-populate local directory
+	subDir := filepath.Join(localDir, "mydir")
+	os.MkdirAll(subDir, 0755)
+	os.WriteFile(filepath.Join(subDir, "local.txt"), []byte("local"), 0644)
+
+	fsys := r.At("v1.0", localDir).(fs.ReadDirFS)
+
+	entries, err := fsys.ReadDir("mydir")
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "local.txt" {
+		t.Errorf("unexpected entries: %v", entries)
+	}
+}
+
+func TestRepoFSOpen_ReadFromCache(t *testing.T) {
+	mc := &mockClient{
+		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
+			t.Error("ReadFile should not be called when file exists locally")
+			return nil, nil
+		},
+	}
+	r := newMockRepo(mc)
+
+	localDir := t.TempDir()
+	// Pre-populate cache
+	os.WriteFile(filepath.Join(localDir, "cached.txt"), []byte("cached"), 0644)
+
+	fsys := r.At("v1.0", localDir)
+	f, _ := fsys.Open("cached.txt")
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if string(data) != "cached" {
+		t.Errorf("Read = %q, want %q", string(data), "cached")
 	}
 }
 
