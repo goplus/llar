@@ -586,3 +586,57 @@ func TestGitHubClientSyncDirShallowCloneUpdate(t *testing.T) {
 		t.Error("README.md should exist after update")
 	}
 }
+
+func TestGitHubClientSyncDirSparseMultiplePaths(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	client := newGitHubClient()
+	ctx := context.Background()
+	destDir := t.TempDir()
+
+	// Sync first directory
+	err := client.SyncDir(ctx, "google", "go-github", "v68.0.0", ".github", destDir)
+	if err != nil {
+		t.Fatalf("First SyncDir failed: %v", err)
+	}
+
+	// Verify .github exists
+	githubDir := filepath.Join(destDir, ".github")
+	if _, err := os.Stat(githubDir); os.IsNotExist(err) {
+		t.Fatal(".github should exist after first sync")
+	}
+
+	// Sync second directory into the same destDir
+	err = client.SyncDir(ctx, "google", "go-github", "v68.0.0", "github", destDir)
+	if err != nil {
+		t.Fatalf("Second SyncDir failed: %v", err)
+	}
+
+	// Both directories should exist
+	if _, err := os.Stat(githubDir); os.IsNotExist(err) {
+		t.Error(".github should still exist after second sync")
+	}
+	codeDir := filepath.Join(destDir, "github")
+	if _, err := os.Stat(codeDir); os.IsNotExist(err) {
+		t.Error("github should exist after second sync")
+	}
+
+	// Only the two target directories (plus .git) should be present
+	entries, err := os.ReadDir(destDir)
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	var nonGitEntries []string
+	for _, e := range entries {
+		if e.Name() != ".git" {
+			nonGitEntries = append(nonGitEntries, e.Name())
+		}
+	}
+	if len(nonGitEntries) != 2 {
+		t.Errorf("expected 2 directories, got %d: %v", len(nonGitEntries), nonGitEntries)
+	}
+
+	t.Logf("Sparse checkout with multiple paths: %v", nonGitEntries)
+}
