@@ -1,0 +1,7 @@
+id "towner/deepd"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+    echo "building deepd"
+}

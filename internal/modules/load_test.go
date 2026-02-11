@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/goplus/llar/internal/formula"
@@ -46,6 +47,26 @@ func loadTestFormula(t *testing.T, moduleDir, modPath, version string) *formula.
 		t.Fatalf("failed to load formula for %s@%s: %v", modPath, version, err)
 	}
 	return f
+}
+
+func findModule(modules []*Module, path string) *Module {
+	for _, mod := range modules {
+		if mod.Path == path {
+			return mod
+		}
+	}
+	return nil
+}
+
+func depVersions(mod *Module) []module.Version {
+	vers := make([]module.Version, 0, len(mod.Deps))
+	for _, dep := range mod.Deps {
+		vers = append(vers, module.Version{
+			Path:    dep.Path,
+			Version: dep.Version,
+		})
+	}
+	return vers
 }
 
 // =============================================
@@ -464,17 +485,94 @@ func TestLoad_DiamondDeps(t *testing.T) {
 	}
 
 	// Verify leafmod was resolved to 2.0.0 (max version from diamond dependency)
-	modMap := make(map[string]*Module)
-	for _, m := range modules {
-		modMap[m.Path] = m
-	}
-
-	leafMod, ok := modMap["towner/leafmod"]
-	if !ok {
+	leafMod := findModule(modules, "towner/leafmod")
+	if leafMod == nil {
 		t.Fatal("missing towner/leafmod in build list")
 	}
 	if leafMod.Version != "2.0.0" {
 		t.Errorf("leafmod version = %q, want %q (MVS should select max)", leafMod.Version, "2.0.0")
+	}
+
+	depMod := findModule(modules, "towner/depmod")
+	if depMod == nil {
+		t.Fatal("missing towner/depmod in build list")
+	}
+	if !slices.Equal(depVersions(depMod), []module.Version{
+		{Path: "towner/leafmod", Version: "2.0.0"},
+	}) {
+		t.Errorf("depmod deps mismatch, got: %+v", depVersions(depMod))
+	}
+
+	altDep := findModule(modules, "towner/altdep")
+	if altDep == nil {
+		t.Fatal("missing towner/altdep in build list")
+	}
+	if !slices.Equal(depVersions(altDep), []module.Version{
+		{Path: "towner/leafmod", Version: "2.0.0"},
+	}) {
+		t.Errorf("altdep deps mismatch, got: %+v", depVersions(altDep))
+	}
+}
+
+func TestLoad_DeepDiamondDeps_ResolvedSubgraph(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+
+	// deepmain depends on deepb@1.0.0 and deepd@1.0.0.
+	// deepb@1.0.0 depends on deepc@1.0.0 -> deepe@1.2.0
+	// deepd@1.0.0 depends on deepc@1.1.0 -> deepe@1.3.0
+	// MVS should select deepc@1.1.0 and deepe@1.3.0.
+	main := module.Version{Path: "towner/deepmain", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if len(modules) != 5 {
+		for _, m := range modules {
+			t.Logf("  %s@%s", m.Path, m.Version)
+		}
+		t.Fatalf("expected 5 modules, got %d", len(modules))
+	}
+
+	deepC := findModule(modules, "towner/deepc")
+	if deepC == nil {
+		t.Fatal("missing towner/deepc in build list")
+	}
+	if deepC.Version != "1.1.0" {
+		t.Fatalf("deepc version = %q, want %q", deepC.Version, "1.1.0")
+	}
+
+	deepE := findModule(modules, "towner/deepe")
+	if deepE == nil {
+		t.Fatal("missing towner/deepe in build list")
+	}
+	if deepE.Version != "1.3.0" {
+		t.Fatalf("deepe version = %q, want %q", deepE.Version, "1.3.0")
+	}
+
+	deepB := findModule(modules, "towner/deepb")
+	if deepB == nil {
+		t.Fatal("missing towner/deepb in build list")
+	}
+	// MVS Req order is reverse-topological in this codepath.
+	if !slices.Equal(depVersions(deepB), []module.Version{
+		{Path: "towner/deepe", Version: "1.3.0"},
+		{Path: "towner/deepc", Version: "1.1.0"},
+	}) {
+		t.Errorf("deepb deps mismatch, got: %+v", depVersions(deepB))
+	}
+
+	deepD := findModule(modules, "towner/deepd")
+	if deepD == nil {
+		t.Fatal("missing towner/deepd in build list")
+	}
+	if !slices.Equal(depVersions(deepD), []module.Version{
+		{Path: "towner/deepe", Version: "1.3.0"},
+		{Path: "towner/deepc", Version: "1.1.0"},
+	}) {
+		t.Errorf("deepd deps mismatch, got: %+v", depVersions(deepD))
 	}
 }
 

@@ -1,0 +1,9 @@
+{
+	"path": "towner/deepmain",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/deepb", "version": "1.0.0"},
+			{"path": "towner/deepd", "version": "1.0.0"}
+		]
+	}
+}

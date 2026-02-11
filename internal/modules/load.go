@@ -125,6 +125,10 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		}
 		return compare(module.Version{p, v1}, module.Version{p, v2})
 	}
+
+	var graphMu sync.Mutex
+	graph := mvs.NewGraph(cmp, mainDeps)
+
 	onLoad := func(mod module.Version) ([]module.Version, error) {
 		thisMod, err := moduleOf(mod.Path)
 		if err != nil {
@@ -134,7 +138,15 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if err != nil {
 			return nil, err
 		}
-		return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+		deps, err := resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+		if err != nil {
+			return nil, err
+		}
+		graphMu.Lock()
+		graph.Require(mod, deps)
+		graphMu.Unlock()
+
+		return deps, nil
 	}
 
 	reqs := &mvsReqs{
@@ -194,10 +206,47 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if mod.Path == main.Path && mod.Version == main.Version {
 			deps = modules[1:]
 		} else {
-			reqs, err := mvs.Req(module.Version{mod.Path, mod.Version}, []string{}, reqs)
-			if err != nil {
-				return nil, err
+			var reqs []module.Version
+
+			root := module.Version{mod.Path, mod.Version}
+			queue := []module.Version{root}
+
+			// Fill the sub dependency graph via BFS here
+			// Because the mvs package dones't provide a method scanning from the specific root
+			for len(queue) > 0 {
+				// pop the head node
+				node := queue[0]
+				queue = queue[1:]
+
+				nodeReqs, ok := graph.RequiredBy(node)
+				if !ok {
+					panic("should be found in the graph")
+				}
+				for _, req := range nodeReqs {
+					// push to the queue for next scanning
+					queue = append(queue, req)
+
+					// RequiredBy dones't return the computed version, we actually need the computed one.
+					// Dependency graph:
+					//
+					//	A@1.0.0
+					//	├── B@1.0.0
+					//	│   └── C@1.0.0
+					//	│       └── E@1.2.0
+					//	└── D@1.0.0
+					//	    └── C@1.1.0
+					//	        └── E@1.3.0
+					//
+					// Sub dependency graph we expected for B:
+					//	B@1.0.0
+					//	└── C@1.1.0
+					//	     └── E@1.3.0
+					reqs = append(reqs, module.Version{req.Path, graph.Selected(req.Path)})
+				}
 			}
+			// Construct reverse order lists
+			slices.Reverse(reqs)
+
 			deps, err = convertToModules(reqs)
 			if err != nil {
 				return nil, err
