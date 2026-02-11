@@ -717,6 +717,72 @@ func TestLoad_ErrorMainModuleNotFound(t *testing.T) {
 // Integration tests (require network)
 // =============================================
 
+func TestIntegration_LoadCMakeListsDeps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	vcsRepo, err := vcs.NewRepo("github.com/MeteorsLiu/llarmvp-formula")
+	if err != nil {
+		t.Fatalf("failed to create vcs.Repo: %v", err)
+	}
+
+	store := repo.New(tmpDir, vcsRepo)
+	ctx := context.Background()
+
+	// Load MeteorsLiu/cmaketest@1.0.0 whose OnRequire reads CMakeLists.txt
+	// from the source repo, parses find_package(testdep REQUIRED),
+	// and maps it to towner/testdep with version resolved from versions.json.
+	main := module.Version{Path: "MeteorsLiu/cmaketest", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Expect 2 modules: cmaketest and testdep
+	if len(modules) != 2 {
+		for _, m := range modules {
+			t.Logf("  %s@%s", m.Path, m.Version)
+		}
+		t.Fatalf("expected 2 modules, got %d", len(modules))
+	}
+
+	if modules[0].Path != "MeteorsLiu/cmaketest" {
+		t.Errorf("main module = %q, want %q", modules[0].Path, "MeteorsLiu/cmaketest")
+	}
+	if modules[0].Version != "1.0.0" {
+		t.Errorf("main version = %q, want %q", modules[0].Version, "1.0.0")
+	}
+
+	testdep := findModule(modules, "towner/testdep")
+	if testdep == nil {
+		t.Fatal("missing towner/testdep in build list (should be resolved from CMakeLists.txt find_package)")
+	}
+	if testdep.Version != "1.0.0" {
+		t.Errorf("testdep version = %q, want %q", testdep.Version, "1.0.0")
+	}
+
+	// Verify main module deps
+	if len(modules[0].Deps) != 1 {
+		t.Errorf("main module deps count = %d, want 1", len(modules[0].Deps))
+	} else if modules[0].Deps[0].Path != "towner/testdep" {
+		t.Errorf("main module dep = %q, want %q", modules[0].Deps[0].Path, "towner/testdep")
+	}
+
+	// Verify formulas loaded correctly
+	if modules[0].Formula == nil {
+		t.Fatal("cmaketest Formula is nil")
+	}
+	if modules[0].Formula.OnRequire == nil {
+		t.Error("cmaketest OnRequire is nil")
+	}
+	if modules[0].Formula.OnBuild == nil {
+		t.Error("cmaketest OnBuild is nil")
+	}
+}
+
 func TestIntegration_LoadFromRealRepo_Zlib(t *testing.T) {
 	t.Skip("skipping: real formulas use autotools which is not yet implemented")
 
