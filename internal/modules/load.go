@@ -63,14 +63,11 @@ func latestVersion(modPath string, repo vcs.Repo, comparator func(v1, v2 module.
 func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
 	var moduleCache sync.Map
 
-	// moduleOf returns a formulaModule for the given module path, using a cache
-	// to avoid redundant loads. Note that FormulaStore.ModuleFS syncs with an
-	// empty ref, so the formula is always fetched from the latest commit on the
-	// default branch of the formula repository.
 	moduleOf := func(modPath string) (*formulaModule, error) {
 		if fm, ok := moduleCache.Load(modPath); ok {
 			return fm.(*formulaModule), nil
 		}
+		// ModuleFS always fetches the formula from the latest commit.
 		fs, err := opts.FormulaStore.ModuleFS(ctx, modPath)
 		if err != nil {
 			return nil, err
