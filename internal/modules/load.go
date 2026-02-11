@@ -353,6 +353,9 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 
 	var vers []module.Version
 
+	// Reconcile onRequire deps with versions.json: fill in missing versions
+	// from the pinned table; unknown deps are safe to skip since MVS resolves
+	// them recursively through other paths in the dependency graph.
 	for _, dep := range deps.Deps() {
 		if dep.Version == "" {
 			// if a version of a dep input by onRequire is empty, try our best to resolve it.
