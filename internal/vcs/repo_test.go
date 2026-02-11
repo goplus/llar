@@ -915,6 +915,40 @@ func TestRepoFSOpen_ReadFromCache(t *testing.T) {
 	}
 }
 
+func TestSyncDirSparse_InitBranchError(t *testing.T) {
+	c := newGitHubClient()
+	destDir := t.TempDir()
+
+	// Cancelled context makes exec.CommandContext fail
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// .git does not exist → enters IsNotExist branch
+	// runGit("init") error is ignored, but sparse-checkout init will fail
+	err := c.syncDirSparse(ctx, "owner", "repo", "v1.0", "sub", destDir)
+	if err == nil {
+		t.Error("expected error from cancelled context")
+	}
+}
+
+func TestSyncDirSparse_AddBranchError(t *testing.T) {
+	c := newGitHubClient()
+	destDir := t.TempDir()
+
+	// Create .git so it enters the else (add) branch
+	if err := os.MkdirAll(filepath.Join(destDir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := c.syncDirSparse(ctx, "owner", "repo", "v1.0", "sub", destDir)
+	if err == nil {
+		t.Error("expected error from cancelled context")
+	}
+}
+
 func TestGitHubClientSyncDirSparseMultiplePaths(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

@@ -193,8 +193,8 @@ func (g *githubClient) syncDirSparse(ctx context.Context, owner, repo, ref, path
 	// Use "set" on first call (replaces default patterns), "add" on subsequent
 	// calls so previously synced module directories stay in the working tree.
 	gitPath := filepath.ToSlash(path)
-	_, gitExists := os.Stat(filepath.Join(destDir, ".git"))
-	if gitExists != nil {
+	_, gitErr := os.Stat(filepath.Join(destDir, ".git"))
+	if os.IsNotExist(gitErr) {
 		// First time: initialize git repo + sparse-checkout
 		runGit("init")
 		runGit("remote", "add", "origin", repoURL)
