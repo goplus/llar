@@ -50,11 +50,10 @@ func latestVersion(modPath string, repo vcs.Repo, comparator func(v1, v2 module.
 	if len(tags) == 0 {
 		return "", fmt.Errorf("failed to retrieve the latest version: no tags found")
 	}
-	slices.SortFunc(tags, func(a, b string) int {
-		// we want the max heap
-		return -comparator(module.Version{modPath, a}, module.Version{modPath, b})
+	max := slices.MaxFunc(tags, func(a, b string) int {
+		return comparator(module.Version{modPath, a}, module.Version{modPath, b})
 	})
-	return tags[0], nil
+	return max, nil
 }
 
 // Load loads all packages required by the main module and resolves
