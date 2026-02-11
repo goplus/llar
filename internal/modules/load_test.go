@@ -778,7 +778,7 @@ func TestIntegration_LatestVersion(t *testing.T) {
 		t.Fatalf("create latest version repo failed: %v", err)
 	}
 
-	version, err := latestVersion("madler/zlib", latestRepo, cmp)
+	version, err := latestVersion(context.Background(), "madler/zlib", latestRepo, cmp)
 	if err != nil {
 		t.Fatalf("latestVersion failed: %v", err)
 	}

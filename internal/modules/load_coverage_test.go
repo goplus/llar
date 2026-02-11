@@ -108,7 +108,7 @@ func TestLatestVersion_SelectsMaxByComparator(t *testing.T) {
 		return 0
 	}
 
-	got, err := latestVersion("towner/leafmod", repo, cmp)
+	got, err := latestVersion(context.Background(), "towner/leafmod", repo, cmp)
 	if err != nil {
 		t.Fatalf("latestVersion failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestLatestVersion_NoTags(t *testing.T) {
 
 	cmp := func(v1, v2 module.Version) int { return strings.Compare(v1.Version, v2.Version) }
 
-	_, err := latestVersion("towner/leafmod", repo, cmp)
+	_, err := latestVersion(context.Background(), "towner/leafmod", repo, cmp)
 	if err == nil {
 		t.Fatal("expected error for no tags")
 	}
@@ -136,7 +136,7 @@ func TestLatestVersion_TagsError(t *testing.T) {
 
 	cmp := func(v1, v2 module.Version) int { return strings.Compare(v1.Version, v2.Version) }
 
-	_, err := latestVersion("towner/leafmod", repo, cmp)
+	_, err := latestVersion(context.Background(), "towner/leafmod", repo, cmp)
 	if err == nil {
 		t.Fatal("expected tags error")
 	}

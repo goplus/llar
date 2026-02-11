@@ -42,8 +42,8 @@ type Options struct {
 	FormulaStore *repo.Store
 }
 
-func latestVersion(modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
-	tags, err := repo.Tags(context.TODO())
+func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
+	tags, err := repo.Tags(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -90,7 +90,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if err != nil {
 			return nil, err
 		}
-		latest, err := latestVersion(main.Path, latestRepo, cmp)
+		latest, err := latestVersion(ctx, main.Path, latestRepo, cmp)
 		if err != nil {
 			return nil, err
 		}
