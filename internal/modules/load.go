@@ -349,21 +349,21 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 	if err != nil {
 		return nil, err
 	}
-	current := depTable.Dependencies[mod.Version]
+	versionedDeps := depTable.Dependencies[mod.Version]
 
 	var vers []module.Version
 
 	for _, dep := range deps.Deps() {
 		if dep.Version == "" {
 			// if a version of a dep input by onRequire is empty, try our best to resolve it.
-			idx := slices.IndexFunc(current, func(depInTable module.Version) bool {
+			idx := slices.IndexFunc(versionedDeps, func(depInTable module.Version) bool {
 				return depInTable.Path == dep.Path
 			})
 			if idx < 0 {
 				// It seems safe to drop deps here, because we resolve deps recursively and finally we will find that dep.
 				continue
 			}
-			dep.Version = current[idx].Version
+			dep.Version = versionedDeps[idx].Version
 		}
 
 		vers = append(vers, module.Version{
@@ -376,7 +376,7 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 		return vers, nil
 	}
 
-	for _, dep := range current {
+	for _, dep := range versionedDeps {
 		if dep.Version != "" {
 			vers = append(vers, module.Version{
 				Path:    dep.Path,
