@@ -1,0 +1,29 @@
+import "strings"
+
+id "towner/cmakereq"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+	content, err := proj.readFile("CMakeLists.txt")
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "find_package(") {
+			continue
+		}
+		inner := line[len("find_package("):]
+		end := strings.IndexAny(inner, " )")
+		if end <= 0 {
+			continue
+		}
+		pkgName := strings.ToLower(inner[:end])
+		deps.require "towner/" + pkgName, ""
+	}
+}
+
+onBuild (ctx, proj, out) => {
+	echo "building cmakereq"
+}

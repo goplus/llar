@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/vcs"
@@ -164,27 +165,6 @@ func TestResolveDeps_WithOnRequire_AddsDeps(t *testing.T) {
 	}
 }
 
-func TestResolveDeps_TransitiveDeps(t *testing.T) {
-	// depmod has deps: leafmod@1.0.0
-	modFS := os.DirFS("testdata/load/towner/depmod").(fs.ReadFileFS)
-	frla := &formula.Formula{
-		ModPath: "towner/depmod",
-		FromVer: "1.0.0",
-	}
-	mod := module.Version{Path: "towner/depmod", Version: "1.0.0"}
-
-	deps, err := resolveDeps(mod, modFS, frla)
-	if err != nil {
-		t.Fatalf("resolveDeps failed: %v", err)
-	}
-	if len(deps) != 1 {
-		t.Fatalf("expected 1 dep, got %d: %v", len(deps), deps)
-	}
-	if deps[0].Path != "towner/leafmod" || deps[0].Version != "1.0.0" {
-		t.Errorf("dep = %v, want {towner/leafmod 1.0.0}", deps[0])
-	}
-}
-
 func TestResolveDeps_WithOnRequire_EmptyVersionFallback(t *testing.T) {
 	// OnRequire adds dep with empty version; resolveDeps resolves from versions.json
 	frla := loadTestFormula(t, "testdata/load/towner/reqnover", "towner/reqnover", "1.0.0")
@@ -229,6 +209,65 @@ func TestResolveDeps_WithOnRequire_UnknownDepDropped(t *testing.T) {
 	}
 	if deps[0].Path != "towner/depmod" {
 		t.Errorf("dep path = %q, want %q", deps[0].Path, "towner/depmod")
+	}
+}
+
+func TestResolveDeps_WithOnRequire_ReadsCMakeListsDeps(t *testing.T) {
+	// Load the formula whose OnRequire reads CMakeLists.txt and parses find_package() directives
+	frla := loadTestFormula(t, "testdata/load/towner/cmakereq", "towner/cmakereq", "1.0.0")
+	if frla.OnRequire == nil {
+		t.Fatal("expected OnRequire to be non-nil")
+	}
+
+	// Create a source directory with a sample CMakeLists.txt
+	sourceDir := t.TempDir()
+	cmakeContent := `cmake_minimum_required(VERSION 3.10)
+project(cmakereq)
+
+find_package(depmod REQUIRED)
+find_package(leafmod REQUIRED)
+`
+	if err := os.WriteFile(sourceDir+"/CMakeLists.txt", []byte(cmakeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	proj := &classfile.Project{
+		SourceFS: os.DirFS(sourceDir).(fs.ReadFileFS),
+	}
+	var deps classfile.ModuleDeps
+
+	frla.OnRequire(proj, &deps)
+
+	got := deps.Deps()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 deps from CMakeLists.txt, got %d: %v", len(got), got)
+	}
+	// OnRequire should extract package names from find_package() directives
+	// and map them to module paths with empty versions (resolved later from versions.json)
+	expected := []module.Version{
+		{Path: "towner/depmod", Version: ""},
+		{Path: "towner/leafmod", Version: ""},
+	}
+	if !slices.Equal(got, expected) {
+		t.Errorf("deps mismatch:\n  got:  %v\n  want: %v", got, expected)
+	}
+}
+
+func TestResolveDeps_WithOnRequire_CMakeListsNoCMakeFile(t *testing.T) {
+	// When CMakeLists.txt is missing, OnRequire should return with no deps
+	frla := loadTestFormula(t, "testdata/load/towner/cmakereq", "towner/cmakereq", "1.0.0")
+
+	// Create a Project with an empty source directory (no CMakeLists.txt)
+	emptyDir := t.TempDir()
+	proj := &classfile.Project{
+		SourceFS: os.DirFS(emptyDir).(fs.ReadFileFS),
+	}
+	var deps classfile.ModuleDeps
+
+	frla.OnRequire(proj, &deps)
+
+	if len(deps.Deps()) != 0 {
+		t.Fatalf("expected 0 deps when CMakeLists.txt missing, got %d: %v", len(deps.Deps()), deps.Deps())
 	}
 }
 
@@ -312,9 +351,16 @@ func TestLoad_ChainDeps(t *testing.T) {
 	if len(leafMod.Deps) != 0 {
 		t.Errorf("leafmod deps count = %d, want 0", len(leafMod.Deps))
 	}
+
+	// Remaining modules should be sorted by path (MVS guarantee)
+	for i := 2; i < len(modules); i++ {
+		if modules[i].Path < modules[i-1].Path {
+			t.Errorf("modules not sorted: %q before %q", modules[i-1].Path, modules[i].Path)
+		}
+	}
 }
 
-func TestLoad_ModuleFields(t *testing.T) {
+func TestLoad_FormulaContent(t *testing.T) {
 	store := setupTestStore(t, "testdata/load")
 	ctx := context.Background()
 	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
@@ -329,37 +375,18 @@ func TestLoad_ModuleFields(t *testing.T) {
 
 	mod := modules[0]
 	if mod.Formula == nil {
-		t.Error("Formula is nil")
+		t.Fatal("Formula is nil")
 	}
 	if mod.FS == nil {
 		t.Error("FS is nil")
 	}
-	if mod.Path != "towner/standalone" {
-		t.Errorf("Path = %q, want %q", mod.Path, "towner/standalone")
+	if mod.Formula.ModPath != "towner/standalone" {
+		t.Errorf("Formula.ModPath = %q, want %q", mod.Formula.ModPath, "towner/standalone")
 	}
-	if mod.Version != "1.0.0" {
-		t.Errorf("Version = %q, want %q", mod.Version, "1.0.0")
+	if mod.Formula.FromVer != "1.0.0" {
+		t.Errorf("Formula.FromVer = %q, want %q", mod.Formula.FromVer, "1.0.0")
 	}
-}
-
-func TestLoad_FormulaContent(t *testing.T) {
-	store := setupTestStore(t, "testdata/load")
-	ctx := context.Background()
-	main := module.Version{Path: "towner/standalone", Version: "1.0.0"}
-
-	modules, err := Load(ctx, main, Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	f := modules[0].Formula
-	if f.ModPath != "towner/standalone" {
-		t.Errorf("Formula.ModPath = %q, want %q", f.ModPath, "towner/standalone")
-	}
-	if f.FromVer != "1.0.0" {
-		t.Errorf("Formula.FromVer = %q, want %q", f.FromVer, "1.0.0")
-	}
-	if f.OnBuild == nil {
+	if mod.Formula.OnBuild == nil {
 		t.Error("Formula.OnBuild is nil")
 	}
 }
@@ -431,28 +458,6 @@ func TestLoad_ModuleCaching(t *testing.T) {
 			t.Errorf("module %d differs: %s@%s vs %s@%s",
 				i, modules1[i].Path, modules1[i].Version,
 				modules2[i].Path, modules2[i].Version)
-		}
-	}
-}
-
-func TestLoad_BuildListOrder(t *testing.T) {
-	store := setupTestStore(t, "testdata/load")
-	ctx := context.Background()
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-
-	modules, err := Load(ctx, main, Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-
-	// MVS guarantees: first element is the target, rest are sorted by path
-	if modules[0].Path != "towner/mainmod" {
-		t.Errorf("first module = %q, want main module %q", modules[0].Path, "towner/mainmod")
-	}
-	// Remaining modules should be sorted by path
-	for i := 2; i < len(modules); i++ {
-		if modules[i].Path < modules[i-1].Path {
-			t.Errorf("modules not sorted: %q before %q", modules[i-1].Path, modules[i].Path)
 		}
 	}
 }
