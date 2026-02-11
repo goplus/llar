@@ -127,9 +127,14 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	}
 
 	var graphMu sync.Mutex
+	var depLoadCache sync.Map
+
 	graph := mvs.NewGraph(cmp, mainDeps)
 
 	onLoad := func(mod module.Version) ([]module.Version, error) {
+		if deps, ok := depLoadCache.Load(mod); ok {
+			return deps.([]module.Version), nil
+		}
 		thisMod, err := moduleOf(mod.Path)
 		if err != nil {
 			return nil, err
@@ -146,6 +151,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		graph.Require(mod, deps)
 		graphMu.Unlock()
 
+		depLoadCache.Store(mod, deps)
 		return deps, nil
 	}
 
