@@ -1,0 +1,9 @@
+{
+	"path": "towner/selmain",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/selb", "version": "1.0.0"},
+			{"path": "towner/seld", "version": "1.0.0"}
+		]
+	}
+}

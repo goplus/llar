@@ -581,6 +581,62 @@ func TestLoad_DeepDiamondDeps_ResolvedSubgraph(t *testing.T) {
 	}
 }
 
+func TestLoad_SelectedVersionDeps(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+	ctx := context.Background()
+
+	// selmain depends on selb@1.0.0 and seld@1.0.0.
+	// selb@1.0.0 depends on selc@1.0.0  (selc@1.0.0 requires sele@1.0.0 only)
+	// seld@1.0.0 depends on selc@1.1.0  (selc@1.1.0 requires sele@1.0.0 AND self@1.0.0)
+	// MVS selects selc@1.1.0.
+	//
+	// When filling selb's deps, BFS must traverse selc@1.1.0 (selected),
+	// NOT selc@1.0.0 (originally required by selb). Otherwise self@1.0.0
+	// will be missing from selb's sub-dependency graph.
+	main := module.Version{Path: "towner/selmain", Version: "1.0.0"}
+
+	modules, err := Load(ctx, main, Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	// Expect 6 modules: selmain, selb, selc, seld, sele, self
+	if len(modules) != 6 {
+		for _, m := range modules {
+			t.Logf("  %s@%s", m.Path, m.Version)
+		}
+		t.Fatalf("expected 6 modules, got %d", len(modules))
+	}
+
+	// selc should be upgraded to 1.1.0
+	selc := findModule(modules, "towner/selc")
+	if selc == nil {
+		t.Fatal("missing towner/selc")
+	}
+	if selc.Version != "1.1.0" {
+		t.Errorf("selc version = %q, want %q", selc.Version, "1.1.0")
+	}
+
+	// selb's deps must include self (inherited from selc@1.1.0, not selc@1.0.0)
+	selb := findModule(modules, "towner/selb")
+	if selb == nil {
+		t.Fatal("missing towner/selb")
+	}
+	selbDepPaths := make(map[string]bool)
+	for _, dep := range selb.Deps {
+		selbDepPaths[dep.Path] = true
+	}
+	if !selbDepPaths["towner/self"] {
+		t.Errorf("selb deps missing towner/self (should use selc@1.1.0 edges, not selc@1.0.0)\n  got: %v", depVersions(selb))
+	}
+	if !selbDepPaths["towner/sele"] {
+		t.Errorf("selb deps missing towner/sele\n  got: %v", depVersions(selb))
+	}
+	if !selbDepPaths["towner/selc"] {
+		t.Errorf("selb deps missing towner/selc\n  got: %v", depVersions(selb))
+	}
+}
+
 func TestLoad_ErrorDepFormulaNotFound(t *testing.T) {
 	store := setupTestStore(t, "testdata/load")
 	ctx := context.Background()

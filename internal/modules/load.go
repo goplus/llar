@@ -213,12 +213,14 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 			deps = modules[1:]
 		} else {
 			var reqs []module.Version
+			visited := make(map[string]bool)
 
 			root := module.Version{mod.Path, mod.Version}
 			queue := []module.Version{root}
+			visited[root.Path] = true
 
 			// Fill the sub dependency graph via BFS here
-			// Because the mvs package dones't provide a method scanning from the specific root
+			// Because the mvs package doesn't provide a method scanning from the specific root
 			for len(queue) > 0 {
 				// pop the head node
 				node := queue[0]
@@ -229,10 +231,11 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 					panic("should be found in the graph")
 				}
 				for _, req := range nodeReqs {
-					// push to the queue for next scanning
-					queue = append(queue, req)
-
-					// RequiredBy dones't return the computed version, we actually need the computed one.
+					// Use the MVS-selected version, not the originally required one.
+					// RequiredBy returns the edges recorded when the module was first loaded,
+					// but MVS may have selected a higher version with different (or additional)
+					// dependencies.
+					//
 					// Dependency graph:
 					//
 					//	A@1.0.0
@@ -247,7 +250,13 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 					//	B@1.0.0
 					//	└── C@1.1.0
 					//	     └── E@1.3.0
-					reqs = append(reqs, module.Version{req.Path, graph.Selected(req.Path)})
+					selected := module.Version{req.Path, graph.Selected(req.Path)}
+					if visited[selected.Path] {
+						continue
+					}
+					visited[selected.Path] = true
+					queue = append(queue, selected)
+					reqs = append(reqs, selected)
 				}
 			}
 			// Construct reverse order lists

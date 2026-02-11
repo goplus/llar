@@ -1,0 +1,8 @@
+{
+	"path": "towner/selb",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/selc", "version": "1.0.0"}
+		]
+	}
+}
