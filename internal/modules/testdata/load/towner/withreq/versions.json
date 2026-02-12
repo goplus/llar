@@ -1,0 +1,8 @@
+{
+	"path": "towner/withreq",
+	"deps": {
+		"1.0.0": [
+			{"path": "towner/depmod", "version": "1.0.0"}
+		]
+	}
+}

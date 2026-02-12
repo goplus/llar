@@ -28,8 +28,8 @@ func TestNewFormulaModule(t *testing.T) {
 	if mod.formulas == nil {
 		t.Error("formulas map is nil")
 	}
-	if mod.cmp != nil {
-		t.Error("cmp should be nil initially")
+	if mod.comparator == nil {
+		t.Error("comparator should be initialized")
 	}
 }
 
@@ -46,17 +46,17 @@ func TestFormulaModule_Comparator(t *testing.T) {
 		t.Fatal("comparator() returned nil")
 	}
 
-	// Test comparator works correctly
-	v1 := module.Version{Path: "DaveGamble/cJSON", Version: "1.0"}
-	v2 := module.Version{Path: "DaveGamble/cJSON", Version: "2.0"}
+	// Test comparator works correctly (cJSON uses semver, needs v prefix)
+	v1 := module.Version{Path: "DaveGamble/cJSON", Version: "v1.0.0"}
+	v2 := module.Version{Path: "DaveGamble/cJSON", Version: "v2.0.0"}
 	if result := cmp(v1, v2); result >= 0 {
-		t.Errorf("cmp(1.0, 2.0) = %d, want < 0", result)
+		t.Errorf("cmp(v1.0.0, v2.0.0) = %d, want < 0", result)
 	}
 	if result := cmp(v2, v1); result <= 0 {
-		t.Errorf("cmp(2.0, 1.0) = %d, want > 0", result)
+		t.Errorf("cmp(v2.0.0, v1.0.0) = %d, want > 0", result)
 	}
 	if result := cmp(v1, v1); result != 0 {
-		t.Errorf("cmp(1.0, 1.0) = %d, want 0", result)
+		t.Errorf("cmp(v1.0.0, v1.0.0) = %d, want 0", result)
 	}
 
 	// Second call should return cached comparator
@@ -95,20 +95,20 @@ func TestFormulaModule_At(t *testing.T) {
 	fsys := os.DirFS("testdata/DaveGamble/cJSON")
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
-	// Test getting formula for version 1.7.18 (should match fromVer 1.5.0)
-	f, err := mod.at("1.7.18")
+	// Test getting formula for version v1.7.18 (should match fromVer v1.5.0)
+	f, err := mod.at("v1.7.18")
 	if err != nil {
 		t.Fatalf("at() failed: %v", err)
 	}
 	if f == nil {
 		t.Fatal("at() returned nil")
 	}
-	if f.FromVer != "1.5.0" {
-		t.Errorf("FromVer = %q, want %q", f.FromVer, "1.5.0")
+	if f.FromVer != "v1.5.0" {
+		t.Errorf("FromVer = %q, want %q", f.FromVer, "v1.5.0")
 	}
 
 	// Test caching
-	f2, err := mod.at("1.7.18")
+	f2, err := mod.at("v1.7.18")
 	if err != nil {
 		t.Fatalf("second at() failed: %v", err)
 	}
@@ -125,12 +125,12 @@ func TestFormulaModule_AtVersionMatching(t *testing.T) {
 		version     string
 		wantFromVer string
 	}{
-		{"1.0.0", "1.0.0"},
-		{"1.2.0", "1.0.0"},
-		{"1.5.0", "1.5.0"},
-		{"1.7.18", "1.5.0"},
-		{"2.0.0", "2.0.0"},
-		{"2.5.0", "2.0.0"},
+		{"v1.0.0", "v1.0.0"},
+		{"v1.2.0", "v1.0.0"},
+		{"v1.5.0", "v1.5.0"},
+		{"v1.7.18", "v1.5.0"},
+		{"v2.0.0", "v2.0.0"},
+		{"v2.5.0", "v2.0.0"},
 	}
 
 	for _, tt := range tests {
@@ -151,7 +151,7 @@ func TestFormulaModule_AtNoFormula(t *testing.T) {
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	// Version lower than all fromVer should fail
-	_, err := mod.at("0.5.0")
+	_, err := mod.at("v0.5.0")
 	if err == nil {
 		t.Error("at() should fail for version lower than all fromVer")
 	}
@@ -172,14 +172,14 @@ func TestFormulaModule_FindMaxFromVer(t *testing.T) {
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	cmp, _ := mod.comparator()
-	target := module.Version{Path: "DaveGamble/cJSON", Version: "1.7.18"}
+	target := module.Version{Path: "DaveGamble/cJSON", Version: "v1.7.18"}
 
 	fromVer, path, err := mod.findMaxFromVer(target, cmp)
 	if err != nil {
 		t.Fatalf("findMaxFromVer() failed: %v", err)
 	}
-	if fromVer != "1.5.0" {
-		t.Errorf("fromVer = %q, want %q", fromVer, "1.5.0")
+	if fromVer != "v1.5.0" {
+		t.Errorf("fromVer = %q, want %q", fromVer, "v1.5.0")
 	}
 	if path == "" {
 		t.Error("path is empty")
@@ -198,17 +198,17 @@ func TestFromVerOf(t *testing.T) {
 		{
 			name:        "cJSON 1.0.0",
 			path:        "1.0.0/CJSON_llar.gox",
-			wantFromVer: "1.0.0",
+			wantFromVer: "v1.0.0",
 		},
 		{
 			name:        "cJSON 1.5.0",
 			path:        "1.5.0/CJSON_llar.gox",
-			wantFromVer: "1.5.0",
+			wantFromVer: "v1.5.0",
 		},
 		{
 			name:        "cJSON 2.0.0",
 			path:        "2.0.0/CJSON_llar.gox",
-			wantFromVer: "2.0.0",
+			wantFromVer: "v2.0.0",
 		},
 		{
 			name:    "nonexistent file",
@@ -393,7 +393,7 @@ func TestIntegration_FormulaModuleToFormula(t *testing.T) {
 	mod := newFormulaModule(fsys, "DaveGamble/cJSON")
 
 	// Get formula
-	f, err := mod.at("1.7.18")
+	f, err := mod.at("v1.7.18")
 	if err != nil {
 		t.Fatalf("at() failed: %v", err)
 	}
@@ -402,8 +402,8 @@ func TestIntegration_FormulaModuleToFormula(t *testing.T) {
 	if f.ModPath != "DaveGamble/cJSON" {
 		t.Errorf("ModPath = %q, want %q", f.ModPath, "DaveGamble/cJSON")
 	}
-	if f.FromVer != "1.5.0" {
-		t.Errorf("FromVer = %q, want %q", f.FromVer, "1.5.0")
+	if f.FromVer != "v1.5.0" {
+		t.Errorf("FromVer = %q, want %q", f.FromVer, "v1.5.0")
 	}
 }
 
@@ -413,7 +413,7 @@ func TestIntegration_MultipleModules(t *testing.T) {
 		path    string
 		version string
 	}{
-		{"testdata/DaveGamble/cJSON", "DaveGamble/cJSON", "1.7.18"},
+		{"testdata/DaveGamble/cJSON", "DaveGamble/cJSON", "v1.7.18"},
 		{"testdata/madler/zlib", "madler/zlib", "1.5.0"},
 	}
 
