@@ -189,21 +189,26 @@ func (g *githubClient) syncDirSparse(ctx context.Context, owner, repo, ref, path
 		return nil
 	}
 
-	// Initialize git repository (ignore error if already initialized)
-	runGit("init")
-
-	// Add remote (ignore error if already exists)
-	runGit("remote", "add", "origin", repoURL)
-
-	// Enable sparse-checkout (no-cone mode for exact directory matching)
-	if err := runGit("sparse-checkout", "init", "--no-cone"); err != nil {
-		return err
-	}
-
-	// Set the sparse-checkout pattern to match only the specified directory
+	// Check if this directory already has a git repo from a previous sync.
+	// Use "set" on first call (replaces default patterns), "add" on subsequent
+	// calls so previously synced module directories stay in the working tree.
 	gitPath := filepath.ToSlash(path)
-	if err := runGit("sparse-checkout", "set", gitPath+"/**"); err != nil {
-		return err
+	_, gitErr := os.Stat(filepath.Join(destDir, ".git"))
+	if os.IsNotExist(gitErr) {
+		// First time: initialize git repo + sparse-checkout
+		runGit("init")
+		runGit("remote", "add", "origin", repoURL)
+		if err := runGit("sparse-checkout", "init", "--no-cone"); err != nil {
+			return err
+		}
+		if err := runGit("sparse-checkout", "set", gitPath+"/**"); err != nil {
+			return err
+		}
+	} else {
+		// Already initialized: accumulate sparse patterns
+		if err := runGit("sparse-checkout", "add", gitPath+"/**"); err != nil {
+			return err
+		}
 	}
 
 	// Fetch the specified ref
