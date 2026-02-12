@@ -63,31 +63,6 @@ func (m *mockLatestRepo) Sync(ctx context.Context, ref, path, localDir string) e
 	return nil
 }
 
-func testReqs(main module.Version, roots []module.Version, onLoad func(module.Version) ([]module.Version, error)) *mvsReqs {
-	return &mvsReqs{
-		roots: roots,
-		isMain: func(v module.Version) bool {
-			return v.Path == main.Path && v.Version == main.Version
-		},
-		cmp: func(_ string, v1, v2 string) int {
-			if v1 == v2 {
-				return 0
-			}
-			if v1 == "none" {
-				return -1
-			}
-			if v2 == "none" {
-				return 1
-			}
-			if v1 < v2 {
-				return -1
-			}
-			return 1
-		},
-		onLoad: onLoad,
-	}
-}
-
 func TestLatestVersion_SelectsMaxByComparator(t *testing.T) {
 	repo := &mockLatestRepo{
 		tags: []string{"v2", "v10", "v3"},
