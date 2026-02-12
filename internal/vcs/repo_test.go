@@ -1024,6 +1024,71 @@ func TestRepoFS_StatNonExistent(t *testing.T) {
 	}
 }
 
+func TestRepoFS_ReadFileThenSync(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir).(fs.ReadFileFS)
+
+	// Step 1: Cache a file via ReadFile (writes plain file to localDir)
+	data, err := fsys.ReadFile("LICENSE")
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if !strings.Contains(string(data), licenseHeader) {
+		t.Fatal("ReadFile returned unexpected content")
+	}
+
+	// Step 2: SyncDir on the same localDir (git init + sparse-checkout)
+	ctx := context.Background()
+	if err := r.Sync(ctx, "v68.0.0", ".github", localDir); err != nil {
+		t.Fatalf("Sync after ReadFile failed: %v", err)
+	}
+
+	// Step 3: Verify the previously cached file still readable
+	data2, err := fsys.ReadFile("LICENSE")
+	if err != nil {
+		t.Fatalf("ReadFile after Sync failed: %v", err)
+	}
+	if string(data) != string(data2) {
+		t.Error("ReadFile content changed after Sync")
+	}
+
+	// Step 4: Verify synced directory is also accessible
+	syncedDir := filepath.Join(localDir, ".github")
+	entries, err := os.ReadDir(syncedDir)
+	if err != nil {
+		t.Fatalf("ReadDir .github failed: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error(".github directory should have content after Sync")
+	}
+
+	// Step 5: Dump localDir structure to check for duplicates
+	filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(localDir, path)
+		if info.IsDir() && rel == ".git" {
+			return filepath.SkipDir
+		}
+		if info.IsDir() {
+			t.Logf("DIR  %s", rel)
+		} else {
+			t.Logf("FILE %s (%d bytes)", rel, info.Size())
+		}
+		return nil
+	})
+}
+
 func TestRepoFS_ReadDirSyncFetchError(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
