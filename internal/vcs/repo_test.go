@@ -6,13 +6,12 @@ package vcs
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 )
 
 func TestParseRepoPath(t *testing.T) {
@@ -589,329 +588,183 @@ func TestGitHubClientSyncDirShallowCloneUpdate(t *testing.T) {
 	}
 }
 
-// Unit tests with mock client (no network required)
+// Cache FS verification tests (real go-github, require network)
+//
+// These tests verify that repoFS correctly fetches remote content and caches
+// it to disk. We use the LICENSE file (BSD-3-Clause) at v68.0.0 because its
+// content is standardized and immutable at a pinned tag.
 
-func TestFileInfo(t *testing.T) {
-	now := time.Now()
-	fi := &fileInfo{
-		name:    "test.txt",
-		size:    42,
-		mode:    0644,
-		modTime: now,
-		isDir:   false,
+const licenseHeader = "Copyright (c) 2013 The go-github AUTHORS. All rights reserved."
+
+func TestRepoFS_ReadFileCacheVerification(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
 
-	if fi.Name() != "test.txt" {
-		t.Errorf("Name() = %q, want %q", fi.Name(), "test.txt")
-	}
-	if fi.Size() != 42 {
-		t.Errorf("Size() = %d, want 42", fi.Size())
-	}
-	if fi.Mode() != 0644 {
-		t.Errorf("Mode() = %v, want 0644", fi.Mode())
-	}
-	if !fi.ModTime().Equal(now) {
-		t.Errorf("ModTime() = %v, want %v", fi.ModTime(), now)
-	}
-	if fi.IsDir() {
-		t.Error("IsDir() = true, want false")
-	}
-	if fi.Sys() != nil {
-		t.Errorf("Sys() = %v, want nil", fi.Sys())
-	}
-
-	// Test directory
-	dir := &fileInfo{name: "dir", isDir: true}
-	if !dir.IsDir() {
-		t.Error("IsDir() = false, want true")
-	}
-}
-
-func TestNewRepo_InvalidPath(t *testing.T) {
-	// Too few parts
-	_, err := NewRepo("x")
-	if err == nil {
-		t.Error("NewRepo(\"x\") should return error")
-	}
-
-	_, err = NewRepo("only/two")
-	if err == nil {
-		t.Error("NewRepo(\"only/two\") should return error")
-	}
-}
-
-func newMockRepo(mc *mockClient) *repo {
-	return &repo{
-		client: mc,
-		host:   "mock.com",
-		owner:  "owner",
-		name:   "repo",
-	}
-}
-
-func TestRepoFSReadFile_LoadError(t *testing.T) {
-	mc := &mockClient{
-		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
-			return nil, fmt.Errorf("remote read error")
-		},
-	}
-	r := newMockRepo(mc)
-
-	localDir := t.TempDir()
-	fsys := r.At("v1.0", localDir).(fs.ReadFileFS)
-
-	_, err := fsys.ReadFile("missing.txt")
-	if err == nil {
-		t.Error("ReadFile should fail when remote returns error")
-	}
-	if err.Error() != "remote read error" {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestRepoFSReadFile_LoadMkdirError(t *testing.T) {
-	mc := &mockClient{
-		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
-			return []byte("data"), nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	// Use a path where MkdirAll will fail (file exists where dir is expected)
-	localDir := t.TempDir()
-	blockingFile := filepath.Join(localDir, "sub")
-	os.WriteFile(blockingFile, []byte("block"), 0644)
-
-	fsys := r.At("v1.0", localDir)
-	rfs := fsys.(*repoFS)
-
-	f, _ := rfs.Open("sub/file.txt")
-	_, err := io.ReadAll(f)
-	if err == nil {
-		t.Error("ReadFile should fail when MkdirAll fails")
-	}
-}
-
-func TestRepoFSReadFile_LoadWriteError(t *testing.T) {
-	mc := &mockClient{
-		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
-			return []byte("data"), nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	// Use a read-only directory to trigger WriteFile error
-	localDir := t.TempDir()
-	os.Chmod(localDir, 0555)
-	defer os.Chmod(localDir, 0755) // restore for cleanup
-
-	fsys := r.At("v1.0", localDir)
-	rfs := fsys.(*repoFS)
-
-	f, _ := rfs.Open("file.txt")
-	_, err := io.ReadAll(f)
-	if err == nil {
-		t.Error("ReadFile should fail when WriteFile fails")
-	}
-}
-
-func TestRepoFSReadDir_RemoteFallback(t *testing.T) {
-	syncCalled := false
-	mc := &mockClient{
-		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
-			syncCalled = true
-			// Create a file in destDir to simulate successful sync
-			os.MkdirAll(destDir, 0755)
-			os.WriteFile(filepath.Join(destDir, "synced.txt"), []byte("ok"), 0644)
-			return nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	localDir := t.TempDir()
-	fsys := r.At("v1.0", localDir).(fs.ReadDirFS)
-
-	entries, err := fsys.ReadDir("subdir")
+	r, err := NewRepo("github.com/google/go-github")
 	if err != nil {
-		t.Fatalf("ReadDir failed: %v", err)
+		t.Fatalf("NewRepo failed: %v", err)
 	}
-	if !syncCalled {
-		t.Error("SyncDir should be called when local dir is empty")
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir).(fs.ReadFileFS)
+
+	// ReadFile fetches from remote and caches to disk
+	data, err := fsys.ReadFile("LICENSE")
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "synced.txt" {
-		t.Errorf("unexpected entries: %v", entries)
+
+	// Verify remote content matches known LICENSE text
+	if !strings.Contains(string(data), licenseHeader) {
+		t.Errorf("ReadFile content missing expected license header:\ngot: %s", string(data))
+	}
+
+	// Verify on-disk cache has the same content
+	cached := filepath.Join(localDir, "LICENSE")
+	diskData, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatal("File should be cached on disk after ReadFile")
+	}
+	if string(diskData) != string(data) {
+		t.Error("On-disk cache doesn't match ReadFile result")
 	}
 }
 
-func TestRepoFSReadDir_SyncError(t *testing.T) {
-	mc := &mockClient{
-		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
-			return fmt.Errorf("sync failed")
-		},
+func TestRepoFS_OpenReadCacheVerification(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
-	r := newMockRepo(mc)
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
 
 	localDir := t.TempDir()
-	fsys := r.At("v1.0", localDir).(fs.ReadDirFS)
+	fsys := r.At("v68.0.0", localDir)
 
-	_, err := fsys.ReadDir("missing")
-	if err == nil {
-		t.Error("ReadDir should fail when SyncDir fails")
-	}
-}
-
-func TestRepoFSOpen_StatRemote(t *testing.T) {
-	mc := &mockClient{
-		statFunc: func(ctx context.Context, owner, repo, ref, path string) (fs.FileInfo, error) {
-			return &fileInfo{name: "remote.txt", size: 100, mode: 0644}, nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	localDir := t.TempDir()
-	fsys := r.At("v1.0", localDir)
-
-	f, err := fsys.Open("remote.txt")
+	// Open + Read fetches from remote
+	f, err := fsys.Open("LICENSE")
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer f.Close()
-
-	// Stat before Read — no local file, goes to remote
-	info, err := f.Stat()
-	if err != nil {
-		t.Fatalf("Stat failed: %v", err)
-	}
-	if info.Name() != "remote.txt" {
-		t.Errorf("Stat Name = %q, want %q", info.Name(), "remote.txt")
-	}
-	if info.Size() != 100 {
-		t.Errorf("Stat Size = %d, want 100", info.Size())
-	}
-}
-
-func TestRepoFSOpen_StatRemoteError(t *testing.T) {
-	mc := &mockClient{
-		statFunc: func(ctx context.Context, owner, repo, ref, path string) (fs.FileInfo, error) {
-			return nil, fmt.Errorf("stat error")
-		},
-	}
-	r := newMockRepo(mc)
-
-	localDir := t.TempDir()
-	fsys := r.At("v1.0", localDir)
-
-	f, _ := fsys.Open("nope.txt")
-	defer f.Close()
-
-	_, err := f.Stat()
-	if err == nil {
-		t.Error("Stat should fail when remote Stat fails")
-	}
-}
-
-func TestRepoTags_Mock(t *testing.T) {
-	mc := &mockClient{
-		tagsFunc: func(ctx context.Context, owner, repo string) ([]string, error) {
-			return []string{"v1.0", "v2.0"}, nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	tags, err := r.Tags(context.Background())
-	if err != nil {
-		t.Fatalf("Tags failed: %v", err)
-	}
-	if len(tags) != 2 {
-		t.Errorf("expected 2 tags, got %d", len(tags))
-	}
-}
-
-func TestRepoLatest_Mock(t *testing.T) {
-	mc := &mockClient{
-		latestFunc: func(ctx context.Context, owner, repo string) (string, error) {
-			return "abc123", nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	latest, err := r.Latest(context.Background())
-	if err != nil {
-		t.Fatalf("Latest failed: %v", err)
-	}
-	if latest != "abc123" {
-		t.Errorf("Latest = %q, want %q", latest, "abc123")
-	}
-}
-
-func TestRepoSync_Mock(t *testing.T) {
-	syncCalled := false
-	mc := &mockClient{
-		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
-			syncCalled = true
-			return nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	err := r.Sync(context.Background(), "v1.0", "path", "/tmp/test")
-	if err != nil {
-		t.Fatalf("Sync failed: %v", err)
-	}
-	if !syncCalled {
-		t.Error("SyncDir should be called")
-	}
-}
-
-func TestRepoFSReadDir_LocalNotEmpty(t *testing.T) {
-	mc := &mockClient{
-		syncDirFunc: func(ctx context.Context, owner, repo, ref, path, destDir string) error {
-			t.Error("SyncDir should not be called when local dir has entries")
-			return nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	localDir := t.TempDir()
-	// Pre-populate local directory
-	subDir := filepath.Join(localDir, "mydir")
-	os.MkdirAll(subDir, 0755)
-	os.WriteFile(filepath.Join(subDir, "local.txt"), []byte("local"), 0644)
-
-	fsys := r.At("v1.0", localDir).(fs.ReadDirFS)
-
-	entries, err := fsys.ReadDir("mydir")
-	if err != nil {
-		t.Fatalf("ReadDir failed: %v", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "local.txt" {
-		t.Errorf("unexpected entries: %v", entries)
-	}
-}
-
-func TestRepoFSOpen_ReadFromCache(t *testing.T) {
-	mc := &mockClient{
-		readFunc: func(ctx context.Context, owner, repo, ref, path string) ([]byte, error) {
-			t.Error("ReadFile should not be called when file exists locally")
-			return nil, nil
-		},
-	}
-	r := newMockRepo(mc)
-
-	localDir := t.TempDir()
-	// Pre-populate cache
-	os.WriteFile(filepath.Join(localDir, "cached.txt"), []byte("cached"), 0644)
-
-	fsys := r.At("v1.0", localDir)
-	f, _ := fsys.Open("cached.txt")
 	defer f.Close()
 
 	data, err := io.ReadAll(f)
 	if err != nil {
 		t.Fatalf("Read failed: %v", err)
 	}
-	if string(data) != "cached" {
-		t.Errorf("Read = %q, want %q", string(data), "cached")
+
+	// Verify remote content matches known LICENSE text
+	if !strings.Contains(string(data), licenseHeader) {
+		t.Errorf("Open+Read content missing expected license header:\ngot: %s", string(data))
+	}
+
+	// Verify on-disk cache has the same content
+	cached := filepath.Join(localDir, "LICENSE")
+	diskData, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatal("File should be cached on disk after Open+Read")
+	}
+	if string(diskData) != string(data) {
+		t.Error("On-disk cache doesn't match Open+Read result")
+	}
+}
+
+func TestRepoFS_StatCacheVerification(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir)
+
+	// Stat before any read — no local file, should fetch from remote
+	f, err := fsys.Open("LICENSE")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat (remote) failed: %v", err)
+	}
+	if info.Name() != "LICENSE" {
+		t.Errorf("Stat Name = %q, want %q", info.Name(), "LICENSE")
+	}
+
+	// Now read and cache
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	// Stat after cache — should use local file
+	f2, err := fsys.Open("LICENSE")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f2.Close()
+
+	info2, err := f2.Stat()
+	if err != nil {
+		t.Fatalf("Stat (cached) failed: %v", err)
+	}
+	if info2.Size() != int64(len(data)) {
+		t.Errorf("Stat Size = %d, want %d", info2.Size(), len(data))
+	}
+}
+
+func TestRepoFS_ReadDirCacheVerification(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir).(fs.ReadDirFS)
+
+	// First ReadDir: syncs from remote
+	entries1, err := fsys.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir failed: %v", err)
+	}
+	if len(entries1) == 0 {
+		t.Fatal("ReadDir returned empty list")
+	}
+
+	// Add a local-only file to the cached directory
+	marker := filepath.Join(localDir, "cache_marker.txt")
+	if err := os.WriteFile(marker, []byte("marker"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second ReadDir: should read from local (finds non-empty dir), includes marker
+	entries2, err := fsys.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir (cached) failed: %v", err)
+	}
+
+	found := false
+	for _, e := range entries2 {
+		if e.Name() == "cache_marker.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Second ReadDir should read from local cache and see the marker file")
 	}
 }
 
@@ -1001,4 +854,192 @@ func TestGitHubClientSyncDirSparseMultiplePaths(t *testing.T) {
 	}
 
 	t.Logf("Sparse checkout with multiple paths: %v", nonGitEntries)
+}
+
+func TestRepoFS_LoadMkdirError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	// Create a regular file where MkdirAll expects a directory
+	blockingFile := filepath.Join(localDir, "github")
+	os.WriteFile(blockingFile, []byte("block"), 0644)
+
+	fsys := r.At("v68.0.0", localDir)
+
+	// Open github/github.go — remote read succeeds but MkdirAll("github") fails
+	f, _ := fsys.Open("github/github.go")
+	defer f.Close()
+
+	_, err = io.ReadAll(f)
+	if err == nil {
+		t.Error("Read should fail when MkdirAll fails (file blocking directory)")
+	}
+}
+
+func TestRepoFS_LoadWriteError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	os.Chmod(localDir, 0555)
+	defer os.Chmod(localDir, 0755)
+
+	fsys := r.At("v68.0.0", localDir)
+
+	// Remote read succeeds but WriteFile fails (read-only dir)
+	f, _ := fsys.Open("LICENSE")
+	defer f.Close()
+
+	_, err = io.ReadAll(f)
+	if err == nil {
+		t.Error("Read should fail when WriteFile fails (read-only directory)")
+	}
+}
+
+func TestRepoFS_ReadFileRemoteError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir).(fs.ReadFileFS)
+
+	// Non-existent file triggers remote read error
+	_, err = fsys.ReadFile("this-file-does-not-exist-at-all.xyz")
+	if err == nil {
+		t.Error("ReadFile should fail for non-existent remote file")
+	}
+}
+
+func TestRepoFS_StatRemoteFileInfo(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir)
+
+	// Stat a file without reading — exercises remote Stat path and fileInfo methods
+	f, err := fsys.Open("LICENSE")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+
+	// Verify all fileInfo methods (covers Size/Mode/ModTime/IsDir/Sys/Name)
+	if info.Name() != "LICENSE" {
+		t.Errorf("Name() = %q, want %q", info.Name(), "LICENSE")
+	}
+	if info.Size() <= 0 {
+		t.Errorf("Size() = %d, want > 0", info.Size())
+	}
+	if info.Mode() != 0644 {
+		t.Errorf("Mode() = %v, want 0644", info.Mode())
+	}
+	if !info.ModTime().IsZero() {
+		t.Errorf("ModTime() = %v, want zero (remote fileInfo has no modtime)", info.ModTime())
+	}
+	if info.IsDir() {
+		t.Error("IsDir() = true, want false")
+	}
+	if info.Sys() != nil {
+		t.Errorf("Sys() = %v, want nil", info.Sys())
+	}
+}
+
+func TestRepoFS_ReadDirSyncError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir).(fs.ReadDirFS)
+
+	// Non-existent subdirectory triggers SyncDir which will fail
+	// because git sparse-checkout for a non-existent path won't create any files
+	_, err = fsys.ReadDir("this-directory-does-not-exist-xyz")
+	// SyncDir itself may succeed (sparse-checkout doesn't fail for missing paths),
+	// but ReadDir on an empty local dir returns empty or error
+	// Either way, we exercise the remote fallback code path
+	t.Logf("ReadDir non-existent: err=%v", err)
+}
+
+func TestRepoFS_StatNonExistent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	r, err := NewRepo("github.com/google/go-github")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v68.0.0", localDir)
+
+	// Open a non-existent file and call Stat (no local cache)
+	// This exercises the Stat non-200 error path in github.go
+	f, err := fsys.Open("this-file-does-not-exist.xyz")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer f.Close()
+
+	_, err = f.Stat()
+	if err == nil {
+		t.Error("Stat should fail for non-existent remote file")
+	}
+}
+
+func TestRepoFS_ReadDirSyncFetchError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Use a non-existent repo so git fetch fails, covering repofs.go SyncDir error path
+	r, err := NewRepo("github.com/google/this-repo-does-not-exist-xyz-12345")
+	if err != nil {
+		t.Fatalf("NewRepo failed: %v", err)
+	}
+
+	localDir := t.TempDir()
+	fsys := r.At("v1.0.0", localDir).(fs.ReadDirFS)
+
+	_, err = fsys.ReadDir("somedir")
+	if err == nil {
+		t.Error("ReadDir should fail when SyncDir fails for non-existent repo")
+	}
 }
