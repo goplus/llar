@@ -21,8 +21,6 @@ import (
 )
 
 // Module represents a loaded module with its formula, filesystem, and resolved dependencies.
-// The embedded Formula contains build instructions, while Deps contains pointers to
-// all transitive dependencies in the build list.
 type Module struct {
 	*formula.Formula
 
@@ -30,6 +28,11 @@ type Module struct {
 	Path    string
 	Version string
 
+	// Deps holds direct dependencies only (not transitive).
+	// For the main module, Deps contains all modules in the build list.
+	// For non-main modules, Deps contains only the declared dependencies
+	// from versions.json. The build module can reconstruct the full
+	// dependency graph from these adjacency edges.
 	Deps []*Module
 }
 
@@ -56,27 +59,93 @@ func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparato
 	return max, nil
 }
 
+// formulaContext groups helper functions used throughout the Load process,
+// sharing a module cache and a filesystem provider across all steps.
+type formulaContext struct {
+	moduleCache sync.Map
+	moduleFS    func(ctx context.Context, modPath string) (fs.FS, error)
+}
+
+func newFormulaContext(moduleFS func(ctx context.Context, modPath string) (fs.FS, error)) *formulaContext {
+	return &formulaContext{moduleFS: moduleFS}
+}
+
+// compareModuleVersion compares two versions of the same module path
+// using the module's formula-defined comparator.
+func (c *formulaContext) compareModuleVersion(ctx context.Context, p, v1, v2 string) int {
+	mod, err := c.moduleOf(ctx, p)
+	if err != nil {
+		// should not have errors
+		panic(err)
+	}
+	compare, err := mod.comparator()
+	if err != nil {
+		// should not have errors
+		panic(err)
+	}
+	return compare(module.Version{p, v1}, module.Version{p, v2})
+}
+
+// moduleOf returns the formulaModule for the given path, fetching and caching it if needed.
+func (c *formulaContext) moduleOf(ctx context.Context, modPath string) (*formulaModule, error) {
+	if fm, ok := c.moduleCache.Load(modPath); ok {
+		return fm.(*formulaModule), nil
+	}
+	// ModuleFS always fetches the formula from the latest commit.
+	fs, err := c.moduleFS(ctx, modPath)
+	if err != nil {
+		return nil, err
+	}
+	fm := newFormulaModule(fs, modPath)
+	actual, _ := c.moduleCache.LoadOrStore(modPath, fm)
+	return actual.(*formulaModule), nil
+}
+
+// loadDeps loads the declared dependencies for a specific module version.
+func (c *formulaContext) loadDeps(ctx context.Context, mod module.Version) (deps []module.Version, err error) {
+	thisMod, err := c.moduleOf(ctx, mod.Path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := thisMod.at(mod.Version)
+	if err != nil {
+		return nil, err
+	}
+	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+}
+
+// convertToModules converts a list of module.Version into loaded Module structs.
+func (c *formulaContext) convertToModules(ctx context.Context, modList []module.Version) ([]*Module, error) {
+	var modules []*Module
+
+	for _, mod := range modList {
+		thisMod, err := c.moduleOf(ctx, mod.Path)
+		if err != nil {
+			return nil, err
+		}
+		f, err := thisMod.at(mod.Version)
+		if err != nil {
+			return nil, err
+		}
+		module := &Module{
+			Formula: f,
+			FS:      thisMod.fsys,
+			Path:    mod.Path,
+			Version: mod.Version,
+		}
+		modules = append(modules, module)
+	}
+
+	return modules, nil
+}
+
 // Load loads all packages required by the main module and resolves
 // their dependencies using the MVS algorithm. It returns modules for all
 // packages in the computed build list.
 func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
-	var moduleCache sync.Map
+	context := newFormulaContext(opts.FormulaStore.ModuleFS)
 
-	moduleOf := func(modPath string) (*formulaModule, error) {
-		if fm, ok := moduleCache.Load(modPath); ok {
-			return fm.(*formulaModule), nil
-		}
-		// ModuleFS always fetches the formula from the latest commit.
-		fs, err := opts.FormulaStore.ModuleFS(ctx, modPath)
-		if err != nil {
-			return nil, err
-		}
-		fm := newFormulaModule(fs, modPath)
-		actual, _ := moduleCache.LoadOrStore(modPath, fm)
-		return actual.(*formulaModule), nil
-	}
-
-	mainMod, err := moduleOf(main.Path)
+	mainMod, err := context.moduleOf(ctx, main.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -113,37 +182,18 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		} else if v1 == "none" && v2 == "none" {
 			return 0
 		}
-		mod, err := moduleOf(p)
-		if err != nil {
-			// should not have errors
-			panic(err)
-		}
-		compare, err := mod.comparator()
-		if err != nil {
-			// should not have errors
-			panic(err)
-		}
-		return compare(module.Version{p, v1}, module.Version{p, v2})
+		return context.compareModuleVersion(ctx, p, v1, v2)
 	}
 
+	var depCache sync.Map
 	var graphMu sync.Mutex
-	var depLoadCache sync.Map
-
 	graph := mvs.NewGraph(cmp, mainDeps)
 
 	onLoad := func(mod module.Version) ([]module.Version, error) {
-		if deps, ok := depLoadCache.Load(mod); ok {
+		if deps, ok := depCache.Load(mod); ok {
 			return deps.([]module.Version), nil
 		}
-		thisMod, err := moduleOf(mod.Path)
-		if err != nil {
-			return nil, err
-		}
-		f, err := thisMod.at(mod.Version)
-		if err != nil {
-			return nil, err
-		}
-		deps, err := resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+		deps, err := context.loadDeps(ctx, mod)
 		if err != nil {
 			return nil, err
 		}
@@ -151,7 +201,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		graph.Require(mod, deps)
 		graphMu.Unlock()
 
-		depLoadCache.Store(mod, deps)
+		depCache.Store(mod, deps)
 		return deps, nil
 	}
 
@@ -176,31 +226,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		}
 	}
 
-	convertToModules := func(modList []module.Version) ([]*Module, error) {
-		var modules []*Module
-
-		for _, mod := range modList {
-			thisMod, err := moduleOf(mod.Path)
-			if err != nil {
-				return nil, err
-			}
-			f, err := thisMod.at(mod.Version)
-			if err != nil {
-				return nil, err
-			}
-			module := &Module{
-				Formula: f,
-				FS:      thisMod.fsys,
-				Path:    mod.Path,
-				Version: mod.Version,
-			}
-			modules = append(modules, module)
-		}
-
-		return modules, nil
-	}
-
-	modules, err := convertToModules(buildList)
+	modules, err := context.convertToModules(ctx, buildList)
 	if err != nil {
 		return nil, err
 	}
@@ -212,57 +238,12 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		if mod.Path == main.Path && mod.Version == main.Version {
 			deps = modules[1:]
 		} else {
-			var reqs []module.Version
-			visited := make(map[string]bool)
-
-			root := module.Version{mod.Path, mod.Version}
-			queue := []module.Version{root}
-			visited[root.Path] = true
-
-			// Fill the sub dependency graph via BFS here
-			// Because the mvs package doesn't provide a method scanning from the specific root
-			for len(queue) > 0 {
-				// pop the head node
-				node := queue[0]
-				queue = queue[1:]
-
-				nodeReqs, ok := graph.RequiredBy(node)
-				if !ok {
-					panic("should be found in the graph")
-				}
-				for _, req := range nodeReqs {
-					// Use the MVS-selected version, not the originally required one.
-					// RequiredBy returns the edges recorded when the module was first loaded,
-					// but MVS may have selected a higher version with different (or additional)
-					// dependencies.
-					//
-					// Dependency graph:
-					//
-					//	A@1.0.0
-					//	├── B@1.0.0
-					//	│   └── C@1.0.0
-					//	│       └── E@1.2.0
-					//	└── D@1.0.0
-					//	    └── C@1.1.0
-					//	        └── E@1.3.0
-					//
-					// Sub dependency graph we expected for B:
-					//	B@1.0.0
-					//	└── C@1.1.0
-					//	     └── E@1.3.0
-					selected := module.Version{req.Path, graph.Selected(req.Path)}
-					if visited[selected.Path] {
-						continue
-					}
-					visited[selected.Path] = true
-					queue = append(queue, selected)
-					reqs = append(reqs, selected)
-				}
-			}
-			// Construct reverse order lists
-			slices.Reverse(reqs)
-
-			deps, err = convertToModules(reqs)
+			// only direct deps, this is because we don't know how to build
+			// so only keep necessary information to allow build compute the dependencies more flexibly
+			// However, the Deps in `project` must contain all dependencies,
+			// we will resolve all transitive dependencies in the build module.
+			reqs, _ := graph.RequiredBy(module.Version{mod.Path, mod.Version})
+			deps, err = context.convertToModules(ctx, reqs)
 			if err != nil {
 				return nil, err
 			}
