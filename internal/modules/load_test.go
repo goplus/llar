@@ -403,38 +403,6 @@ func TestLoad_ErrorNoFormulaForVersion(t *testing.T) {
 	}
 }
 
-func TestLoad_WithTidy(t *testing.T) {
-	store := setupTestStore(t, "testdata/load")
-	ctx := context.Background()
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-
-	// tidy writes "versions.json" to CWD (a known hack in the codebase).
-	// Use t.Chdir to isolate the write.
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-
-	modules, err := Load(ctx, main, Options{
-		FormulaStore: store,
-		Tidy:         true,
-	})
-	if err != nil {
-		t.Fatalf("Load with Tidy failed: %v", err)
-	}
-
-	if len(modules) != 3 {
-		t.Fatalf("expected 3 modules, got %d", len(modules))
-	}
-
-	// Verify tidy wrote a versions.json
-	data, err := os.ReadFile("versions.json")
-	if err != nil {
-		t.Fatalf("tidy did not write versions.json: %v", err)
-	}
-	if len(data) == 0 {
-		t.Error("tidy wrote empty versions.json")
-	}
-}
-
 func TestLoad_ModuleCaching(t *testing.T) {
 	store := setupTestStore(t, "testdata/load")
 	ctx := context.Background()

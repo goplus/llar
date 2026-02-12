@@ -2,14 +2,11 @@ package modules
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -216,43 +213,6 @@ func TestResolveDeps_OnRequireMkdirTempError(t *testing.T) {
 	}
 }
 
-func TestTidy_SkipsMainDependency(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Chdir(tmpDir)
-	if err := os.WriteFile("versions.json", []byte(`{"path":"towner/mainmod","deps":{"1.0.0":[{"path":"towner/olddep","version":"1.0.0"}]}}`), 0644); err != nil {
-		t.Fatalf("write versions.json: %v", err)
-	}
-
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-	reqs := testReqs(main, []module.Version{
-		{Path: main.Path, Version: main.Version},
-		{Path: "towner/newdep", Version: "2.0.0"},
-	}, func(module.Version) ([]module.Version, error) {
-		return nil, nil
-	})
-
-	if err := tidy(main, os.DirFS(tmpDir).(fs.ReadFileFS), reqs); err != nil {
-		t.Fatalf("tidy failed: %v", err)
-	}
-
-	data, err := os.ReadFile("versions.json")
-	if err != nil {
-		t.Fatalf("read versions.json: %v", err)
-	}
-
-	var parsed struct {
-		Dependencies map[string][]module.Version `json:"deps"`
-	}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("unmarshal versions.json: %v", err)
-	}
-	for _, dep := range parsed.Dependencies["1.0.0"] {
-		if dep.Path == main.Path {
-			t.Fatalf("main module should be skipped in tidy deps: %v", dep)
-		}
-	}
-}
-
 func TestLoad_NoneDepsComparisonBranches(t *testing.T) {
 	store := setupTestStore(t, "testdata/load")
 	ctx := context.Background()
@@ -284,123 +244,5 @@ func TestLoad_NoneDepsComparisonBranches(t *testing.T) {
 				t.Fatalf("modules len = %d, want %d", len(mods), tt.wantModules)
 			}
 		})
-	}
-}
-
-func TestLoad_WithTidy_ReturnsWriteError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod-based permission test is unreliable on windows")
-	}
-
-	store := setupTestStore(t, "testdata/load")
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-
-	roDir := filepath.Join(t.TempDir(), "readonly")
-	if err := os.MkdirAll(roDir, 0755); err != nil {
-		t.Fatalf("mkdir readonly dir: %v", err)
-	}
-	if err := os.Chmod(roDir, 0555); err != nil {
-		t.Fatalf("chmod readonly dir: %v", err)
-	}
-	t.Chdir(roDir)
-
-	_, err := Load(context.Background(), main, Options{
-		FormulaStore: store,
-		Tidy:         true,
-	})
-	if err == nil {
-		t.Fatal("expected tidy write error")
-	}
-}
-
-func TestTidy_ErrorFromReq(t *testing.T) {
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-	reqs := testReqs(main, []module.Version{{Path: "towner/dep", Version: "1.0.0"}}, func(module.Version) ([]module.Version, error) {
-		return nil, fmt.Errorf("forced onLoad error")
-	})
-
-	moduleFS := fakeReadFileFS{
-		readFile: func(name string) ([]byte, error) {
-			return nil, errors.New("should not be called")
-		},
-	}
-
-	err := tidy(main, moduleFS, reqs)
-	if err == nil {
-		t.Fatal("expected mvs.Req error")
-	}
-}
-
-func TestTidy_ReadFileError(t *testing.T) {
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-	reqs := testReqs(main, nil, func(module.Version) ([]module.Version, error) { return nil, nil })
-
-	moduleFS := fakeReadFileFS{
-		readFile: func(name string) ([]byte, error) {
-			return nil, fmt.Errorf("read failed: %s", name)
-		},
-	}
-
-	err := tidy(main, moduleFS, reqs)
-	if err == nil {
-		t.Fatal("expected ReadFile error")
-	}
-}
-
-func TestTidy_ParseError(t *testing.T) {
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-	reqs := testReqs(main, nil, func(module.Version) ([]module.Version, error) { return nil, nil })
-
-	moduleFS := fakeReadFileFS{
-		readFile: func(name string) ([]byte, error) {
-			return []byte("{invalid json"), nil
-		},
-	}
-
-	err := tidy(main, moduleFS, reqs)
-	if err == nil {
-		t.Fatal("expected versions.Parse error")
-	}
-}
-
-func TestTidy_OpenError(t *testing.T) {
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-	reqs := testReqs(main, nil, func(module.Version) ([]module.Version, error) { return nil, nil })
-
-	moduleFS := fakeReadFileFS{
-		readFile: func(name string) ([]byte, error) {
-			return []byte(`{"path":"towner/mainmod","deps":{"1.0.0":[]}}`), nil
-		},
-		open: func(name string) (fs.File, error) {
-			return nil, fmt.Errorf("open failed: %s", name)
-		},
-	}
-
-	err := tidy(main, moduleFS, reqs)
-	if err == nil {
-		t.Fatal("expected Open error")
-	}
-}
-
-func TestTidy_StatError(t *testing.T) {
-	main := module.Version{Path: "towner/mainmod", Version: "1.0.0"}
-	reqs := testReqs(main, nil, func(module.Version) ([]module.Version, error) { return nil, nil })
-
-	moduleFS := fakeReadFileFS{
-		readFile: func(name string) ([]byte, error) {
-			return []byte(`{"path":"towner/mainmod","deps":{"1.0.0":[]}}`), nil
-		},
-		open: func(name string) (fs.File, error) {
-			return fakeFile{
-				stat: func() (fs.FileInfo, error) {
-					return nil, fmt.Errorf("stat failed")
-				},
-			}, nil
-		},
-	}
-
-	err := tidy(main, moduleFS, reqs)
-	if err == nil {
-		t.Fatal("expected Stat error")
 	}
 }

@@ -2,7 +2,6 @@ package modules
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -38,9 +37,6 @@ type Module struct {
 
 // Options contains options for Load.
 type Options struct {
-	// Tidy, if true, computes minimal dependencies using mvs.Req
-	// and updates the versions.json file.
-	Tidy bool
 	// FormulaStore is the store for downloading and caching formulas.
 	FormulaStore *repo.Store
 }
@@ -219,13 +215,6 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		return nil, err
 	}
 
-	// Tidy: compute minimal dependencies and update versions.json
-	if opts.Tidy {
-		if err := tidy(main, mainMod.fsys.(fs.ReadFileFS), reqs); err != nil {
-			return nil, err
-		}
-	}
-
 	modules, err := context.convertToModules(ctx, buildList)
 	if err != nil {
 		return nil, err
@@ -252,54 +241,6 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	}
 
 	return modules, nil
-}
-
-// tidy computes minimal dependencies using mvs.Req and updates versions.json.
-func tidy(main module.Version, moduleFS fs.ReadFileFS, reqs *mvsReqs) error {
-	minDeps, err := mvs.Req(main, []string{}, reqs)
-	if err != nil {
-		return err
-	}
-	content, err := moduleFS.ReadFile("versions.json")
-	if err != nil {
-		return err
-	}
-	v, err := versions.Parse("", content)
-	if err != nil {
-		return err
-	}
-
-	var newDeps []module.Version
-	for _, dep := range minDeps {
-		if dep.Path == main.Path {
-			continue
-		}
-		newDeps = append(newDeps, module.Version{
-			Path:    dep.Path,
-			Version: dep.Version,
-		})
-	}
-
-	v.Dependencies[main.Version] = newDeps
-
-	data, err := json.MarshalIndent(v, "", "\t")
-	if err != nil {
-		return err
-	}
-
-	f, err := moduleFS.Open("versions.json")
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	fileStat, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	// NOTE(MeteorsLiu): fs.Fs dones't support `Write` method, so this is a very hack trick.
-	// TODO(MeteorsLiu): consider remove this?
-	return os.WriteFile(fileStat.Name(), data, 0644)
 }
 
 // resolveDeps resolves the dependencies for a formula.
