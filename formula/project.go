@@ -27,18 +27,29 @@ func (p *Project) ReadFile(path string) ([]byte, error) {
 type Context struct {
 	SourceDir string
 
-	matrix       Matrix
 	buildResults map[module.Version]BuildResult
+
+	// filled by build
+	matrixStr    string
+	getOutputDir func(matrixStr string, mod module.Version) (string, error)
+}
+
+// NewContext creates a Context with build-internal fields.
+func NewContext(sourceDir, matrixStr string, getOutputDir func(string, module.Version) (string, error)) *Context {
+	return &Context{
+		SourceDir:    sourceDir,
+		matrixStr:    matrixStr,
+		getOutputDir: getOutputDir,
+	}
+}
+
+func (c *Context) OutputDir(mod module.Version) (string, error) {
+	return c.getOutputDir(c.matrixStr, mod)
 }
 
 // CurrentMatrix returns the active build matrix for this context.
-func (c *Context) CurrentMatrix() Matrix {
-	return c.matrix
-}
-
-// SetCurrentMatrix sets the active build matrix for this context.
-func (c *Context) SetCurrentMatrix(m Matrix) {
-	c.matrix = m
+func (c *Context) CurrentMatrix() string {
+	return c.matrixStr
 }
 
 // BuildResult returns the stored build result for the module, if any.

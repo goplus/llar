@@ -84,9 +84,10 @@ func TestContext_CurrentMatrix(t *testing.T) {
 		},
 	}
 
-	ctx.SetCurrentMatrix(matrix)
-	if got := ctx.CurrentMatrix(); !reflect.DeepEqual(got, matrix) {
-		t.Fatalf("Context.CurrentMatrix() = %#v, want %#v", got, matrix)
+	want := matrix.Combinations()[0]
+	ctx.matrixStr = want
+	if got := ctx.CurrentMatrix(); got != want {
+		t.Fatalf("Context.CurrentMatrix() = %q, want %q", got, want)
 	}
 }
 
