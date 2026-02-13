@@ -165,7 +165,9 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 	c.Generator("Unix Makefiles")
 
 	toolchain := filepath.Join(tmp, "toolchain.cmake")
-	os.WriteFile(toolchain, []byte("# dummy toolchain"), 0o644)
+	if err := os.WriteFile(toolchain, []byte("# dummy toolchain"), 0o644); err != nil {
+		t.Fatalf("write toolchain: %v", err)
+	}
 	c.Toolchain(toolchain)
 
 	c.Define("FOO", "BAR")

@@ -69,29 +69,36 @@ func (c *CMake) Use(root string) {
 	libDir := filepath.Join(root, "lib")
 	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
 
-	if _, err := os.Stat(pkgconfigDir); err == nil {
-		prependPath("PKG_CONFIG_PATH", pkgconfigDir)
+	_, errInclude := os.Stat(includeDir)
+	_, errLib := os.Stat(libDir)
+	hasInclude := errInclude == nil
+	hasLib := errLib == nil
+
+	if hasLib {
+		if _, err := os.Stat(pkgconfigDir); err == nil {
+			prependPath("PKG_CONFIG_PATH", pkgconfigDir)
+		}
 	}
 	prependPath("CMAKE_PREFIX_PATH", root)
-	if _, err := os.Stat(includeDir); err == nil {
+	if hasInclude {
 		prependPath("CMAKE_INCLUDE_PATH", includeDir)
 	}
-	if _, err := os.Stat(libDir); err == nil {
+	if hasLib {
 		prependPath("CMAKE_LIBRARY_PATH", libDir)
 	}
 
 	if runtime.GOOS == "windows" {
-		if _, err := os.Stat(includeDir); err == nil {
+		if hasInclude {
 			prependPath("INCLUDE", includeDir)
 		}
-		if _, err := os.Stat(libDir); err == nil {
+		if hasLib {
 			prependPath("LIB", libDir)
 		}
 	} else {
-		if _, err := os.Stat(includeDir); err == nil {
+		if hasInclude {
 			appendFlag("CPPFLAGS", "-I"+includeDir)
 		}
-		if _, err := os.Stat(libDir); err == nil {
+		if hasLib {
 			appendFlag("LDFLAGS", "-L"+libDir)
 		}
 	}
