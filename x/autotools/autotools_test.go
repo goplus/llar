@@ -58,8 +58,43 @@ func TestUseSetsEnv(t *testing.T) {
 	}
 }
 
+func TestUseMultipleDeps(t *testing.T) {
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+	for _, r := range []string{root1, root2} {
+		os.MkdirAll(filepath.Join(r, "include"), 0o755)
+		os.MkdirAll(filepath.Join(r, "lib"), 0o755)
+	}
+
+	t.Setenv("CMAKE_INCLUDE_PATH", "")
+	t.Setenv("CMAKE_LIBRARY_PATH", "")
+	t.Setenv("CMAKE_PREFIX_PATH", "")
+	t.Setenv("CPPFLAGS", "")
+	t.Setenv("LDFLAGS", "")
+
+	a := New("", "", "")
+	a.Use(root1)
+	a.Use(root2)
+
+	// prependPath: root2 should be prepended before root1
+	got := os.Getenv("CMAKE_PREFIX_PATH")
+	if !strings.HasPrefix(got, root2) {
+		t.Errorf("CMAKE_PREFIX_PATH = %q, expected %q to be first", got, root2)
+	}
+	if !strings.Contains(got, root1) {
+		t.Errorf("CMAKE_PREFIX_PATH = %q, missing %q", got, root1)
+	}
+
+	// appendFlag: root1 flag should come before root2 flag
+	cppflags := os.Getenv("CPPFLAGS")
+	i1 := strings.Index(cppflags, filepath.Join(root1, "include"))
+	i2 := strings.Index(cppflags, filepath.Join(root2, "include"))
+	if i1 < 0 || i2 < 0 || i1 >= i2 {
+		t.Errorf("CPPFLAGS = %q, expected root1 before root2", cppflags)
+	}
+}
+
 func TestUsePartialDirs(t *testing.T) {
-	// root with only include, no lib or pkgconfig
 	root := t.TempDir()
 	os.MkdirAll(filepath.Join(root, "include"), 0o755)
 
@@ -80,12 +115,53 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 }
 
+func TestSource(t *testing.T) {
+	a := New("original", "", "")
+	a.Source("/new/src")
+	if a.sourceDir != "/new/src" {
+		t.Errorf("sourceDir = %q, want %q", a.sourceDir, "/new/src")
+	}
+}
+
 func TestOutputDir(t *testing.T) {
 	if got := New("", "build", "").OutputDir(); got != "build" {
 		t.Errorf("OutputDir = %q, want %q", got, "build")
 	}
 	if got := New("", "build", "inst").OutputDir(); got != "inst" {
 		t.Errorf("OutputDir = %q, want %q", got, "inst")
+	}
+}
+
+func TestWorkDir(t *testing.T) {
+	if got := New("", "", "").workDir(); got != "." {
+		t.Errorf("workDir empty = %q, want %q", got, ".")
+	}
+	if got := New("", "/tmp/b", "").workDir(); got != "/tmp/b" {
+		t.Errorf("workDir set = %q, want %q", got, "/tmp/b")
+	}
+}
+
+func TestPrependPath(t *testing.T) {
+	t.Setenv("TEST_PREPEND", "/existing")
+	prependPath("TEST_PREPEND", "/new")
+
+	sep := ":"
+	if runtime.GOOS == "windows" {
+		sep = ";"
+	}
+	want := "/new" + sep + "/existing"
+	if got := os.Getenv("TEST_PREPEND"); got != want {
+		t.Errorf("TEST_PREPEND = %q, want %q", got, want)
+	}
+}
+
+func TestAppendFlag(t *testing.T) {
+	t.Setenv("TEST_FLAGS", "-Ifoo")
+	appendFlag("TEST_FLAGS", "-Ibar")
+
+	want := "-Ifoo -Ibar"
+	if got := os.Getenv("TEST_FLAGS"); got != want {
+		t.Errorf("TEST_FLAGS = %q, want %q", got, want)
 	}
 }
 
@@ -132,5 +208,36 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("missing %s", path)
 		}
+	}
+}
+
+func TestConfigureNoPrefix(t *testing.T) {
+	for _, bin := range []string{"make", "cc", "ar"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not found in PATH", bin)
+		}
+	}
+
+	tmp := t.TempDir()
+	buildDir := filepath.Join(tmp, "build")
+
+	absSource, err := filepath.Abs(filepath.Join("testdata", "project"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No installDir → no --prefix
+	a := New(absSource, buildDir, "")
+
+	if err := a.Configure(); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(buildDir, "config.log"))
+	if err != nil {
+		t.Fatalf("read config.log: %v", err)
+	}
+	if strings.Contains(string(data), "--prefix") {
+		t.Error("config.log should not contain --prefix when installDir is empty")
 	}
 }
