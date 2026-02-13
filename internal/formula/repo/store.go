@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/goplus/llar/internal/lockedfile"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
@@ -60,6 +61,17 @@ func (s *Store) moduleDirOf(modPath string) (string, error) {
 		return "", err
 	}
 	return moduleDir, nil
+}
+
+// LockModule acquires an exclusive lock for the given module path.
+// Returns an unlock function that must be called to release the lock.
+func (s *Store) LockModule(modPath string) (unlock func(), err error) {
+	modDir, err := s.moduleDirOf(modPath)
+	if err != nil {
+		return nil, err
+	}
+	lockFile := filepath.Join(modDir, ".lock")
+	return lockedfile.MutexAt(lockFile).Lock()
 }
 
 // DefaultDir returns the default root directory where all formula repositories are stored.

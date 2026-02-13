@@ -1,0 +1,22 @@
+id "pnggroup/libpng"
+
+fromVer "1.0.0"
+
+onRequire (proj, dep) => {
+	// You should use zlib 1.0.4 or later to run this
+	dep.require "madler/zlib", "1.2.11"
+}
+
+onBuild (ctx, proj, out) => {
+	a := autotools.new(ctx)
+
+	for dep in proj.Deps {
+		a.use dep
+	}
+	a.configure
+	a.build
+	a.install
+
+	out.Err = lastErr
+	out.Dir = a.outputDir
+}
