@@ -1,0 +1,9 @@
+{
+	"path": "test/diamond",
+	"deps": {
+		"1.0.0": [
+			{"path": "test/liba", "version": "1.0.0"},
+			{"path": "test/libb", "version": "1.0.0"}
+		]
+	}
+}

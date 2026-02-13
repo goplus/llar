@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	classfile "github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -285,7 +283,7 @@ func init() {
 }
 
 // ---------------------------------------------------------------------------
-// Build() tests — real formula loading via modules.Load
+// Test helpers for Build() tests
 // ---------------------------------------------------------------------------
 
 // setupTestStore copies testdata/formulas to a temp dir and returns a Store.
@@ -338,237 +336,6 @@ func findResult(results []Result, b *Builder, mods []*modules.Module, path strin
 		}
 	}
 	return Result{}, false
-}
-
-func TestBuild_SingleModule(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	results, _ := loadAndBuild(t, b, store, main)
-
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want 1", len(results))
-	}
-	if results[0].Metadata != "-lA" {
-		t.Errorf("metadata = %q, want %q", results[0].Metadata, "-lA")
-	}
-}
-
-func TestBuild_WithDeps(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	// libb depends on liba
-	main := module.Version{Path: "test/libb", Version: "1.0.0"}
-	results, mods := loadAndBuild(t, b, store, main)
-
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2 (liba + libb)", len(results))
-	}
-
-	// Verify module paths in build list
-	var paths []string
-	for _, m := range mods {
-		paths = append(paths, m.Path)
-	}
-	t.Logf("loaded modules: %v", paths)
-
-	// Verify both modules have correct metadata
-	for _, m := range mods {
-		r, ok := findResult(results, b, mods, m.Path)
-		if !ok {
-			t.Errorf("missing result for %s", m.Path)
-			continue
-		}
-		switch m.Path {
-		case "test/liba":
-			if r.Metadata != "-lA" {
-				t.Errorf("liba metadata = %q, want %q", r.Metadata, "-lA")
-			}
-		case "test/libb":
-			if r.Metadata != "-lB" {
-				t.Errorf("libb metadata = %q, want %q", r.Metadata, "-lB")
-			}
-		}
-	}
-}
-
-func TestBuild_TransitiveChain(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	// libc -> libb -> liba
-	main := module.Version{Path: "test/libc", Version: "1.0.0"}
-	results, mods := loadAndBuild(t, b, store, main)
-
-	if len(results) != 3 {
-		t.Fatalf("got %d results, want 3 (liba + libb + libc)", len(results))
-	}
-
-	// Verify build order: leaves first (liba), then libb, then libc (root)
-	buildOrder := b.constructBuildList(mods)
-	var orderPaths []string
-	for _, m := range buildOrder {
-		orderPaths = append(orderPaths, m.Path)
-	}
-	t.Logf("build order: %v", orderPaths)
-
-	// liba must come before libb, libb before libc
-	libaIdx, libbIdx, libcIdx := -1, -1, -1
-	for i, p := range orderPaths {
-		switch p {
-		case "test/liba":
-			libaIdx = i
-		case "test/libb":
-			libbIdx = i
-		case "test/libc":
-			libcIdx = i
-		}
-	}
-	if libaIdx >= libbIdx || libbIdx >= libcIdx {
-		t.Errorf("wrong build order: liba@%d, libb@%d, libc@%d", libaIdx, libbIdx, libcIdx)
-	}
-
-	// Verify all metadata
-	wantMeta := map[string]string{
-		"test/liba": "-lA",
-		"test/libb": "-lB",
-		"test/libc": "-lC",
-	}
-	for _, m := range mods {
-		r, ok := findResult(results, b, mods, m.Path)
-		if !ok {
-			t.Errorf("missing result for %s", m.Path)
-			continue
-		}
-		if want, exists := wantMeta[m.Path]; exists && r.Metadata != want {
-			t.Errorf("%s metadata = %q, want %q", m.Path, r.Metadata, want)
-		}
-	}
-}
-
-func TestBuild_CacheHit(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-
-	// First build: populates cache
-	results1, _ := loadAndBuild(t, b, store, main)
-	if results1[0].Metadata != "-lA" {
-		t.Fatalf("first build metadata = %q, want %q", results1[0].Metadata, "-lA")
-	}
-
-	// Verify cache file was written
-	cacheDir, _ := b.cacheDir("test/liba")
-	cachePath := filepath.Join(cacheDir, cacheFile)
-	if _, err := os.Stat(cachePath); err != nil {
-		t.Fatalf("cache file not written: %v", err)
-	}
-
-	// Second build: should hit cache and return same result
-	results2, _ := loadAndBuild(t, b, store, main)
-	if results2[0].Metadata != "-lA" {
-		t.Errorf("second build metadata = %q, want %q (from cache)", results2[0].Metadata, "-lA")
-	}
-}
-
-func TestBuild_CacheDifferentMatrix(t *testing.T) {
-	store := setupTestStore(t)
-	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-
-	// Build with first matrix
-	b1 := setupBuilder(t, store, "amd64-linux")
-	b1.workspaceDir = t.TempDir() // shared workspace
-	ws := b1.workspaceDir
-
-	results1, _ := loadAndBuild(t, b1, store, main)
-	if results1[0].Metadata != "-lA" {
-		t.Fatalf("first matrix build metadata = %q, want %q", results1[0].Metadata, "-lA")
-	}
-
-	// Build with different matrix, same workspace
-	b2 := setupBuilder(t, store, "arm64-darwin")
-	b2.workspaceDir = ws
-
-	results2, _ := loadAndBuild(t, b2, store, main)
-	if results2[0].Metadata != "-lA" {
-		t.Errorf("second matrix build metadata = %q, want %q", results2[0].Metadata, "-lA")
-	}
-
-	// Verify different installDirs
-	dir1, _ := b1.installDir("test/liba", "1.0.0")
-	dir2, _ := b2.installDir("test/liba", "1.0.0")
-	if dir1 == dir2 {
-		t.Errorf("same installDir for different matrices: %q", dir1)
-	}
-	// Both should exist
-	for _, dir := range []string{dir1, dir2} {
-		if _, err := os.Stat(dir); err != nil {
-			t.Errorf("installDir %q not created: %v", dir, err)
-		}
-	}
-}
-
-func TestBuild_Error(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	// errmod's OnBuild reads a nonexistent file and adds the error
-	main := module.Version{Path: "test/errmod", Version: "1.0.0"}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-
-	_, err = b.Build(ctx, mods)
-	if err == nil {
-		t.Fatal("Build() error = nil, want error")
-	}
-	t.Logf("got expected error: %v", err)
-}
-
-func TestBuild_EnvRestoration(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	const envKey = "LLAR_BUILD_TEST_ENV"
-	os.Setenv(envKey, "original")
-	defer os.Unsetenv(envKey)
-
-	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	loadAndBuild(t, b, store, main)
-
-	if got := os.Getenv(envKey); got != "original" {
-		t.Errorf("env %s = %q after Build, want %q (restored)", envKey, got, "original")
-	}
-}
-
-func TestBuild_InstallDirConvention(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	loadAndBuild(t, b, store, main)
-
-	installDir, _ := b.installDir("test/liba", "1.0.0")
-
-	// Verify the path follows workspace/<escaped>@<version>-<matrix>
-	rel, err := filepath.Rel(b.workspaceDir, installDir)
-	if err != nil {
-		t.Fatalf("installDir not under workspace: %v", err)
-	}
-	want := filepath.Join("test", "liba@1.0.0-amd64-linux")
-	if rel != want {
-		t.Errorf("installDir rel = %q, want %q", rel, want)
-	}
-
-	// Verify directory was created
-	if _, err := os.Stat(installDir); err != nil {
-		t.Errorf("installDir not created: %v", err)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +453,10 @@ func TestBuild_SyncError(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Build cache detail tests (not covered by e2e)
+// ---------------------------------------------------------------------------
+
 func TestBuild_PrePopulatedCache(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
@@ -775,112 +546,23 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	}
 }
 
-func TestBuild_DepResultInjection(t *testing.T) {
-	store := setupTestStore(t)
+// ---------------------------------------------------------------------------
+// Environment and workspace tests (not covered by e2e)
+// ---------------------------------------------------------------------------
 
-	// We build libb (depends on liba) and verify that when libb's OnBuild
-	// runs, the build context contains liba's result.
-	// Since the real formula just sets "-lB" metadata, we verify by checking
-	// that the build succeeds and both results are returned with correct metadata.
-	// The real injection is tested by building the chain and verifying the
-	// context is properly set up.
+func TestBuild_EnvRestoration(t *testing.T) {
+	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
 
-	main := module.Version{Path: "test/libb", Version: "1.0.0"}
-	results, mods := loadAndBuild(t, b, store, main)
+	const envKey = "LLAR_BUILD_TEST_ENV"
+	os.Setenv(envKey, "original")
+	defer os.Unsetenv(envKey)
 
-	buildOrder := b.constructBuildList(mods)
-	if len(buildOrder) != 2 {
-		t.Fatalf("build order has %d entries, want 2", len(buildOrder))
-	}
-
-	// liba should be built first
-	if buildOrder[0].Path != "test/liba" {
-		t.Errorf("first build = %q, want %q", buildOrder[0].Path, "test/liba")
-	}
-
-	// Both should have results
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
-	}
-	if results[0].Metadata != "-lA" {
-		t.Errorf("liba metadata = %q, want %q", results[0].Metadata, "-lA")
-	}
-	if results[1].Metadata != "-lB" {
-		t.Errorf("libb metadata = %q, want %q", results[1].Metadata, "-lB")
-	}
-}
-
-func TestBuild_DepResultInjection_WithSyntheticModule(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	// Build liba first to populate cache, so we can verify dep injection
-	// in a controlled way by creating a synthetic module that checks its deps.
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	// First build liba normally
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-	results, err := b.Build(ctx, mods)
-	if err != nil {
-		t.Fatalf("Build(liba) failed: %v", err)
-	}
-	if results[0].Metadata != "-lA" {
-		t.Fatalf("liba metadata = %q, want %q", results[0].Metadata, "-lA")
-	}
-}
+	loadAndBuild(t, b, store, main)
 
-func TestBuild_MultipleErrors(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	// errmod's OnBuild produces an error
-	main := module.Version{Path: "test/errmod", Version: "1.0.0"}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-	_, err = b.Build(ctx, mods)
-	if err == nil {
-		t.Fatal("Build() error = nil, want error")
-	}
-	// Verify the error is from the formula
-	if !strings.Contains(err.Error(), "nonexistent.txt") {
-		t.Errorf("error = %v, want it to mention nonexistent.txt", err)
-	}
-}
-
-func TestBuild_ErrorDoesNotCache(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	// Build errmod which fails
-	main := module.Version{Path: "test/errmod", Version: "1.0.0"}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-	_, _ = b.Build(ctx, mods)
-
-	// Verify no cache was written for the failed module
-	_, err = b.loadCache("test/errmod")
-	if err == nil {
-		t.Fatal("cache should not exist for failed build")
+	if got := os.Getenv(envKey); got != "original" {
+		t.Errorf("env %s = %q after Build, want %q (restored)", envKey, got, "original")
 	}
 }
 
@@ -906,26 +588,28 @@ func TestBuild_EnvRestoration_AfterError(t *testing.T) {
 	}
 }
 
-func TestBuild_WorkspaceIsolation(t *testing.T) {
+func TestBuild_InstallDirConvention(t *testing.T) {
 	store := setupTestStore(t)
-
-	// Two builders with different workspaces should not interfere
-	b1 := setupBuilder(t, store, "amd64-linux")
-	b2 := setupBuilder(t, store, "amd64-linux")
+	b := setupBuilder(t, store, "amd64-linux")
 
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	results1, _ := loadAndBuild(t, b1, store, main)
-	results2, _ := loadAndBuild(t, b2, store, main)
+	loadAndBuild(t, b, store, main)
 
-	if results1[0].Metadata != results2[0].Metadata {
-		t.Errorf("results differ: %q vs %q", results1[0].Metadata, results2[0].Metadata)
+	installDir, _ := b.installDir("test/liba", "1.0.0")
+
+	// Verify the path follows workspace/<escaped>@<version>-<matrix>
+	rel, err := filepath.Rel(b.workspaceDir, installDir)
+	if err != nil {
+		t.Fatalf("installDir not under workspace: %v", err)
+	}
+	want := filepath.Join("test", "liba@1.0.0-amd64-linux")
+	if rel != want {
+		t.Errorf("installDir rel = %q, want %q", rel, want)
 	}
 
-	// But they should have different install dirs
-	dir1, _ := b1.installDir("test/liba", "1.0.0")
-	dir2, _ := b2.installDir("test/liba", "1.0.0")
-	if dir1 == dir2 {
-		t.Error("different builders should have different install dirs")
+	// Verify directory was created
+	if _, err := os.Stat(installDir); err != nil {
+		t.Errorf("installDir not created: %v", err)
 	}
 }
 
@@ -1037,423 +721,4 @@ func (e *errorRepo) At(ref, localDir string) fs.FS {
 
 func (e *errorRepo) Sync(ctx context.Context, ref, path, destDir string) error {
 	return e.syncErr
-}
-
-// ---------------------------------------------------------------------------
-// Direct module construction tests (bypasses modules.Load)
-// ---------------------------------------------------------------------------
-
-func TestBuild_DirectModule_SimpleOnBuild(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	// Create a module with a custom OnBuild that sets specific metadata
-	testMod := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				out.SetMetadata("-lcustom")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	results, err := b.Build(context.Background(), []*modules.Module{testMod})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want 1", len(results))
-	}
-	if results[0].Metadata != "-lcustom" {
-		t.Errorf("metadata = %q, want %q", results[0].Metadata, "-lcustom")
-	}
-}
-
-func TestBuild_DirectModule_OnBuildError(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	testMod := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				out.AddErr(errors.New("build exploded"))
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	_, err := b.Build(context.Background(), []*modules.Module{testMod})
-	if err == nil {
-		t.Fatal("Build() error = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "build exploded") {
-		t.Errorf("error = %v, want it to contain %q", err, "build exploded")
-	}
-}
-
-func TestBuild_DirectModule_EmptyMetadata(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	// OnBuild that doesn't set any metadata
-	testMod := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				// no-op, no metadata set
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	results, err := b.Build(context.Background(), []*modules.Module{testMod})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	if results[0].Metadata != "" {
-		t.Errorf("metadata = %q, want empty", results[0].Metadata)
-	}
-}
-
-func TestBuild_DirectModule_DepContextInjection(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	// Module A: sets metadata "-lA"
-	modA := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				out.SetMetadata("-lA")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	// Module B: depends on A, reads A's build result from context
-	var gotDepResult string
-	var gotDepOk bool
-	modB := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/libb",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				depVer := module.Version{Path: "test/liba", Version: "1.0.0"}
-				result, ok := ctx.BuildResult(depVer)
-				gotDepResult = result.Metadata()
-				gotDepOk = ok
-				out.SetMetadata("-lB")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/libb")),
-		Path:    "test/libb",
-		Version: "1.0.0",
-		Deps:    []*modules.Module{modA},
-	}
-
-	// Main module has all modules in deps
-	modB.Deps = []*modules.Module{modA}
-	targets := []*modules.Module{modB, modA}
-
-	results, err := b.Build(context.Background(), targets)
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-
-	if !gotDepOk {
-		t.Fatal("dep build result was not injected into context")
-	}
-	if gotDepResult != "-lA" {
-		t.Errorf("dep result metadata = %q, want %q", gotDepResult, "-lA")
-	}
-
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
-	}
-	// Build order: A first (leaf), then B
-	if results[0].Metadata != "-lA" {
-		t.Errorf("results[0].Metadata = %q, want %q", results[0].Metadata, "-lA")
-	}
-	if results[1].Metadata != "-lB" {
-		t.Errorf("results[1].Metadata = %q, want %q", results[1].Metadata, "-lB")
-	}
-}
-
-func TestBuild_DirectModule_ContextFields(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	var capturedSourceDir string
-	var capturedMatrix string
-	testMod := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				capturedSourceDir = ctx.SourceDir
-				capturedMatrix = ctx.CurrentMatrix()
-				out.SetMetadata("-lA")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	_, err := b.Build(context.Background(), []*modules.Module{testMod})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-
-	if capturedSourceDir == "" {
-		t.Error("context SourceDir should not be empty")
-	}
-	if capturedMatrix != "amd64-linux" {
-		t.Errorf("context matrix = %q, want %q", capturedMatrix, "amd64-linux")
-	}
-}
-
-func TestBuild_DirectModule_OutputDir(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	var outputDirErr error
-	var gotOutputDir string
-	testMod := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				gotOutputDir, outputDirErr = ctx.OutputDir(module.Version{Path: "test/liba", Version: "1.0.0"})
-				out.SetMetadata("-lA")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	_, err := b.Build(context.Background(), []*modules.Module{testMod})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-
-	if outputDirErr != nil {
-		t.Fatalf("OutputDir() error = %v", outputDirErr)
-	}
-	expectedDir, _ := b.installDir("test/liba", "1.0.0")
-	if gotOutputDir != expectedDir {
-		t.Errorf("OutputDir = %q, want %q", gotOutputDir, expectedDir)
-	}
-}
-
-func TestBuild_DirectModule_ProjectDeps(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	// Create a chain: C -> B -> A
-	modA := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				out.SetMetadata("-lA")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	modB := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/libb",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				out.SetMetadata("-lB")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/libb")),
-		Path:    "test/libb",
-		Version: "1.0.0",
-		Deps:    []*modules.Module{modA},
-	}
-
-	var capturedDeps []module.Version
-	modC := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/libc",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				capturedDeps = proj.Deps
-				out.SetMetadata("-lC")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/libc")),
-		Path:    "test/libc",
-		Version: "1.0.0",
-		Deps:    []*modules.Module{modB},
-	}
-
-	targets := []*modules.Module{modC, modB, modA}
-	_, err := b.Build(context.Background(), targets)
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-
-	// C depends on B, which depends on A.
-	// resolveModTransitiveDeps should return A, B (in topological order).
-	if len(capturedDeps) != 2 {
-		t.Fatalf("project deps len = %d, want 2", len(capturedDeps))
-	}
-	// A before B (DFS post-order)
-	if capturedDeps[0].Path != "test/liba" {
-		t.Errorf("dep[0] = %q, want %q", capturedDeps[0].Path, "test/liba")
-	}
-	if capturedDeps[1].Path != "test/libb" {
-		t.Errorf("dep[1] = %q, want %q", capturedDeps[1].Path, "test/libb")
-	}
-}
-
-func TestBuild_DirectModule_ProjectSourceFS(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	b := &Builder{
-		store:        store,
-		matrix:       "amd64-linux",
-		workspaceDir: wsDir,
-		newRepo: func(repoPath string) (vcs.Repo, error) {
-			modPath := strings.TrimPrefix(repoPath, "github.com/")
-			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
-		},
-	}
-
-	var sourceContent []byte
-	var readErr error
-	testMod := &modules.Module{
-		Formula: &formula.Formula{
-			ModPath: "test/liba",
-			FromVer: "1.0.0",
-			OnBuild: func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
-				sourceContent, readErr = proj.ReadFile("source.txt")
-				out.SetMetadata("-lA")
-			},
-		},
-		FS:      os.DirFS(filepath.Join(testSourceDir, "test/liba")),
-		Path:    "test/liba",
-		Version: "1.0.0",
-	}
-
-	_, err := b.Build(context.Background(), []*modules.Module{testMod})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	if readErr != nil {
-		t.Fatalf("proj.ReadFile() error = %v", readErr)
-	}
-	if !strings.Contains(string(sourceContent), "liba source") {
-		t.Errorf("source content = %q, want it to contain %q", string(sourceContent), "liba source")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// findResult helper tests
-// ---------------------------------------------------------------------------
-
-func TestFindResult_NotFound(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	main := module.Version{Path: "test/liba", Version: "1.0.0"}
-	results, mods := loadAndBuild(t, b, store, main)
-
-	_, ok := findResult(results, b, mods, "nonexistent/mod")
-	if ok {
-		t.Error("findResult should return false for nonexistent module")
-	}
 }
