@@ -33,5 +33,11 @@ func init() {
 		PkgPaths: []string{
 			"github.com/goplus/llar/formula",
 		},
+		Import: []*modfile.Import{
+			{
+				Name: "autotools",
+				Path: "github.com/goplus/llar/x/autotools",
+			},
+		},
 	})
 }
