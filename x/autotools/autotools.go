@@ -2,59 +2,35 @@
 package autotools
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
-
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/mod/module"
 )
 
 // AutoTools drives Autotools-style builds.
 type AutoTools struct {
-	matrix       formula.Matrix
-	workspaceDir string
-	sourceDir    string
-	buildDir     string
-	installDir   string
-	env          map[string]string
+	sourceDir  string
+	buildDir   string
+	installDir string
 }
 
 // New returns a ready-to-use AutoTools.
-func New(matrix formula.Matrix, workspaceDir, sourceDir, buildDir, installDir string) *AutoTools {
+func New(sourceDir, buildDir, installDir string) *AutoTools {
 	return &AutoTools{
-		matrix:       matrix,
-		workspaceDir: workspaceDir,
-		sourceDir:    sourceDir,
-		buildDir:     buildDir,
-		installDir:   installDir,
-		env:          make(map[string]string),
+		sourceDir:  sourceDir,
+		buildDir:   buildDir,
+		installDir: installDir,
 	}
 }
 
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
 
-// Env sets key=value for the current process and for every command spawned later.
-func (a *AutoTools) Env(key, value string) {
-	a.env[key] = value
-	os.Setenv(key, value)
-}
-
-// Use adds include/lib/pkgconfig paths of a built dependency to the process environment.
-func (a *AutoTools) Use(mod module.Version) error {
-	escaped, err := module.EscapePath(mod.Path)
-	if err != nil {
-		return err
-	}
-	root := filepath.Join(a.workspaceDir, escaped+"-"+a.matrix.Combinations()[0])
-	if _, err := os.Stat(root); err != nil {
-		return fmt.Errorf("use %s@%s: %w", mod.Path, mod.Version, err)
-	}
-
+// Use configures the process environment so that compilers and build tools
+// find headers, libraries and pkg-config files from a non-system dependency
+// installed at root.
+func (a *AutoTools) Use(root string) {
 	includeDir := filepath.Join(root, "include")
 	libDir := filepath.Join(root, "lib")
 	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
@@ -85,7 +61,6 @@ func (a *AutoTools) Use(mod module.Version) error {
 			appendFlag("LDFLAGS", "-L"+libDir)
 		}
 	}
-	return nil
 }
 
 // Configure runs <sourceDir>/configure inside buildDir.
@@ -137,28 +112,7 @@ func (a *AutoTools) run(name string, args []string) error {
 	cmd.Dir = a.workDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if len(a.env) > 0 {
-		cmd.Env = mergeEnv(os.Environ(), a.env)
-	}
 	return cmd.Run()
-}
-
-// mergeEnv returns base with every key in overrides replaced or appended.
-func mergeEnv(base []string, overrides map[string]string) []string {
-	idx := make(map[string]int, len(base))
-	for i, kv := range base {
-		if k, _, ok := strings.Cut(kv, "="); ok {
-			idx[k] = i
-		}
-	}
-	for k, v := range overrides {
-		if i, ok := idx[k]; ok {
-			base[i] = k + "=" + v
-		} else {
-			base = append(base, k+"="+v)
-		}
-	}
-	return base
 }
 
 // prependPath prepends value to a PATH-style env var.

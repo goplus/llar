@@ -7,19 +7,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/mod/module"
 )
 
 func TestUseSetsEnv(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Build the expected directory: workspace/dep-amd64-linux/{include,lib/pkgconfig}
-	matrixStr := "amd64-linux"
-	modBuildDir := filepath.Join(tmpDir, "dep-"+matrixStr)
-	includeDir := filepath.Join(modBuildDir, "include")
-	libDir := filepath.Join(modBuildDir, "lib")
+	root := t.TempDir()
+	includeDir := filepath.Join(root, "include")
+	libDir := filepath.Join(root, "lib")
 	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
 	for _, d := range []string{includeDir, libDir, pkgconfigDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
@@ -34,18 +27,12 @@ func TestUseSetsEnv(t *testing.T) {
 		t.Setenv(key, "")
 	}
 
-	matrix := formula.Matrix{
-		Require: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
-	}
-	a := New(matrix, tmpDir, "", "", "")
-
-	if err := a.Use(module.Version{Path: "dep", Version: "1.0.0"}); err != nil {
-		t.Fatalf("Use: %v", err)
-	}
+	a := New("", "", "")
+	a.Use(root)
 
 	for key, want := range map[string]string{
 		"PKG_CONFIG_PATH":    pkgconfigDir,
-		"CMAKE_PREFIX_PATH":  modBuildDir,
+		"CMAKE_PREFIX_PATH":  root,
 		"CMAKE_INCLUDE_PATH": includeDir,
 		"CMAKE_LIBRARY_PATH": libDir,
 	} {
@@ -71,40 +58,34 @@ func TestUseSetsEnv(t *testing.T) {
 	}
 }
 
-func TestUseNotFound(t *testing.T) {
-	matrix := formula.Matrix{
-		Require: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
+func TestUsePartialDirs(t *testing.T) {
+	// root with only include, no lib or pkgconfig
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "include"), 0o755)
+
+	for _, key := range []string{
+		"PKG_CONFIG_PATH", "CMAKE_LIBRARY_PATH", "CPPFLAGS", "LDFLAGS",
+	} {
+		t.Setenv(key, "")
 	}
-	a := New(matrix, t.TempDir(), "", "", "")
-	if err := a.Use(module.Version{Path: "no/such", Version: "1.0.0"}); err == nil {
-		t.Fatal("expected error for missing dependency dir")
+
+	a := New("", "", "")
+	a.Use(root)
+
+	if got := os.Getenv("PKG_CONFIG_PATH"); got != "" {
+		t.Errorf("PKG_CONFIG_PATH = %q, want empty", got)
+	}
+	if got := os.Getenv("CMAKE_LIBRARY_PATH"); got != "" {
+		t.Errorf("CMAKE_LIBRARY_PATH = %q, want empty", got)
 	}
 }
 
 func TestOutputDir(t *testing.T) {
-	a := New(formula.Matrix{}, "", "", "build", "")
-	if got := a.OutputDir(); got != "build" {
+	if got := New("", "build", "").OutputDir(); got != "build" {
 		t.Errorf("OutputDir = %q, want %q", got, "build")
 	}
-	a2 := New(formula.Matrix{}, "", "", "build", "inst")
-	if got := a2.OutputDir(); got != "inst" {
+	if got := New("", "build", "inst").OutputDir(); got != "inst" {
 		t.Errorf("OutputDir = %q, want %q", got, "inst")
-	}
-}
-
-func TestMergeEnv(t *testing.T) {
-	base := []string{"A=1", "B=2", "C=3"}
-	got := mergeEnv(base, map[string]string{"B": "X", "D": "4"})
-
-	m := make(map[string]string)
-	for _, kv := range got {
-		k, v, _ := strings.Cut(kv, "=")
-		m[k] = v
-	}
-	for key, want := range map[string]string{"A": "1", "B": "X", "C": "3", "D": "4"} {
-		if m[key] != want {
-			t.Errorf("%s = %q, want %q", key, m[key], want)
-		}
 	}
 }
 
@@ -124,10 +105,7 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Setenv("CUSTOM", "")
-
-	a := New(formula.Matrix{}, "", absSource, buildDir, installDir)
-	a.Env("CUSTOM", "VAL")
+	a := New(absSource, buildDir, installDir)
 
 	if err := a.Configure("--enable-foo"); err != nil {
 		t.Fatalf("Configure: %v", err)
@@ -139,19 +117,14 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 		t.Fatalf("Install: %v", err)
 	}
 
-	// Verify config.log captured our env and prefix.
 	data, err := os.ReadFile(filepath.Join(buildDir, "config.log"))
 	if err != nil {
 		t.Fatalf("read config.log: %v", err)
 	}
-	log := string(data)
-	for _, want := range []string{"CUSTOM=VAL", "PREFIX=" + installDir} {
-		if !strings.Contains(log, want) {
-			t.Errorf("config.log missing %q", want)
-		}
+	if log := string(data); !strings.Contains(log, "PREFIX="+installDir) {
+		t.Errorf("config.log missing PREFIX=%s", installDir)
 	}
 
-	// Verify installed artifacts.
 	for _, path := range []string{
 		filepath.Join(installDir, "lib", "libdummy.a"),
 		filepath.Join(installDir, "include", "dummy.h"),
