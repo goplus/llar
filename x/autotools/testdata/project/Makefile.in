@@ -1,0 +1,26 @@
+prefix = @prefix@
+srcdir = @srcdir@
+
+CC ?= cc
+AR ?= ar
+CFLAGS ?= -O2
+
+LIB = libdummy.a
+OBJ = dummy.o
+
+all: $(LIB)
+
+dummy.o: $(srcdir)/dummy.c $(srcdir)/dummy.h
+	$(CC) $(CFLAGS) -c $(srcdir)/dummy.c -o $@
+
+$(LIB): $(OBJ)
+	$(AR) rcs $@ $(OBJ)
+
+install: $(LIB)
+	dest="$${DESTDIR:+$${DESTDIR}/}$(prefix)"; \
+	mkdir -p "$$dest/lib" "$$dest/include"; \
+	cp $(LIB) "$$dest/lib/"; \
+	cp $(srcdir)/dummy.h "$$dest/include/"
+
+clean:
+	rm -f $(OBJ) $(LIB)

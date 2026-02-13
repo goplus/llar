@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+prefix="/usr/local"
+srcdir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--prefix=*)
+			prefix="${1#*=}"
+			;;
+		--prefix)
+			shift
+			prefix="$1"
+			;;
+	esac
+	shift || true
+done
+
+sed \
+	-e "s|@prefix@|$prefix|g" \
+	-e "s|@srcdir@|$srcdir|g" \
+	"$srcdir/Makefile.in" > Makefile
+
+echo "CUSTOM=${CUSTOM}" > config.log
+echo "PREFIX=${prefix}" >> config.log
