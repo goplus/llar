@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -19,18 +20,19 @@ import (
 
 type Builder struct {
 	store        *repo.Store
-	matrix       classfile.Matrix
+	matrix       string
 	workspaceDir string
 	initOnce     sync.Once
+	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
 type Result struct {
-	*classfile.BuildResult
+	Metadata string
 }
 
 type Options struct {
 	Store        *repo.Store
-	Matrix       classfile.Matrix
+	MatrixStr    string
 	WorkspaceDir string
 }
 
@@ -59,8 +61,9 @@ func NewBuilder(opts Options) (*Builder, error) {
 	}
 	return &Builder{
 		store:        opts.Store,
-		matrix:       opts.Matrix,
-		workspaceDir: opts.WorkspaceDir,
+		matrix:       opts.MatrixStr,
+		workspaceDir: workspaceDir,
+		newRepo:      vcs.NewRepo,
 	}, nil
 }
 
@@ -176,7 +179,7 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 }
 
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
-	matrixStr := b.matrix.Combinations()[0]
+	builtResults := make(map[module.Version]classfile.BuildResult)
 
 	build := func(mod *modules.Module) (Result, error) {
 		unlock, err := b.store.LockModule(mod.ModPath)
@@ -185,13 +188,14 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer unlock()
 
-		// check cache
-		cache, err := loadCacheFS(mod.FS)
+		// Check cache
+		cache, err := b.loadCache(mod.Path)
 		if err == nil {
-			if result, ok := cache.get(mod.Version, matrixStr); ok {
-				return Result{}, nil
+			if entry, ok := cache.get(mod.Version, b.matrix); ok {
+				return Result{Metadata: entry.Metadata}, nil
 			}
 		}
+
 		// TODO(MeteorsLiu): Source cache dir
 		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
 		if err != nil {
@@ -199,43 +203,62 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer os.RemoveAll(tmpSourceDir)
 
-		var out classfile.BuildResult
-
-		modFilepath, err := module.EscapePath(mod.Path)
-		if err != nil {
-			return Result{}, err
-		}
-
-		installDir := filepath.Join(b.workspaceDir, modFilepath)
-
-		buildContext := &classfile.Context{SourceDir: tmpSourceDir, InstallDir: installDir}
-		buildContext.SetCurrentMatrix(b.matrix)
-
-		project := &classfile.Project{Deps: b.resolveModTransitiveDeps(targets, mod), SourceFS: mod.FS.(fs.ReadFileFS)}
-
 		// Before we start to build, clone source to tmpSourceDir
 		// And switch current dir to it.
 		// TODO(MeteorsLiu): Support different code host
-		repo, err := vcs.NewRepo(fmt.Sprintf("github.com/%s", mod.Path))
+		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
 		if err != nil {
 			return Result{}, err
 		}
 		if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
 			return Result{}, err
 		}
+
+		installDir, err := b.installDir(mod.Path, mod.Version)
+		if err != nil {
+			return Result{}, err
+		}
+		if err := os.MkdirAll(installDir, 0o755); err != nil {
+			return Result{}, err
+		}
+
+		getOutputDir := func(_ string, m module.Version) (string, error) {
+			return b.installDir(m.Path, m.Version)
+		}
+		buildContext := classfile.NewContext(tmpSourceDir, b.matrix, getOutputDir)
+
+		// Inject results of already-built dependencies
+		for modVer, result := range builtResults {
+			buildContext.AddBuildResult(modVer, result)
+		}
+
+		project := &classfile.Project{Deps: b.resolveModTransitiveDeps(targets, mod), SourceFS: mod.FS.(fs.ReadFileFS)}
+
 		// Ready! Go!
 		if err := os.Chdir(tmpSourceDir); err != nil {
-			return Result{}, nil
+			return Result{}, err
 		}
+
+		var out classfile.BuildResult
 		mod.OnBuild(buildContext, project, &out)
 
 		if len(out.Errs()) > 0 {
 			return Result{}, errors.Join(out.Errs()...)
 		}
 
-		cache.set(mod.Version, matrixStr, &buildEntry{})
+		// Save to cache
+		if cache == nil {
+			cache = &buildCache{}
+		}
+		cache.set(mod.Version, b.matrix, &buildEntry{
+			Metadata:  out.Metadata(),
+			BuildTime: time.Now(),
+		})
+		if err := b.saveCache(mod.Path, cache); err != nil {
+			return Result{}, err
+		}
 
-		return Result{}, nil
+		return Result{Metadata: out.Metadata()}, nil
 	}
 
 	var results []Result
@@ -258,6 +281,15 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		if err != nil {
 			return nil, err
 		}
+
+		// Track result for downstream dependencies
+		modVer := module.Version{Path: target.Path, Version: target.Version}
+		br := classfile.BuildResult{}
+		if result.Metadata != "" {
+			br.SetMetadata(result.Metadata)
+		}
+		builtResults[modVer] = br
+
 		results = append(results, result)
 	}
 	return results, nil

@@ -1,0 +1,10 @@
+id "test/errmod"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	_, err := proj.readFile("nonexistent.txt")
+	if err != nil {
+		out.addErr err
+	}
+}

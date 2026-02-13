@@ -3,10 +3,9 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/goplus/llar/formula"
 )
 
 func TestCacheKey(t *testing.T) {
@@ -97,88 +96,52 @@ func TestBuildCache_Overwrite(t *testing.T) {
 	}
 }
 
-func TestBuildWorkspace_Dir(t *testing.T) {
-	w := newBuildWorkspace("/tmp/ws")
+func TestBuilder_InstallDir(t *testing.T) {
+	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
 
-	dir, err := w.Dir("madler/zlib", "1.0.0", "amd64-linux")
+	dir, err := b.installDir("madler/zlib", "1.0.0")
 	if err != nil {
-		t.Fatalf("Dir() failed: %v", err)
+		t.Fatalf("installDir() failed: %v", err)
 	}
-	want := filepath.Join("/tmp/ws", "madler", "zlib", "1.0.0", "amd64-linux")
+	want := filepath.Join("/tmp/ws", "madler/zlib@1.0.0-amd64-linux")
 	if dir != want {
-		t.Errorf("Dir() = %q, want %q", dir, want)
+		t.Errorf("installDir() = %q, want %q", dir, want)
 	}
 }
 
-func TestBuildWorkspace_Dir_InvalidPath(t *testing.T) {
-	w := newBuildWorkspace("/tmp/ws")
-	_, err := w.Dir("", "1.0.0", "amd64-linux")
-	if err == nil {
-		t.Error("Dir() expected error for empty module path")
-	}
-}
+func TestBuilder_CacheDir(t *testing.T) {
+	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
 
-func TestBuildWorkspace_Has(t *testing.T) {
-	tmpDir := t.TempDir()
-	w := newBuildWorkspace(tmpDir)
-
-	if w.Has("madler/zlib", "1.0.0", "amd64-linux") {
-		t.Error("Has() = true for non-existent")
-	}
-
-	// create the directory
-	dir, _ := w.Dir("madler/zlib", "1.0.0", "amd64-linux")
-	os.MkdirAll(dir, 0700)
-
-	if !w.Has("madler/zlib", "1.0.0", "amd64-linux") {
-		t.Error("Has() = false for existing directory")
-	}
-}
-
-func TestBuildWorkspace_FS(t *testing.T) {
-	tmpDir := t.TempDir()
-	w := newBuildWorkspace(tmpDir)
-
-	// create output with a file
-	dir, _ := w.Dir("madler/zlib", "1.0.0", "amd64-linux")
-	os.MkdirAll(filepath.Join(dir, "lib"), 0700)
-	os.WriteFile(filepath.Join(dir, "lib", "libz.a"), []byte("archive"), 0600)
-
-	fsys, err := w.FS("madler/zlib", "1.0.0", "amd64-linux")
+	dir, err := b.cacheDir("madler/zlib")
 	if err != nil {
-		t.Fatalf("FS() failed: %v", err)
+		t.Fatalf("cacheDir() failed: %v", err)
 	}
-
-	f, err := fsys.Open("lib/libz.a")
-	if err != nil {
-		t.Fatalf("failed to open file from FS: %v", err)
+	want := filepath.Join("/tmp/ws", "madler/zlib")
+	if dir != want {
+		t.Errorf("cacheDir() = %q, want %q", dir, want)
 	}
-	f.Close()
 }
 
-func TestBuildWorkspace_SaveLoadCache(t *testing.T) {
+func TestBuilder_SaveLoadCache(t *testing.T) {
 	tmpDir := t.TempDir()
-	w := newBuildWorkspace(tmpDir)
+	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
 	now := time.Now().Truncate(time.Second)
-
-	result := formula.BuildResult{}
-	result.SetMetadata("-lssl")
 
 	original := &buildCache{}
 	original.set("1.0.0", "amd64-linux", &buildEntry{
-		BuildResult: result,
-		BuildTime:   now,
+		Metadata:  "-lssl",
+		BuildTime: now,
 	})
 	original.set("2.0.0", "arm64-darwin", &buildEntry{
 		BuildTime: now.Add(time.Hour),
 	})
 
-	if err := w.saveCache("madler/zlib", original); err != nil {
+	if err := b.saveCache("madler/zlib", original); err != nil {
 		t.Fatalf("saveCache() failed: %v", err)
 	}
 
 	t.Run("hit", func(t *testing.T) {
-		cache, err := w.loadCache("madler/zlib")
+		cache, err := b.loadCache("madler/zlib")
 		if err != nil {
 			t.Fatalf("loadCache() failed: %v", err)
 		}
@@ -186,8 +149,8 @@ func TestBuildWorkspace_SaveLoadCache(t *testing.T) {
 		if !ok {
 			t.Fatal("expected entry, got miss")
 		}
-		if entry.BuildResult.Metadata() != "-lssl" {
-			t.Errorf("metadata = %q, want %q", entry.BuildResult.Metadata(), "-lssl")
+		if entry.Metadata != "-lssl" {
+			t.Errorf("metadata = %q, want %q", entry.Metadata, "-lssl")
 		}
 		if !entry.BuildTime.Equal(now) {
 			t.Errorf("build time = %v, want %v", entry.BuildTime, now)
@@ -195,30 +158,169 @@ func TestBuildWorkspace_SaveLoadCache(t *testing.T) {
 	})
 
 	t.Run("miss", func(t *testing.T) {
-		cache, err := w.loadCache("madler/zlib")
+		cache, err := b.loadCache("madler/zlib")
 		if err != nil {
 			t.Fatalf("loadCache() failed: %v", err)
 		}
-		_, ok := cache.get("9.9.9", "amd64-linux")
-		if ok {
+		if _, ok := cache.get("9.9.9", "amd64-linux"); ok {
 			t.Error("expected miss for nonexistent key")
 		}
 	})
 
 	t.Run("no cache file", func(t *testing.T) {
-		_, err := w.loadCache("nonexistent/mod")
-		if err == nil {
+		if _, err := b.loadCache("nonexistent/mod"); err == nil {
 			t.Fatal("expected error for missing cache file")
 		}
 	})
 
 	t.Run("invalid json", func(t *testing.T) {
-		badDir, _ := w.modDir("bad/json")
-		os.MkdirAll(badDir, 0700)
-		os.WriteFile(filepath.Join(badDir, cacheFile), []byte("bad"), 0644)
-		_, err := w.loadCache("bad/json")
-		if err == nil {
+		badDir, _ := b.cacheDir("bad/json")
+		os.MkdirAll(badDir, 0o700)
+		os.WriteFile(filepath.Join(badDir, cacheFile), []byte("bad"), 0o644)
+		if _, err := b.loadCache("bad/json"); err == nil {
 			t.Fatal("expected error for invalid JSON")
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Cache error path tests
+// ---------------------------------------------------------------------------
+
+func TestBuilder_CacheDir_InvalidPath(t *testing.T) {
+	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+
+	// Empty path should fail EscapePath (filepath.Localize)
+	_, err := b.cacheDir("")
+	if err == nil {
+		t.Fatal("cacheDir('') should fail")
+	}
+
+	// Absolute path should fail
+	_, err = b.cacheDir("/abs/path")
+	if err == nil {
+		t.Fatal("cacheDir('/abs/path') should fail")
+	}
+
+	// Parent traversal should fail
+	_, err = b.cacheDir("..")
+	if err == nil {
+		t.Fatal("cacheDir('..') should fail")
+	}
+}
+
+func TestBuilder_InstallDir_InvalidPath(t *testing.T) {
+	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+
+	_, err := b.installDir("", "1.0.0")
+	if err == nil {
+		t.Fatal("installDir('', ...) should fail")
+	}
+
+	_, err = b.installDir("/abs/path", "1.0.0")
+	if err == nil {
+		t.Fatal("installDir('/abs/path', ...) should fail")
+	}
+}
+
+func TestBuilder_LoadCache_InvalidPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+
+	_, err := b.loadCache("")
+	if err == nil {
+		t.Fatal("loadCache('') should fail")
+	}
+}
+
+func TestBuilder_SaveCache_InvalidPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{BuildTime: time.Now()})
+
+	err := b.saveCache("", cache)
+	if err == nil {
+		t.Fatal("saveCache('', ...) should fail")
+	}
+}
+
+func TestBuilder_InstallDir_DifferentMatrices(t *testing.T) {
+	b1 := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+	b2 := &Builder{workspaceDir: "/tmp/ws", matrix: "arm64-darwin"}
+
+	dir1, _ := b1.installDir("test/lib", "1.0.0")
+	dir2, _ := b2.installDir("test/lib", "1.0.0")
+
+	if dir1 == dir2 {
+		t.Errorf("same installDir for different matrices: %q", dir1)
+	}
+	if !strings.Contains(dir1, "amd64-linux") {
+		t.Errorf("dir1 %q should contain matrix string", dir1)
+	}
+	if !strings.Contains(dir2, "arm64-darwin") {
+		t.Errorf("dir2 %q should contain matrix string", dir2)
+	}
+}
+
+func TestBuilder_InstallDir_DifferentVersions(t *testing.T) {
+	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+
+	dir1, _ := b.installDir("test/lib", "1.0.0")
+	dir2, _ := b.installDir("test/lib", "2.0.0")
+
+	if dir1 == dir2 {
+		t.Errorf("same installDir for different versions: %q", dir1)
+	}
+}
+
+func TestBuilder_SaveCache_CreatesDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-ltest",
+		BuildTime: time.Now(),
+	})
+
+	// The cacheDir doesn't exist yet; saveCache should create it
+	if err := b.saveCache("new/module", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	// Verify directory was created
+	cacheDir, _ := b.cacheDir("new/module")
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Errorf("cache directory not created: %v", err)
+	}
+
+	// Verify file was written
+	cachePath := filepath.Join(cacheDir, cacheFile)
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Errorf("cache file not written: %v", err)
+	}
+}
+
+func TestBuildCache_GetFromNilMap(t *testing.T) {
+	c := &buildCache{Cache: nil}
+	_, ok := c.get("1.0.0", "amd64-linux")
+	if ok {
+		t.Error("get from nil cache map should return false")
+	}
+}
+
+func TestBuildCache_SetInitializesMap(t *testing.T) {
+	c := &buildCache{}
+	if c.Cache != nil {
+		t.Fatal("Cache should start as nil")
+	}
+	c.set("1.0.0", "amd64-linux", &buildEntry{})
+	if c.Cache == nil {
+		t.Fatal("set should initialize the Cache map")
+	}
+	if len(c.Cache) != 1 {
+		t.Errorf("cache size = %d, want 1", len(c.Cache))
+	}
 }

@@ -1,0 +1,11 @@
+id "test/libb"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+	deps.require "test/liba", "1.0.0"
+}
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "-lB"
+}
