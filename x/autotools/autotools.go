@@ -1,3 +1,4 @@
+// Package autotools wraps the classic configure/make/make-install workflow.
 package autotools
 
 import (
@@ -6,94 +7,77 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
-	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/mod/module"
 )
 
-// AutoTools wraps common Autotools build steps with chainable configuration.
+// AutoTools drives Autotools-style builds.
 type AutoTools struct {
-	matrix classfile.Matrix
-
+	matrix       formula.Matrix
+	workspaceDir string
 	sourceDir    string
 	buildDir     string
 	installDir   string
-	workspaceDir string
 	env          map[string]string
 }
 
-// New creates a new AutoTools helper. Optional context enables use(mod).
-func New(matrix classfile.Matrix, workspaceDir, sourceDir, buildDir, installDir string) *AutoTools {
+// New returns a ready-to-use AutoTools.
+func New(matrix formula.Matrix, workspaceDir, sourceDir, buildDir, installDir string) *AutoTools {
 	return &AutoTools{
 		matrix:       matrix,
+		workspaceDir: workspaceDir,
 		sourceDir:    sourceDir,
 		buildDir:     buildDir,
 		installDir:   installDir,
-		workspaceDir: workspaceDir,
-		env:          map[string]string{},
+		env:          make(map[string]string),
 	}
 }
 
-func (a *AutoTools) Source(dir string) {
-	a.sourceDir = dir
-}
+// Source overrides the source directory.
+func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
 
+// Env sets key=value for the current process and for every command spawned later.
 func (a *AutoTools) Env(key, value string) {
-	if a.env == nil {
-		a.env = map[string]string{}
-	}
 	a.env[key] = value
-	_ = os.Setenv(key, value)
+	os.Setenv(key, value)
 }
 
-// Use configures the build environment to use the specified module.
+// Use adds include/lib/pkgconfig paths of a built dependency to the process environment.
 func (a *AutoTools) Use(mod module.Version) error {
-	modPath, err := module.EscapePath(mod.Path)
+	escaped, err := module.EscapePath(mod.Path)
 	if err != nil {
 		return err
 	}
-	matrixStr := a.matrix.Combinations()[0]
-
-	// TODO(MeteorsLiu): Decouple this into a Workspace module?
-	buildDir := filepath.Join(a.workspaceDir, fmt.Sprintf("%s-%s", modPath, matrixStr))
-
-	if _, err := os.Stat(buildDir); os.IsNotExist(err) {
-		return fmt.Errorf("failed to use %s@%s: buildDir %s not found", modPath, mod.Version, buildDir)
+	root := filepath.Join(a.workspaceDir, escaped+"-"+a.matrix.Combinations()[0])
+	if _, err := os.Stat(root); err != nil {
+		return fmt.Errorf("use %s@%s: %w", mod.Path, mod.Version, err)
 	}
 
-	includeDir := filepath.Join(buildDir, "include")
-	libDir := filepath.Join(buildDir, "lib")
-	pkgconfigDir := filepath.Join(buildDir, "lib", "pkgconfig")
+	includeDir := filepath.Join(root, "include")
+	libDir := filepath.Join(root, "lib")
+	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
 
-	// PKG_CONFIG_PATH - pkg-config path (all platforms)
 	if _, err := os.Stat(pkgconfigDir); err == nil {
-		prependEnv("PKG_CONFIG_PATH", pkgconfigDir)
+		prependPath("PKG_CONFIG_PATH", pkgconfigDir)
 	}
-
-	// CMAKE paths (all platforms)
-	if _, err := os.Stat(buildDir); err == nil {
-		prependEnv("CMAKE_PREFIX_PATH", buildDir)
-	}
+	prependPath("CMAKE_PREFIX_PATH", root)
 	if _, err := os.Stat(includeDir); err == nil {
-		prependEnv("CMAKE_INCLUDE_PATH", includeDir)
+		prependPath("CMAKE_INCLUDE_PATH", includeDir)
 	}
 	if _, err := os.Stat(libDir); err == nil {
-		prependEnv("CMAKE_LIBRARY_PATH", libDir)
+		prependPath("CMAKE_LIBRARY_PATH", libDir)
 	}
 
-	// Platform-specific settings
 	if runtime.GOOS == "windows" {
-		// Windows MSVC environment variables
 		if _, err := os.Stat(includeDir); err == nil {
-			prependEnv("INCLUDE", includeDir)
+			prependPath("INCLUDE", includeDir)
 		}
 		if _, err := os.Stat(libDir); err == nil {
-			prependEnv("LIB", libDir)
+			prependPath("LIB", libDir)
 		}
 	} else {
-		// Unix (Linux/macOS) - Autotools/GCC style flags
 		if _, err := os.Stat(includeDir); err == nil {
 			appendFlag("CPPFLAGS", "-I"+includeDir)
 		}
@@ -101,63 +85,39 @@ func (a *AutoTools) Use(mod module.Version) error {
 			appendFlag("LDFLAGS", "-L"+libDir)
 		}
 	}
-
 	return nil
 }
 
-// Configure runs ./configure with standard flags.
+// Configure runs <sourceDir>/configure inside buildDir.
+// --prefix is prepended automatically when installDir is set.
+// Extra flags are appended after --prefix.
 func (a *AutoTools) Configure(args ...string) error {
-	buildDir := a.buildDir
-	if buildDir == "" {
-		buildDir = "."
-	}
-	if err := os.MkdirAll(buildDir, 0755); err != nil {
+	dir := a.workDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-
-	exe := "./configure"
-	if buildDir != "." && buildDir != "" {
-		exe = filepath.Join(a.sourceDir, "configure")
+	exe := filepath.Join(a.sourceDir, "configure")
+	if dir == "." {
+		exe = "./configure"
 	}
-
-	configArgs := []string{}
+	flags := make([]string, 0, 1+len(args))
 	if a.installDir != "" {
-		configArgs = append(configArgs, "--prefix="+a.installDir)
+		flags = append(flags, "--prefix="+a.installDir)
 	}
-	configArgs = append(configArgs, args...)
-
-	return run(exe, configArgs, a.env, buildDir)
+	return a.run(exe, append(flags, args...))
 }
 
-// Build runs make (or provided args) in the build directory.
+// Build runs "make" with optional extra arguments.
 func (a *AutoTools) Build(args ...string) error {
-	buildDir := a.buildDir
-	if buildDir == "" {
-		buildDir = "."
-	}
-	cmdArgs := []string{}
-	if len(args) == 0 {
-		cmdArgs = append(cmdArgs, "make")
-	} else {
-		cmdArgs = append(cmdArgs, args...)
-	}
-	return run(cmdArgs[0], cmdArgs[1:], a.env, buildDir)
+	return a.run("make", args)
 }
 
-// Install runs make install (or provided args) in the build directory.
+// Install runs "make install" with optional extra arguments appended.
 func (a *AutoTools) Install(args ...string) error {
-	buildDir := a.buildDir
-	if buildDir == "" {
-		buildDir = "."
-	}
-	cmdArgs := []string{"make", "install"}
-	if len(args) > 0 {
-		cmdArgs = args
-	}
-	return run(cmdArgs[0], cmdArgs[1:], a.env, buildDir)
+	return a.run("make", append([]string{"install"}, args...))
 }
 
-// OutputDir returns the install dir if set, otherwise the build dir.
+// OutputDir returns installDir if set, otherwise buildDir.
 func (a *AutoTools) OutputDir() string {
 	if a.installDir != "" {
 		return a.installDir
@@ -165,61 +125,58 @@ func (a *AutoTools) OutputDir() string {
 	return a.buildDir
 }
 
-func run(bin string, args []string, env map[string]string, workdir string) error {
-	cmd := exec.Command(bin, args...)
-	if workdir != "" {
-		cmd.Dir = workdir
+func (a *AutoTools) workDir() string {
+	if a.buildDir == "" {
+		return "."
 	}
+	return a.buildDir
+}
+
+func (a *AutoTools) run(name string, args []string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = a.workDir()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if len(env) > 0 {
-		cmd.Env = mergeEnv(os.Environ(), env)
+	if len(a.env) > 0 {
+		cmd.Env = mergeEnv(os.Environ(), a.env)
 	}
 	return cmd.Run()
 }
 
-func mergeEnv(base []string, override map[string]string) []string {
-	envMap := make(map[string]string, len(base))
-	for _, kv := range base {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			envMap[k] = v
+// mergeEnv returns base with every key in overrides replaced or appended.
+func mergeEnv(base []string, overrides map[string]string) []string {
+	idx := make(map[string]int, len(base))
+	for i, kv := range base {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			idx[k] = i
 		}
 	}
-	for k, v := range override {
-		envMap[k] = v
+	for k, v := range overrides {
+		if i, ok := idx[k]; ok {
+			base[i] = k + "=" + v
+		} else {
+			base = append(base, k+"="+v)
+		}
 	}
-	keys := make([]string, 0, len(envMap))
-	for k := range envMap {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, k+"="+envMap[k])
-	}
-	return out
+	return base
 }
 
-// prependEnv prepends a value to an environment variable using the appropriate separator.
-func prependEnv(key, value string) {
+// prependPath prepends value to a PATH-style env var.
+func prependPath(key, value string) {
 	sep := ":"
 	if runtime.GOOS == "windows" {
 		sep = ";"
 	}
-	current := os.Getenv(key)
-	if current == "" {
-		os.Setenv(key, value)
-	} else {
-		os.Setenv(key, value+sep+current)
+	if cur := os.Getenv(key); cur != "" {
+		value += sep + cur
 	}
+	os.Setenv(key, value)
 }
 
-// appendFlag appends a flag to an environment variable (space-separated).
+// appendFlag appends a space-separated flag to an env var.
 func appendFlag(key, flag string) {
-	current := os.Getenv(key)
-	if current == "" {
-		os.Setenv(key, flag)
-	} else {
-		os.Setenv(key, strings.TrimSpace(current+" "+flag))
+	if cur := os.Getenv(key); cur != "" {
+		flag = cur + " " + flag
 	}
+	os.Setenv(key, flag)
 }

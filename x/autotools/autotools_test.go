@@ -13,101 +13,98 @@ import (
 )
 
 func TestUseSetsEnv(t *testing.T) {
-	tempDir := t.TempDir()
+	tmpDir := t.TempDir()
 
-	// Simulate a built module at workspaceDir/dep-amd64-linux
-	mod := module.Version{Path: "dep", Version: "1.0.0"}
+	// Build the expected directory: workspace/dep-amd64-linux/{include,lib/pkgconfig}
 	matrixStr := "amd64-linux"
-	modBuildDir := filepath.Join(tempDir, "dep-"+matrixStr)
-
+	modBuildDir := filepath.Join(tmpDir, "dep-"+matrixStr)
 	includeDir := filepath.Join(modBuildDir, "include")
 	libDir := filepath.Join(modBuildDir, "lib")
 	pkgconfigDir := filepath.Join(libDir, "pkgconfig")
-
-	for _, dir := range []string{includeDir, libDir, pkgconfigDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
+	for _, d := range []string{includeDir, libDir, pkgconfigDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
 		}
 	}
 
 	for _, key := range []string{
-		"PKG_CONFIG_PATH",
-		"CMAKE_PREFIX_PATH",
-		"CMAKE_INCLUDE_PATH",
-		"CMAKE_LIBRARY_PATH",
-		"INCLUDE",
-		"LIB",
-		"CPPFLAGS",
-		"LDFLAGS",
+		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
+		"CMAKE_LIBRARY_PATH", "INCLUDE", "LIB", "CPPFLAGS", "LDFLAGS",
 	} {
 		t.Setenv(key, "")
 	}
 
 	matrix := formula.Matrix{
-		Require: map[string][]string{
-			"arch": {"amd64"},
-			"os":   {"linux"},
-		},
+		Require: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
 	}
-	a := New(matrix, tempDir, "", "", "")
+	a := New(matrix, tmpDir, "", "", "")
 
-	if err := a.Use(mod); err != nil {
-		t.Fatalf("Use() failed: %v", err)
+	if err := a.Use(module.Version{Path: "dep", Version: "1.0.0"}); err != nil {
+		t.Fatalf("Use: %v", err)
 	}
 
-	expectEq := map[string]string{
+	for key, want := range map[string]string{
 		"PKG_CONFIG_PATH":    pkgconfigDir,
 		"CMAKE_PREFIX_PATH":  modBuildDir,
 		"CMAKE_INCLUDE_PATH": includeDir,
 		"CMAKE_LIBRARY_PATH": libDir,
-	}
-	for k, v := range expectEq {
-		if got := os.Getenv(k); got != v {
-			t.Fatalf("%s = %q, want %q", k, got, v)
+	} {
+		if got := os.Getenv(key); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
 
 	if runtime.GOOS == "windows" {
 		if got := os.Getenv("INCLUDE"); got != includeDir {
-			t.Fatalf("INCLUDE = %q, want %q", got, includeDir)
+			t.Errorf("INCLUDE = %q, want %q", got, includeDir)
 		}
 		if got := os.Getenv("LIB"); got != libDir {
-			t.Fatalf("LIB = %q, want %q", got, libDir)
+			t.Errorf("LIB = %q, want %q", got, libDir)
 		}
 	} else {
 		if got := os.Getenv("CPPFLAGS"); strings.TrimSpace(got) != "-I"+includeDir {
-			t.Fatalf("CPPFLAGS = %q, want %q", got, "-I"+includeDir)
+			t.Errorf("CPPFLAGS = %q, want %q", got, "-I"+includeDir)
 		}
 		if got := os.Getenv("LDFLAGS"); strings.TrimSpace(got) != "-L"+libDir {
-			t.Fatalf("LDFLAGS = %q, want %q", got, "-L"+libDir)
+			t.Errorf("LDFLAGS = %q, want %q", got, "-L"+libDir)
 		}
 	}
 }
 
 func TestUseNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
 	matrix := formula.Matrix{
-		Require: map[string][]string{
-			"arch": {"amd64"},
-			"os":   {"linux"},
-		},
+		Require: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
 	}
-	a := New(matrix, tmpDir, "", "", "")
-	err := a.Use(module.Version{Path: "nonexistent/mod", Version: "1.0.0"})
-	if err == nil {
-		t.Fatal("Use() expected error for non-existent module build dir")
+	a := New(matrix, t.TempDir(), "", "", "")
+	if err := a.Use(module.Version{Path: "no/such", Version: "1.0.0"}); err == nil {
+		t.Fatal("expected error for missing dependency dir")
 	}
 }
 
-func TestOutputDirPrefersInstall(t *testing.T) {
+func TestOutputDir(t *testing.T) {
 	a := New(formula.Matrix{}, "", "", "build", "")
 	if got := a.OutputDir(); got != "build" {
-		t.Fatalf("default OutputDir = %q, want %q", got, "build")
+		t.Errorf("OutputDir = %q, want %q", got, "build")
 	}
+	a2 := New(formula.Matrix{}, "", "", "build", "inst")
+	if got := a2.OutputDir(); got != "inst" {
+		t.Errorf("OutputDir = %q, want %q", got, "inst")
+	}
+}
 
-	a2 := New(formula.Matrix{}, "", "", "build", "custom-install")
-	if got := a2.OutputDir(); got != "custom-install" {
-		t.Fatalf("OutputDir with installDir = %q, want %q", got, "custom-install")
+func TestMergeEnv(t *testing.T) {
+	base := []string{"A=1", "B=2", "C=3"}
+	got := mergeEnv(base, map[string]string{"B": "X", "D": "4"})
+
+	m := make(map[string]string)
+	for _, kv := range got {
+		k, v, _ := strings.Cut(kv, "=")
+		m[k] = v
+	}
+	for key, want := range map[string]string{"A": "1", "B": "X", "C": "3", "D": "4"} {
+		if m[key] != want {
+			t.Errorf("%s = %q, want %q", key, m[key], want)
+		}
 	}
 }
 
@@ -121,51 +118,46 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 	tmp := t.TempDir()
 	installDir := filepath.Join(tmp, "install")
 	buildDir := filepath.Join(tmp, "build")
-	sourceDir := filepath.Join("testdata", "project")
-	absSourceDir, err := filepath.Abs(sourceDir)
+
+	absSource, err := filepath.Abs(filepath.Join("testdata", "project"))
 	if err != nil {
-		t.Fatalf("abs source dir: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(absSourceDir, "configure")); err != nil {
-		t.Fatalf("missing configure: %v", err)
+		t.Fatal(err)
 	}
 
 	t.Setenv("CUSTOM", "")
 
-	a := New(formula.Matrix{}, "", absSourceDir, buildDir, installDir)
+	a := New(formula.Matrix{}, "", absSource, buildDir, installDir)
 	a.Env("CUSTOM", "VAL")
 
 	if err := a.Configure("--enable-foo"); err != nil {
-		t.Fatalf("configure: %v", err)
+		t.Fatalf("Configure: %v", err)
 	}
 	if err := a.Build(); err != nil {
-		t.Fatalf("build: %v", err)
+		t.Fatalf("Build: %v", err)
 	}
 	if err := a.Install(); err != nil {
-		t.Fatalf("install: %v", err)
+		t.Fatalf("Install: %v", err)
 	}
 
-	cache := filepath.Join(buildDir, "config.log")
-	data, err := os.ReadFile(cache)
+	// Verify config.log captured our env and prefix.
+	data, err := os.ReadFile(filepath.Join(buildDir, "config.log"))
 	if err != nil {
 		t.Fatalf("read config.log: %v", err)
 	}
-	content := string(data)
-	for _, snippet := range []string{
-		"CUSTOM=VAL",
-		"PREFIX=" + installDir,
-	} {
-		if !strings.Contains(content, snippet) {
-			t.Fatalf("config.log missing %q", snippet)
+	log := string(data)
+	for _, want := range []string{"CUSTOM=VAL", "PREFIX=" + installDir} {
+		if !strings.Contains(log, want) {
+			t.Errorf("config.log missing %q", want)
 		}
 	}
 
-	wantLib := filepath.Join(installDir, "lib", "libdummy.a")
-	if _, err := os.Stat(wantLib); err != nil {
-		t.Fatalf("installed lib missing: %v", err)
-	}
-	wantHeader := filepath.Join(installDir, "include", "dummy.h")
-	if _, err := os.Stat(wantHeader); err != nil {
-		t.Fatalf("installed header missing: %v", err)
+	// Verify installed artifacts.
+	for _, path := range []string{
+		filepath.Join(installDir, "lib", "libdummy.a"),
+		filepath.Join(installDir, "include", "dummy.h"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("missing %s", path)
+		}
 	}
 }
