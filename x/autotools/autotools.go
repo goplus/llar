@@ -63,7 +63,7 @@ func (a *AutoTools) Use(root string) {
 	}
 }
 
-// Configure runs <sourceDir>/configure inside buildDir.
+// Configure runs the configure script from sourceDir in the build directory.
 // --prefix is prepended automatically when installDir is set.
 // Extra flags are appended after --prefix.
 func (a *AutoTools) Configure(args ...string) error {
