@@ -38,6 +38,10 @@ func init() {
 				Name: "autotools",
 				Path: "github.com/goplus/llar/x/autotools",
 			},
+			{
+				Name: "cmake",
+				Path: "github.com/goplus/llar/x/cmake",
+			},
 		},
 	})
 }
