@@ -201,6 +201,8 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 		"ENABLE:BOOL=ON",
 		"DISABLE:BOOL=OFF",
 		"CMAKE_BUILD_TYPE:STRING=Release",
+		"CMAKE_INSTALL_PREFIX",
+		"CMAKE_TOOLCHAIN_FILE",
 	} {
 		if !strings.Contains(cache, want) {
 			t.Errorf("cache missing %q", want)

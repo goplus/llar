@@ -108,13 +108,13 @@ func (c *CMake) Configure(args ...string) error {
 		cmakeArgs = append(cmakeArgs, "-G", c.generator)
 	}
 	if c.installDir != "" {
-		c.Define("CMAKE_INSTALL_PREFIX", c.installDir)
+		cmakeArgs = append(cmakeArgs, "-DCMAKE_INSTALL_PREFIX:STRING="+c.installDir)
 	}
 	if c.toolchain != "" {
-		c.Define("CMAKE_TOOLCHAIN_FILE", c.toolchain)
+		cmakeArgs = append(cmakeArgs, "-DCMAKE_TOOLCHAIN_FILE:STRING="+c.toolchain)
 	}
 	if c.buildType != "" {
-		c.Define("CMAKE_BUILD_TYPE", c.buildType)
+		cmakeArgs = append(cmakeArgs, "-DCMAKE_BUILD_TYPE:STRING="+c.buildType)
 	}
 	cmakeArgs = append(cmakeArgs, c.definesArgs()...)
 	cmakeArgs = append(cmakeArgs, args...)
