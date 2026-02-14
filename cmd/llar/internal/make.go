@@ -60,6 +60,15 @@ func runMake(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load modules: %w", err)
 	}
 
+	// Resolve output path to absolute before build (build may change cwd)
+	if makeOutput != "" {
+		abs, err := filepath.Abs(makeOutput)
+		if err != nil {
+			return fmt.Errorf("failed to resolve output path: %w", err)
+		}
+		makeOutput = abs
+	}
+
 	// Handle verbose output
 	var savedStdout, savedStderr *os.File
 	if !makeVerbose {
