@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	classfile "github.com/goplus/llar/formula"
@@ -22,8 +21,7 @@ type Builder struct {
 	store        *repo.Store
 	matrix       string
 	workspaceDir string
-	initOnce     sync.Once
-	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
+	newRepo func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
 type Result struct {
@@ -182,7 +180,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
 	build := func(mod *modules.Module) (Result, error) {
-		unlock, err := b.store.LockModule(mod.ModPath)
+		unlock, err := b.store.LockModule(mod.Path)
 		if err != nil {
 			return Result{}, err
 		}
