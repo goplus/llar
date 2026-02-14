@@ -80,7 +80,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		// Redirect os.Stdout/os.Stderr so subprocess output (cmake, etc.) is also silenced
 		savedStdout = os.Stdout
 		savedStderr = os.Stderr
-		devNull, err := os.Open(os.DevNull)
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 		if err != nil {
 			return fmt.Errorf("failed to open devnull: %w", err)
 		}

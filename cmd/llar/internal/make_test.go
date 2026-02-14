@@ -236,7 +236,7 @@ func runMakeCmd(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 
 	// Reset flags to defaults before each run
-	makeVerbose = false
+	makeVerbose = true
 	makeOutput = ""
 
 	// Capture stdout
