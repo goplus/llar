@@ -30,20 +30,30 @@ type Context struct {
 	buildResults map[module.Version]BuildResult
 
 	// filled by build
+	installDir   string
 	matrixStr    string
 	getOutputDir func(matrixStr string, mod module.Version) (string, error)
 }
 
 // NewContext creates a Context with build-internal fields.
-func NewContext(sourceDir, matrixStr string, getOutputDir func(string, module.Version) (string, error)) *Context {
+func NewContext(sourceDir, installDir, matrixStr string, getOutputDir func(string, module.Version) (string, error)) *Context {
 	return &Context{
 		SourceDir:    sourceDir,
+		installDir:   installDir,
 		matrixStr:    matrixStr,
 		getOutputDir: getOutputDir,
 	}
 }
 
-func (c *Context) OutputDir(mod module.Version) (string, error) {
+// OutputDir__0 returns the current module's output (install) directory.
+// In DSL: ctx.outputDir()
+func (c *Context) OutputDir__0() (string, error) {
+	return c.installDir, nil
+}
+
+// OutputDir__1 returns the output (install) directory for the given dependency.
+// In DSL: ctx.outputDir(dep)
+func (c *Context) OutputDir__1(mod module.Version) (string, error) {
 	return c.getOutputDir(c.matrixStr, mod)
 }
 

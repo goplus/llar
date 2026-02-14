@@ -3,11 +3,14 @@ package build
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
 
@@ -358,5 +361,265 @@ func TestE2E_RebuildAfterCacheClear(t *testing.T) {
 	if results1[0].Metadata != results2[0].Metadata {
 		t.Errorf("metadata changed after cache clear: %q → %q",
 			results1[0].Metadata, results2[0].Metadata)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Real build tests: actual source download + compilation
+// ---------------------------------------------------------------------------
+
+// TestE2E_RealZlibBuild downloads zlib source via real git clone and
+// compiles it with cmake. Verifies the full pipeline end-to-end:
+// formula loading → VCS sync → cmake configure/build/install → artifact check.
+func TestE2E_RealZlibBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real build test in short mode")
+	}
+	if _, err := exec.LookPath("cmake"); err != nil {
+		t.Skip("cmake not found, skipping real build test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found, skipping real build test")
+	}
+
+	store := setupTestStore(t)
+	matrix := runtime.GOARCH + "-" + runtime.GOOS
+
+	b := &Builder{
+		store:        store,
+		matrix:       matrix,
+		workspaceDir: t.TempDir(),
+		newRepo: func(repoPath string) (vcs.Repo, error) {
+			return vcs.NewRepo(repoPath)
+		},
+	}
+
+	main := module.Version{Path: "madler/zlib", Version: "v1.3.1"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Metadata != "-lz" {
+		t.Errorf("metadata = %q, want %q", results[0].Metadata, "-lz")
+	}
+
+	// Verify build artifacts exist in installDir
+	installDir, _ := b.installDir("madler/zlib", "v1.3.1")
+
+	// Check static library
+	libDir := filepath.Join(installDir, "lib")
+	libEntries, err := os.ReadDir(libDir)
+	if err != nil {
+		t.Fatalf("lib dir not found at %s: %v", libDir, err)
+	}
+	hasLib := false
+	for _, e := range libEntries {
+		if strings.HasPrefix(e.Name(), "libz") {
+			hasLib = true
+			break
+		}
+	}
+	if !hasLib {
+		t.Errorf("no libz* found in %s", libDir)
+	}
+
+	// Check header
+	headerPath := filepath.Join(installDir, "include", "zlib.h")
+	if _, err := os.Stat(headerPath); err != nil {
+		t.Errorf("zlib.h not found at %s: %v", headerPath, err)
+	}
+}
+
+// TestE2E_RealLibpngBuild builds libpng with its zlib dependency using cmake.use.
+// Verifies: formula dep resolution → zlib built first → cmake.use injects zlib →
+// libpng configure/build/install succeeds → artifacts exist.
+func TestE2E_RealLibpngBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real build test in short mode")
+	}
+	if _, err := exec.LookPath("cmake"); err != nil {
+		t.Skip("cmake not found, skipping real build test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found, skipping real build test")
+	}
+
+	store := setupTestStore(t)
+	matrix := runtime.GOARCH + "-" + runtime.GOOS
+
+	b := &Builder{
+		store:        store,
+		matrix:       matrix,
+		workspaceDir: t.TempDir(),
+		newRepo: func(repoPath string) (vcs.Repo, error) {
+			return vcs.NewRepo(repoPath)
+		},
+	}
+
+	main := module.Version{Path: "pnggroup/libpng", Version: "v1.6.47"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	// Should have 2 modules: zlib + libpng
+	if len(mods) != 2 {
+		t.Fatalf("got %d modules, want 2", len(mods))
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+
+	// Verify zlib was built (first in order)
+	zlibR, ok := findResult(results, b, mods, "madler/zlib")
+	if !ok {
+		t.Fatal("missing result for madler/zlib")
+	}
+	if zlibR.Metadata != "-lz" {
+		t.Errorf("zlib metadata = %q, want %q", zlibR.Metadata, "-lz")
+	}
+
+	// Verify libpng was built
+	pngR, ok := findResult(results, b, mods, "pnggroup/libpng")
+	if !ok {
+		t.Fatal("missing result for pnggroup/libpng")
+	}
+	if pngR.Metadata != "-lpng" {
+		t.Errorf("libpng metadata = %q, want %q", pngR.Metadata, "-lpng")
+	}
+
+	// Verify libpng build artifacts
+	pngInstallDir, _ := b.installDir("pnggroup/libpng", "v1.6.47")
+
+	// Check library
+	libDir := filepath.Join(pngInstallDir, "lib")
+	libEntries, err := os.ReadDir(libDir)
+	if err != nil {
+		t.Fatalf("lib dir not found at %s: %v", libDir, err)
+	}
+	hasLib := false
+	for _, e := range libEntries {
+		if strings.HasPrefix(e.Name(), "libpng") {
+			hasLib = true
+			break
+		}
+	}
+	if !hasLib {
+		t.Errorf("no libpng* found in %s", libDir)
+	}
+
+	// Check header
+	headerPath := filepath.Join(pngInstallDir, "include", "libpng16", "png.h")
+	if _, err := os.Stat(headerPath); err != nil {
+		// Some cmake configs install directly to include/
+		headerPath = filepath.Join(pngInstallDir, "include", "png.h")
+		if _, err := os.Stat(headerPath); err != nil {
+			t.Errorf("png.h not found in include/ or include/libpng16/")
+		}
+	}
+}
+
+// TestE2E_RealFreetypeBuild builds freetype with its transitive dependencies:
+// freetype -> {libpng, zlib}, libpng -> zlib (diamond).
+// Demonstrates: onRequire dynamic dep extraction from meson wrap files →
+// diamond dep resolution → cmake.use injection → pkg-config metadata extraction.
+func TestE2E_RealFreetypeBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real build test in short mode")
+	}
+	for _, tool := range []string{"cmake", "git", "pkg-config"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found, skipping real build test", tool)
+		}
+	}
+
+	store := setupTestStore(t)
+	matrix := runtime.GOARCH + "-" + runtime.GOOS
+
+	b := &Builder{
+		store:        store,
+		matrix:       matrix,
+		workspaceDir: t.TempDir(),
+		newRepo: func(repoPath string) (vcs.Repo, error) {
+			return vcs.NewRepo(repoPath)
+		},
+	}
+
+	main := module.Version{Path: "freetype/freetype", Version: "VER-2-13-3"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	// Should have 3 modules: zlib + libpng + freetype
+	if len(mods) != 3 {
+		t.Fatalf("got %d modules, want 3 (zlib, libpng, freetype)", len(mods))
+	}
+	t.Logf("resolved modules: %v", mods)
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+
+	// Verify freetype metadata from pkg-config contains -lfreetype
+	ftR, ok := findResult(results, b, mods, "freetype/freetype")
+	if !ok {
+		t.Fatal("missing result for freetype/freetype")
+	}
+	if !strings.Contains(ftR.Metadata, "-lfreetype") {
+		t.Errorf("freetype metadata = %q, want it to contain %q", ftR.Metadata, "-lfreetype")
+	}
+	t.Logf("freetype metadata (from pkg-config): %s", strings.TrimSpace(ftR.Metadata))
+
+	// Verify freetype build artifacts
+	ftInstallDir, _ := b.installDir("freetype/freetype", "VER-2-13-3")
+
+	// Check library
+	libDir := filepath.Join(ftInstallDir, "lib")
+	libEntries, err := os.ReadDir(libDir)
+	if err != nil {
+		t.Fatalf("lib dir not found at %s: %v", libDir, err)
+	}
+	hasLib := false
+	for _, e := range libEntries {
+		if strings.HasPrefix(e.Name(), "libfreetype") {
+			hasLib = true
+			break
+		}
+	}
+	if !hasLib {
+		t.Errorf("no libfreetype* found in %s", libDir)
+	}
+
+	// Check header
+	headerPath := filepath.Join(ftInstallDir, "include", "freetype2", "freetype", "freetype.h")
+	if _, err := os.Stat(headerPath); err != nil {
+		headerPath = filepath.Join(ftInstallDir, "include", "freetype2", "ft2build.h")
+		if _, err := os.Stat(headerPath); err != nil {
+			t.Errorf("freetype headers not found in include/freetype2/")
+		}
 	}
 }

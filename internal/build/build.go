@@ -225,7 +225,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		getOutputDir := func(_ string, m module.Version) (string, error) {
 			return b.installDir(m.Path, m.Version)
 		}
-		buildContext := classfile.NewContext(tmpSourceDir, b.matrix, getOutputDir)
+		buildContext := classfile.NewContext(tmpSourceDir, installDir, b.matrix, getOutputDir)
 
 		// Inject results of already-built dependencies
 		for modVer, result := range builtResults {
