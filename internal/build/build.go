@@ -25,7 +25,8 @@ type Builder struct {
 }
 
 type Result struct {
-	Metadata string
+	Metadata  string
+	OutputDir string
 }
 
 type Options struct {
@@ -190,7 +191,8 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		cache, err := b.loadCache(mod.Path)
 		if err == nil {
 			if entry, ok := cache.get(mod.Version, b.matrix); ok {
-				return Result{Metadata: entry.Metadata}, nil
+				dir, _ := b.installDir(mod.Path, mod.Version)
+				return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
 			}
 		}
 
@@ -256,7 +258,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, err
 		}
 
-		return Result{Metadata: out.Metadata()}, nil
+		return Result{Metadata: out.Metadata(), OutputDir: installDir}, nil
 	}
 
 	var results []Result
