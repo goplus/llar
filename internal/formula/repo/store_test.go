@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/goplus/llar/internal/vcs"
 )
@@ -256,6 +257,72 @@ func TestDefaultDir_MkdirAllError(t *testing.T) {
 	_, err := DefaultDir()
 	if err == nil {
 		t.Fatal("DefaultDir() expected MkdirAll error")
+	}
+}
+
+func TestStore_LockModule(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := New(tmpDir, &mockRepo{})
+
+	unlock, err := store.LockModule("DaveGamble/cJSON")
+	if err != nil {
+		t.Fatalf("LockModule() failed: %v", err)
+	}
+	defer unlock()
+
+	// Verify lock file was created
+	lockFile := filepath.Join(tmpDir, "DaveGamble", "cJSON", ".lock")
+	if _, err := os.Stat(lockFile); err != nil {
+		t.Errorf("lock file not created: %v", err)
+	}
+}
+
+func TestStore_LockModule_Exclusive(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := New(tmpDir, &mockRepo{})
+
+	unlock, err := store.LockModule("madler/zlib")
+	if err != nil {
+		t.Fatalf("LockModule() failed: %v", err)
+	}
+
+	// Try to acquire the same lock from another goroutine
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		unlock2, err := store.LockModule("madler/zlib")
+		if err != nil {
+			t.Errorf("second LockModule() failed: %v", err)
+			return
+		}
+		unlock2()
+	}()
+
+	// The goroutine should be blocked; give it a moment then release
+	select {
+	case <-done:
+		t.Error("second lock acquired before first was released")
+	case <-time.After(50 * time.Millisecond):
+		// expected: still blocked
+	}
+
+	unlock()
+	// Now the goroutine should complete
+	select {
+	case <-done:
+		// success
+	case <-time.After(5 * time.Second):
+		t.Error("second lock not acquired after first was released")
+	}
+}
+
+func TestStore_LockModule_InvalidPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := New(tmpDir, &mockRepo{})
+
+	_, err := store.LockModule("")
+	if err == nil {
+		t.Error("LockModule() expected error for empty path")
 	}
 }
 

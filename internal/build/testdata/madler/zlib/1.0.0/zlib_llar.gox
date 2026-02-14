@@ -1,0 +1,13 @@
+id "madler/zlib"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	a := autotools.new(ctx)
+	a.configure
+	a.build
+	a.install
+
+	out.Err = lastErr
+	out.Dir = a.outputDir
+}

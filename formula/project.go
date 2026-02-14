@@ -27,18 +27,39 @@ func (p *Project) ReadFile(path string) ([]byte, error) {
 type Context struct {
 	SourceDir string
 
-	matrix       Matrix
 	buildResults map[module.Version]BuildResult
+
+	// filled by build
+	installDir   string
+	matrixStr    string
+	getOutputDir func(matrixStr string, mod module.Version) (string, error)
+}
+
+// NewContext creates a Context with build-internal fields.
+func NewContext(sourceDir, installDir, matrixStr string, getOutputDir func(string, module.Version) (string, error)) *Context {
+	return &Context{
+		SourceDir:    sourceDir,
+		installDir:   installDir,
+		matrixStr:    matrixStr,
+		getOutputDir: getOutputDir,
+	}
+}
+
+// OutputDir__0 returns the current module's output (install) directory.
+// In DSL: ctx.outputDir()
+func (c *Context) OutputDir__0() (string, error) {
+	return c.installDir, nil
+}
+
+// OutputDir__1 returns the output (install) directory for the given dependency.
+// In DSL: ctx.outputDir(dep)
+func (c *Context) OutputDir__1(mod module.Version) (string, error) {
+	return c.getOutputDir(c.matrixStr, mod)
 }
 
 // CurrentMatrix returns the active build matrix for this context.
-func (c *Context) CurrentMatrix() Matrix {
-	return c.matrix
-}
-
-// SetCurrentMatrix sets the active build matrix for this context.
-func (c *Context) SetCurrentMatrix(m Matrix) {
-	c.matrix = m
+func (c *Context) CurrentMatrix() string {
+	return c.matrixStr
 }
 
 // BuildResult returns the stored build result for the module, if any.

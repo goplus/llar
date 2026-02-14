@@ -1,0 +1,8 @@
+{
+	"path": "test/depresult",
+	"deps": {
+		"1.0.0": [
+			{"path": "test/liba", "version": "1.0.0"}
+		]
+	}
+}

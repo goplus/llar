@@ -1,0 +1,18 @@
+id "test/depresult"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+	deps.require "test/liba", "1.0.0"
+}
+
+onBuild (ctx, proj, out) => {
+	if len(proj.Deps) > 0 {
+		result, ok := ctx.buildResult(proj.Deps[0])
+		if ok {
+			out.setMetadata result.metadata() + " -lDR"
+			return
+		}
+	}
+	out.setMetadata "-lDR_NO_DEP"
+}

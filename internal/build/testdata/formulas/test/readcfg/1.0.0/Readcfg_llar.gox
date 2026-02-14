@@ -1,0 +1,12 @@
+id "test/readcfg"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	data, err := proj.readFile("config.txt")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	out.setMetadata string(data)
+}
