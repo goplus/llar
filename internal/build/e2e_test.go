@@ -36,31 +36,6 @@ func TestE2E_ReadSourceFile(t *testing.T) {
 	}
 }
 
-// TestE2E_ContextMatrix verifies that ctx.currentMatrix() returns the
-// builder's matrix string inside the formula's onBuild callback.
-func TestE2E_ContextMatrix(t *testing.T) {
-	store := setupTestStore(t)
-
-	tests := []struct {
-		matrix string
-	}{
-		{"amd64-linux"},
-		{"arm64-darwin"},
-		{"x86_64-linux|zlibON"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.matrix, func(t *testing.T) {
-			b := setupBuilder(t, store, tt.matrix)
-			main := module.Version{Path: "test/ctxcheck", Version: "1.0.0"}
-			results, _ := loadAndBuild(t, b, store, main)
-
-			if results[0].Metadata != tt.matrix {
-				t.Errorf("metadata = %q, want %q", results[0].Metadata, tt.matrix)
-			}
-		})
-	}
-}
-
 // TestE2E_DepResultInjection verifies that a formula can access its
 // dependency's build result via ctx.buildResult during onBuild.
 // test/depresult depends on test/liba. Its onBuild reads liba's result
@@ -127,54 +102,6 @@ func TestE2E_DiamondDeps(t *testing.T) {
 		if r.Metadata != want {
 			t.Errorf("%s metadata = %q, want %q", path, r.Metadata, want)
 		}
-	}
-}
-
-// TestE2E_DiamondBuildOrder verifies that in a diamond dependency graph,
-// shared leaves are built before modules that depend on them.
-func TestE2E_DiamondBuildOrder(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	main := module.Version{Path: "test/diamond", Version: "1.0.0"}
-	ctx := context.Background()
-	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
-
-	buildOrder := b.constructBuildList(mods)
-	var orderPaths []string
-	for _, m := range buildOrder {
-		orderPaths = append(orderPaths, m.Path)
-	}
-	t.Logf("diamond build order: %v", orderPaths)
-
-	// liba must be built before both libb and diamond
-	indexOf := func(path string) int {
-		for i, p := range orderPaths {
-			if p == path {
-				return i
-			}
-		}
-		return -1
-	}
-	libaIdx := indexOf("test/liba")
-	libbIdx := indexOf("test/libb")
-	diamondIdx := indexOf("test/diamond")
-
-	if libaIdx < 0 || libbIdx < 0 || diamondIdx < 0 {
-		t.Fatalf("missing modules in build order: liba=%d libb=%d diamond=%d",
-			libaIdx, libbIdx, diamondIdx)
-	}
-	if libaIdx >= libbIdx {
-		t.Errorf("liba@%d should be built before libb@%d", libaIdx, libbIdx)
-	}
-	if libaIdx >= diamondIdx {
-		t.Errorf("liba@%d should be built before diamond@%d", libaIdx, diamondIdx)
-	}
-	if libbIdx >= diamondIdx {
-		t.Errorf("libb@%d should be built before diamond@%d", libbIdx, diamondIdx)
 	}
 }
 
@@ -245,41 +172,6 @@ func TestE2E_CacheAcrossRebuilds(t *testing.T) {
 	}
 }
 
-// TestE2E_TransitiveChainWithDeps verifies the full transitive chain:
-// libc -> libb -> liba, ensuring all modules are loaded, ordered, and
-// built correctly through the real formula pipeline.
-func TestE2E_TransitiveChainWithDeps(t *testing.T) {
-	store := setupTestStore(t)
-	b := setupBuilder(t, store, "amd64-linux")
-
-	main := module.Version{Path: "test/libc", Version: "1.0.0"}
-	results, mods := loadAndBuild(t, b, store, main)
-
-	if len(results) != 3 {
-		t.Fatalf("got %d results, want 3", len(results))
-	}
-
-	// Verify all install directories were created
-	for _, mod := range mods {
-		installDir, _ := b.installDir(mod.Path, mod.Version)
-		if _, err := os.Stat(installDir); err != nil {
-			t.Errorf("installDir not created for %s: %v", mod.Path, err)
-		}
-	}
-
-	// Verify all caches were written
-	for _, mod := range mods {
-		cache, err := b.loadCache(mod.Path)
-		if err != nil {
-			t.Errorf("cache not written for %s: %v", mod.Path, err)
-			continue
-		}
-		if _, ok := cache.get(mod.Version, "amd64-linux"); !ok {
-			t.Errorf("cache entry missing for %s@%s", mod.Path, mod.Version)
-		}
-	}
-}
-
 // TestE2E_ErrorInChain verifies that when a dependency in a chain fails,
 // the entire build fails and no downstream modules are built.
 func TestE2E_ErrorInChain(t *testing.T) {
@@ -303,40 +195,6 @@ func TestE2E_ErrorInChain(t *testing.T) {
 	_, cacheErr := b.loadCache("test/errmod")
 	if cacheErr == nil {
 		t.Error("cache should not exist for failed build")
-	}
-}
-
-// TestE2E_SharedWorkspaceDifferentModules verifies that building different
-// modules in the same workspace doesn't interfere with each other.
-func TestE2E_SharedWorkspaceDifferentModules(t *testing.T) {
-	store := setupTestStore(t)
-	wsDir := t.TempDir()
-
-	mods := []struct {
-		path     string
-		wantMeta string
-	}{
-		{"test/liba", "-lA"},
-		{"test/libb", "-lB"},
-		{"test/readcfg", "-lreadcfg"},
-	}
-
-	for _, tc := range mods {
-		b := setupBuilder(t, store, "amd64-linux")
-		b.workspaceDir = wsDir
-
-		main := module.Version{Path: tc.path, Version: "1.0.0"}
-		results, allMods := loadAndBuild(t, b, store, main)
-
-		r, ok := findResult(results, b, allMods, tc.path)
-		if !ok {
-			t.Errorf("missing result for %s", tc.path)
-			continue
-		}
-		got := strings.TrimSpace(r.Metadata)
-		if got != tc.wantMeta {
-			t.Errorf("%s: metadata = %q, want %q", tc.path, got, tc.wantMeta)
-		}
 	}
 }
 

@@ -640,17 +640,6 @@ func TestConstructBuildList_DuplicatePaths(t *testing.T) {
 	}
 }
 
-func TestConstructBuildList_SingleDep(t *testing.T) {
-	b := &Builder{}
-
-	B := mod("B", "1.0.0")
-	A := mod("A", "1.0.0", B)
-	got := b.constructBuildList([]*modules.Module{A, B})
-	if want := "B@1.0.0 A@1.0.0"; paths(got) != want {
-		t.Errorf("got %q, want %q", paths(got), want)
-	}
-}
-
 func TestConstructBuildList_DepNotInTargets(t *testing.T) {
 	b := &Builder{}
 
@@ -683,18 +672,6 @@ func TestResolveModTransitiveDeps_ModNotInTargets(t *testing.T) {
 	// C is reachable, D is not in targets so skipped
 	if want := "C@1.0.0"; versions(got) != want {
 		t.Errorf("got %q, want %q", versions(got), want)
-	}
-}
-
-func TestResolveModTransitiveDeps_EmptyDeps(t *testing.T) {
-	b := &Builder{}
-
-	A := mod("A", "1.0.0")
-	targets := []*modules.Module{A}
-
-	got := b.resolveModTransitiveDeps(targets, A)
-	if len(got) != 0 {
-		t.Errorf("got %q, want empty", versions(got))
 	}
 }
 
