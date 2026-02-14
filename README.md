@@ -9,7 +9,51 @@
 [![codecov](https://codecov.io/gh/goplus/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/goplus/llar)
 [![Language](https://img.shields.io/badge/language-XGo-blue.svg)](https://github.com/goplus/gop)
 
-LLAR, a cloud-based package management service
+LLAR is a cloud-based multi-language package manager built with [XGo](https://github.com/goplus/gop). It resolves dependencies, downloads source code, and builds libraries from source using declarative formulas.
+
+## Installation
+
+```bash
+go install -ldflags="-checklinkname=0" github.com/goplus/llar/cmd/llar@latest
+```
+
+## Usage
+
+### Build a package
+
+```bash
+# Build zlib
+llar make madler/zlib@v1.3.1
+
+# Build with verbose output
+llar make -v madler/zlib@v1.3.1
+
+# Build and export to a directory
+llar make -o ./output madler/zlib@v1.3.1
+
+# Build and export as a zip archive
+llar make -o zlib.zip madler/zlib@v1.3.1
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `llar make <module@version>` | Build a module from source |
+
+### Flags for `make`
+
+| Flag | Description |
+|------|-------------|
+| `-v, --verbose` | Enable verbose build output |
+| `-o, --output <path>` | Output path (directory or `.zip` file) |
+
+## How It Works
+
+1. **Formula resolution** - LLAR fetches the build formula for the requested module from the formula hub
+2. **Dependency resolution** - The formula's `onRequire` callback extracts dependencies, which are resolved using MVS (Minimum Version Selection)
+3. **Build** - Dependencies are built first (leaves before roots), then the main module is built via the formula's `onBuild` callback
+4. **Caching** - Build results are cached per (module, version, platform) so rebuilds are instant
 
 ## LLAR Design
 

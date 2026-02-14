@@ -1,3 +1,4 @@
+github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -16,10 +17,17 @@ github.com/goplus/reflectx v1.5.0 h1:d6THLWzrQJCIAnNzyXJDA7J1sxj8ELzKH+Wj17X/dtE
 github.com/goplus/reflectx v1.5.0/go.mod h1:wHOS9ilbB4zrecI0W1dMmkW9JMcpXV7VjALVbNU9xfM=
 github.com/goplus/xgo v1.6.1 h1:xe4ezrXkBvK5317inkPIqsKVZR3/J0oyT4lcvT9mYPc=
 github.com/goplus/xgo v1.6.1/go.mod h1:vEnp8PO5JCJBNXYjnsSTJ1hgAEvbP/IUWzC17pVz4R8=
+github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
+github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/qiniu/x v1.16.0 h1:W2VOecyIT3Uxwjm6vJinUR7G3gpwgUgHZA9OpeHArdE=
 github.com/qiniu/x v1.16.0/go.mod h1:AiovSOCaRijaf3fj+0CBOpR1457pn24b0Vdb1JpwhII=
+github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
+github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
+github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=
+github.com/spf13/pflag v1.0.9 h1:9exaQaMOCwffKiiiYk6/BndUBv+iRViNW+4lEMi0PvY=
+github.com/spf13/pflag v1.0.9/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
@@ -39,6 +47,7 @@ github.com/visualfc/goembed v0.3.2 h1:a9m6o9VTzNk3mEF98C8cHp8f8P8BblyjsjajXGfTp8
 github.com/visualfc/goembed v0.3.2/go.mod h1:jCVCz/yTJGyslo6Hta+pYxWWBuq9ADCcIVZBTQ0/iVI=
 github.com/visualfc/xtype v0.2.0 h1:0ESNXyWHtK01kaOzOyqHsR1ZjEPdNu/IWPZkf0VOHl8=
 github.com/visualfc/xtype v0.2.0/go.mod h1:183MDtzLqyDkCm5zCH42vJGq/aQE5W25k3Z6UOZxLF0=
+go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=
 golang.org/x/mod v0.32.0 h1:9F4d3PHLljb6x//jOyokMv3eX+YDeepZSEo3mFJy93c=
 golang.org/x/mod v0.32.0/go.mod h1:SgipZ/3h2Ci89DlEtEXWUk/HteuRin+HHhN+WbNhguU=
 golang.org/x/sync v0.19.0 h1:vV+1eWNmZ5geRlYjzm2adRgW2/mcpevXNg50YZtPCE4=
