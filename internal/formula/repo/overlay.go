@@ -4,6 +4,9 @@ import (
 	"context"
 	"io/fs"
 	"os"
+	"path/filepath"
+
+	"github.com/goplus/llar/internal/lockedfile"
 )
 
 // NewOverlayStore creates a Store that serves modules from local directories
@@ -27,5 +30,9 @@ func (s *overlayStore) ModuleFS(ctx context.Context, modPath string) (fs.FS, err
 }
 
 func (s *overlayStore) LockModule(modPath string) (func(), error) {
+	if dir, ok := s.locals[modPath]; ok {
+		lockFile := filepath.Join(dir, ".lock")
+		return lockedfile.MutexAt(lockFile).Lock()
+	}
 	return s.remote.LockModule(modPath)
 }

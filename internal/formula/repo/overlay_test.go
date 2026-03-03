@@ -85,11 +85,16 @@ func TestOverlayStore_LockModule(t *testing.T) {
 	tmpDir := t.TempDir()
 	remote := New(tmpDir, &mockRepo{})
 
+	localDir := filepath.Join(tmpDir, "local")
+	if err := os.MkdirAll(localDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
 	store := NewOverlayStore(remote, map[string]string{
-		"test/mod": "/some/path",
+		"test/mod": localDir,
 	})
 
-	// LockModule always delegates to remote, even for local modules
+	// LockModule for local module uses a local lock file
 	unlock, err := store.LockModule("test/mod")
 	if err != nil {
 		t.Fatalf("LockModule() failed: %v", err)
