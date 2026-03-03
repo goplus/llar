@@ -24,6 +24,10 @@ All local patterns use `./` prefix. `.` is a shorthand for `./` without version.
 The syntax `.@version` is **invalid** and produces an error — use `./@version`
 instead, which aligns with `./owner/repo@version`.
 
+`..` and `../path` are **not supported**. Use `.` instead — it automatically
+walks up from the current directory to find the nearest `versions.json`, so
+there is no need to navigate to a parent directory manually.
+
 When version is omitted, `modules.Load` resolves the latest version from the
 module's source repository git tags using the formula-defined comparator.
 
