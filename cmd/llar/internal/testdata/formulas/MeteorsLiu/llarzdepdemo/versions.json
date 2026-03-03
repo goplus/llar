@@ -1,7 +1,7 @@
 {
-	"path": "DaveGamble/cJSON",
+	"path": "MeteorsLiu/llarzdepdemo",
 	"deps": {
-		"1.0.0": [
+		"0.1.0": [
 			{"path": "madler/zlib", "version": "v1.3.1"}
 		]
 	}

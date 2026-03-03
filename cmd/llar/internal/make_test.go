@@ -369,7 +369,7 @@ func TestMakeReal_OutputZip(t *testing.T) {
 	}
 }
 
-func TestMakeLocal_RealCjsonWithRemoteZlibDep(t *testing.T) {
+func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -389,12 +389,12 @@ func TestMakeLocal_RealCjsonWithRemoteZlibDep(t *testing.T) {
 	workspaceDir := isolatedWorkspaceDir(t)
 	matrixStr := computeMatrixStr()
 
-	out, err := runMakeCmd(t, "-v", "./DaveGamble/cJSON@v1.7.19")
+	out, err := runMakeCmd(t, "-v", "./MeteorsLiu/llarzdepdemo@0.1.0")
 	if err != nil {
-		t.Fatalf("llar make local cJSON failed: %v", err)
+		t.Fatalf("llar make local demo lib failed: %v", err)
 	}
-	if !strings.Contains(out, "-lcjson") {
-		t.Errorf("expected metadata '-lcjson' in output, got: %s", out)
+	if !strings.Contains(out, "-lzshim") {
+		t.Errorf("expected metadata '-lzshim' in output, got: %s", out)
 	}
 
 	zlibInstall := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", matrixStr))
@@ -402,10 +402,14 @@ func TestMakeLocal_RealCjsonWithRemoteZlibDep(t *testing.T) {
 		t.Fatalf("remote zlib dependency not built correctly at %s: %v", zlibInstall, err)
 	}
 
-	cjsonInstall := filepath.Join(workspaceDir, fmt.Sprintf("DaveGamble/cJSON@v1.7.19-%s", matrixStr))
-	if _, err := os.Stat(filepath.Join(cjsonInstall, "include", "cjson", "cJSON.h")); err != nil {
-		if _, err2 := os.Stat(filepath.Join(cjsonInstall, "include", "cJSON.h")); err2 != nil {
-			t.Fatalf("cJSON not built correctly at %s: %v", cjsonInstall, err)
+	demoInstall := filepath.Join(workspaceDir, fmt.Sprintf("MeteorsLiu/llarzdepdemo@0.1.0-%s", matrixStr))
+	if _, err := os.Stat(filepath.Join(demoInstall, "include", "zshim.h")); err != nil {
+		t.Fatalf("demo lib not built correctly at %s: %v", demoInstall, err)
+	}
+	if _, err := os.Stat(filepath.Join(demoInstall, "lib", "libzshim.a")); err != nil {
+		// Some platforms may produce only shared library.
+		if _, err2 := os.Stat(filepath.Join(demoInstall, "lib", "libzshim.dylib")); err2 != nil {
+			t.Fatalf("demo lib artifact not found at %s: %v", demoInstall, err)
 		}
 	}
 }

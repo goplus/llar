@@ -1,6 +1,6 @@
-id "DaveGamble/cJSON"
+id "MeteorsLiu/llarzdepdemo"
 
-fromVer "1.0.0"
+fromVer "0.1.0"
 
 onRequire (proj, deps) => {
 	deps.require "madler/zlib", "v1.3.1"
@@ -16,8 +16,6 @@ onBuild (ctx, proj, out) => {
 	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
 	c.buildType "Release"
 	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
-	c.defineBool "ENABLE_CJSON_TEST", false
-	c.defineBool "BUILD_SHARED_LIBS", false
 
 	for _, dep := range proj.Deps {
 		depDir, err := ctx.outputDir(dep)
@@ -44,5 +42,5 @@ onBuild (ctx, proj, out) => {
 		return
 	}
 
-	out.setMetadata "-lcjson"
+	out.setMetadata "-lzshim"
 }
