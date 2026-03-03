@@ -393,6 +393,7 @@ func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("llar make local demo lib failed: %v", err)
 	}
+	t.Logf("llar make output:\n%s", out)
 	if !strings.Contains(out, "-lzshim") {
 		t.Errorf("expected metadata '-lzshim' in output, got: %s", out)
 	}
