@@ -283,16 +283,23 @@ func runMakeCmd(t *testing.T, args ...string) (string, error) {
 	old := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	var buf bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&buf, r)
+		copyDone <- copyErr
+	}()
 
 	cmd := rootCmd
 	cmd.SetArgs(append([]string{"make"}, args...))
 	err = cmd.Execute()
 
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
+	_ = w.Close()
+	if copyErr := <-copyDone; copyErr != nil {
+		t.Fatalf("failed to capture stdout: %v", copyErr)
+	}
 	return buf.String(), err
 }
 
@@ -361,6 +368,42 @@ func TestMakeReal_OutputZip(t *testing.T) {
 	}
 }
 
+func TestMakeLocal_RealLibpngWithZlibDep(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	formulaDir := setupLocalFormulas(t)
+	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
+
+	origDir, _ := os.Getwd()
+	os.Chdir(formulaDir)
+	defer os.Chdir(origDir)
+
+	workspaceDir := isolatedWorkspaceDir(t)
+	matrixStr := computeMatrixStr()
+
+	out, err := runMakeCmd(t, "-v", "./pnggroup/libpng@v1.6.47")
+	if err != nil {
+		t.Fatalf("llar make local libpng failed: %v", err)
+	}
+	if !strings.Contains(out, "-lpng") {
+		t.Errorf("expected metadata '-lpng' in output, got: %s", out)
+	}
+
+	zlibInstall := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.2.11-%s", matrixStr))
+	if _, err := os.Stat(filepath.Join(zlibInstall, "include", "zlib.h")); err != nil {
+		t.Fatalf("zlib dependency not built correctly at %s: %v", zlibInstall, err)
+	}
+
+	libpngInstall := filepath.Join(workspaceDir, fmt.Sprintf("pnggroup/libpng@v1.6.47-%s", matrixStr))
+	if _, err := os.Stat(filepath.Join(libpngInstall, "include", "libpng16", "png.h")); err != nil {
+		if _, err2 := os.Stat(filepath.Join(libpngInstall, "include", "png.h")); err2 != nil {
+			t.Fatalf("libpng not built correctly at %s: %v", libpngInstall, err)
+		}
+	}
+}
+
 func TestMakeReal_InvalidModule(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -415,9 +458,9 @@ func TestMakeReal_NoVersion(t *testing.T) {
 
 type noopVCSRepo struct{}
 
-func (m *noopVCSRepo) Tags(ctx context.Context) ([]string, error)                { return nil, nil }
-func (m *noopVCSRepo) Latest(ctx context.Context) (string, error)                { return "", nil }
-func (m *noopVCSRepo) At(ref, localDir string) fs.FS                             { return nil }
+func (m *noopVCSRepo) Tags(ctx context.Context) ([]string, error)                 { return nil, nil }
+func (m *noopVCSRepo) Latest(ctx context.Context) (string, error)                 { return "", nil }
+func (m *noopVCSRepo) At(ref, localDir string) fs.FS                              { return nil }
 func (m *noopVCSRepo) Sync(ctx context.Context, ref, path, localDir string) error { return nil }
 
 func withMockRemoteStore(t *testing.T, store repo.Store) {
