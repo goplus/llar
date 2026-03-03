@@ -14,6 +14,7 @@ import (
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/spf13/cobra"
@@ -21,6 +22,19 @@ import (
 
 var makeVerbose bool
 var makeOutput string
+
+// newRemoteStore creates the remote formula store. Overridable for testing.
+var newRemoteStore = func() (repo.Store, error) {
+	formulaDir, err := repo.DefaultDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get formula dir: %w", err)
+	}
+	formulaRepo, err := vcs.NewRepo("github.com/goplus/llarhub")
+	if err != nil {
+		return nil, err
+	}
+	return repo.New(formulaDir, formulaRepo), nil
+}
 
 var makeCmd = &cobra.Command{
 	Use:   "make [module@version]",
@@ -37,28 +51,12 @@ func init() {
 }
 
 func runMake(cmd *cobra.Command, args []string) error {
-	modPath, version := parseModuleArg(args[0])
-
-	ctx := context.Background()
-
-	// Set up formula store
-	formulaDir, err := repo.DefaultDir()
-	if err != nil {
-		return fmt.Errorf("failed to get formula dir: %w", err)
-	}
-	formulaRepo, err := vcs.NewRepo("github.com/goplus/llarhub")
+	pattern, version, isLocal, err := parseModuleArg(args[0])
 	if err != nil {
 		return err
 	}
-	store := repo.New(formulaDir, formulaRepo)
 
-	// Load modules
-	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
-		FormulaStore: store,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to load modules: %w", err)
-	}
+	ctx := context.Background()
 
 	// Resolve output path to absolute before build (build may change cwd)
 	if makeOutput != "" {
@@ -69,6 +67,63 @@ func runMake(cmd *cobra.Command, args []string) error {
 		makeOutput = abs
 	}
 
+	matrix := formula.Matrix{
+		Require: map[string][]string{
+			"os":   {runtime.GOOS},
+			"arch": {runtime.GOARCH},
+		},
+	}
+	matrixStr := matrix.Combinations()[0]
+
+	// Set up remote formula store (always needed for deps)
+	remoteStore, err := newRemoteStore()
+	if err != nil {
+		return err
+	}
+
+	if !isLocal {
+		return buildModule(ctx, remoteStore, pattern, version, matrixStr)
+	}
+
+	// Resolve local pattern
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	localMods, err := modlocal.Resolve(cwd, pattern)
+	if err != nil {
+		return err
+	}
+
+	// Build overlay: local modules from disk, deps from remote
+	locals := make(map[string]string, len(localMods))
+	for _, m := range localMods {
+		locals[m.Path] = m.Dir
+	}
+	store := repo.NewOverlayStore(remoteStore, locals)
+
+	for _, m := range localMods {
+		ver := m.Version
+		if ver == "" {
+			ver = version // global @version from arg
+		}
+		if err := buildModule(ctx, store, m.Path, ver, matrixStr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildModule loads and builds a single module.
+func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string) error {
+	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to load modules: %w", err)
+	}
+
 	// Handle verbose output
 	var savedStdout, savedStderr *os.File
 	if !makeVerbose {
@@ -77,7 +132,6 @@ func runMake(cmd *cobra.Command, args []string) error {
 			mod.SetStderr(io.Discard)
 		}
 
-		// Redirect os.Stdout/os.Stderr so subprocess output (cmake, etc.) is also silenced
 		savedStdout = os.Stdout
 		savedStderr = os.Stderr
 		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -93,15 +147,6 @@ func runMake(cmd *cobra.Command, args []string) error {
 		}()
 	}
 
-	matrix := formula.Matrix{
-		Require: map[string][]string{
-			"os":   {runtime.GOOS},
-			"arch": {runtime.GOARCH},
-		},
-	}
-	matrixStr := matrix.Combinations()[0]
-
-	// When -o is specified, use a temp workspace so we don't pollute the cache
 	buildOpts := build.Options{
 		Store:     store,
 		MatrixStr: matrixStr,
@@ -131,14 +176,11 @@ func runMake(cmd *cobra.Command, args []string) error {
 		os.Stderr = savedStderr
 	}
 
-	// Print metadata for main module (last in build order)
 	if len(results) > 0 {
 		main := results[len(results)-1]
 		if main.Metadata != "" {
 			fmt.Println(main.Metadata)
 		}
-
-		// Output build artifacts if -o specified
 		if makeOutput != "" {
 			if err := outputResult(main.OutputDir, makeOutput); err != nil {
 				return fmt.Errorf("failed to write output: %w", err)
@@ -149,14 +191,36 @@ func runMake(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// parseModuleArg parses a module argument in the form "owner/repo@version" or "owner/repo".
-func parseModuleArg(arg string) (modPath, version string) {
-	for i := len(arg) - 1; i >= 0; i-- {
-		if arg[i] == '@' {
-			return arg[:i], arg[i+1:]
+// parseModuleArg parses a module argument, detecting local patterns (. or ./ prefix).
+// Returns the pattern (with ./ prefix stripped), version, and whether the argument is local.
+// Returns an error for invalid patterns like ".@version" (use "./@version" instead).
+func parseModuleArg(arg string) (pattern, version string, isLocal bool, err error) {
+	if strings.HasPrefix(arg, ".") && !strings.HasPrefix(arg, "./") && arg != "." {
+		return "", "", false, fmt.Errorf("invalid local pattern %q: use \"./@version\" instead of \".@version\"", arg)
+	}
+
+	if arg == "." || strings.HasPrefix(arg, "./") {
+		isLocal = true
+		pattern = strings.TrimPrefix(arg, "./")
+		if arg == "." {
+			pattern = ""
+		}
+	} else {
+		pattern = arg
+	}
+
+	// TODO(MeteorsLiu): support ./owner/... and ./... patterns (currently cannot specify version)
+	// Don't split @version for ... patterns
+	if !strings.HasSuffix(pattern, "/...") && pattern != "..." {
+		for i := len(pattern) - 1; i >= 0; i-- {
+			if pattern[i] == '@' {
+				version = pattern[i+1:]
+				pattern = pattern[:i]
+				return
+			}
 		}
 	}
-	return arg, ""
+	return
 }
 
 // outputResult writes the build output to dest.

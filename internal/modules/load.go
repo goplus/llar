@@ -38,7 +38,7 @@ type Module struct {
 // Options contains options for Load.
 type Options struct {
 	// FormulaStore is the store for downloading and caching formulas.
-	FormulaStore *repo.Store
+	FormulaStore repo.Store
 }
 
 func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
