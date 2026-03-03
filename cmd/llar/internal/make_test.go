@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -368,13 +369,18 @@ func TestMakeReal_OutputZip(t *testing.T) {
 	}
 }
 
-func TestMakeLocal_RealLibpngWithZlibDep(t *testing.T) {
+func TestMakeLocal_RealCjsonWithRemoteZlibDep(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
+	if _, err := exec.LookPath("cmake"); err != nil {
+		t.Skip("cmake not found, skipping integration test")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found, skipping integration test")
+	}
 
 	formulaDir := setupLocalFormulas(t)
-	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
 
 	origDir, _ := os.Getwd()
 	os.Chdir(formulaDir)
@@ -383,23 +389,23 @@ func TestMakeLocal_RealLibpngWithZlibDep(t *testing.T) {
 	workspaceDir := isolatedWorkspaceDir(t)
 	matrixStr := computeMatrixStr()
 
-	out, err := runMakeCmd(t, "-v", "./pnggroup/libpng@v1.6.47")
+	out, err := runMakeCmd(t, "-v", "./DaveGamble/cJSON@v1.7.19")
 	if err != nil {
-		t.Fatalf("llar make local libpng failed: %v", err)
+		t.Fatalf("llar make local cJSON failed: %v", err)
 	}
-	if !strings.Contains(out, "-lpng") {
-		t.Errorf("expected metadata '-lpng' in output, got: %s", out)
+	if !strings.Contains(out, "-lcjson") {
+		t.Errorf("expected metadata '-lcjson' in output, got: %s", out)
 	}
 
-	zlibInstall := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.2.11-%s", matrixStr))
+	zlibInstall := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", matrixStr))
 	if _, err := os.Stat(filepath.Join(zlibInstall, "include", "zlib.h")); err != nil {
-		t.Fatalf("zlib dependency not built correctly at %s: %v", zlibInstall, err)
+		t.Fatalf("remote zlib dependency not built correctly at %s: %v", zlibInstall, err)
 	}
 
-	libpngInstall := filepath.Join(workspaceDir, fmt.Sprintf("pnggroup/libpng@v1.6.47-%s", matrixStr))
-	if _, err := os.Stat(filepath.Join(libpngInstall, "include", "libpng16", "png.h")); err != nil {
-		if _, err2 := os.Stat(filepath.Join(libpngInstall, "include", "png.h")); err2 != nil {
-			t.Fatalf("libpng not built correctly at %s: %v", libpngInstall, err)
+	cjsonInstall := filepath.Join(workspaceDir, fmt.Sprintf("DaveGamble/cJSON@v1.7.19-%s", matrixStr))
+	if _, err := os.Stat(filepath.Join(cjsonInstall, "include", "cjson", "cJSON.h")); err != nil {
+		if _, err2 := os.Stat(filepath.Join(cjsonInstall, "include", "cJSON.h")); err2 != nil {
+			t.Fatalf("cJSON not built correctly at %s: %v", cjsonInstall, err)
 		}
 	}
 }

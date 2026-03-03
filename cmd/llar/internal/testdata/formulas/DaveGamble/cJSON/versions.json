@@ -1,0 +1,8 @@
+{
+	"path": "DaveGamble/cJSON",
+	"deps": {
+		"1.0.0": [
+			{"path": "madler/zlib", "version": "v1.3.1"}
+		]
+	}
+}

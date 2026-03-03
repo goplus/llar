@@ -1,9 +1,9 @@
-id "pnggroup/libpng"
+id "DaveGamble/cJSON"
 
 fromVer "1.0.0"
 
 onRequire (proj, deps) => {
-	deps.require "madler/zlib", "v1.2.11"
+	deps.require "madler/zlib", "v1.3.1"
 }
 
 onBuild (ctx, proj, out) => {
@@ -13,33 +13,36 @@ onBuild (ctx, proj, out) => {
 		return
 	}
 
-	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
+	c.defineBool "ENABLE_CJSON_TEST", false
+	c.defineBool "BUILD_SHARED_LIBS", false
 
-	// Inject zlib dependency via autotools.use
 	for _, dep := range proj.Deps {
 		depDir, err := ctx.outputDir(dep)
 		if err != nil {
 			out.addErr err
 			return
 		}
-		a.use depDir
+		c.use depDir
 	}
 
-	err = a.configure()
+	err = c.configure()
 	if err != nil {
 		out.addErr err
 		return
 	}
-	err = a.build()
+	err = c.build()
 	if err != nil {
 		out.addErr err
 		return
 	}
-	err = a.install()
+	err = c.install()
 	if err != nil {
 		out.addErr err
 		return
 	}
 
-	out.setMetadata "-lpng"
+	out.setMetadata "-lcjson"
 }
