@@ -209,27 +209,11 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 		pattern = arg
 	}
 
-	// TODO(MeteorsLiu): support wildcard patterns with "...".
-	// For now, disable all "..." patterns in `llar make`.
-	if strings.Contains(pattern, "...") {
-		return "", "", false, fmt.Errorf("invalid pattern %q: \"...\" wildcard is not supported", arg)
-	}
-
 	for i := len(pattern) - 1; i >= 0; i-- {
 		if pattern[i] == '@' {
 			version = pattern[i+1:]
 			pattern = pattern[:i]
 			break
-		}
-	}
-
-	// Parent directory references are unsupported for local ./... patterns.
-	// Use "." to walk up and find the nearest versions.json.
-	if isLocal {
-		for _, part := range strings.Split(pattern, "/") {
-			if part == ".." {
-				return "", "", false, fmt.Errorf("invalid local pattern %q: \"..\" is not supported; use \".\" instead", arg)
-			}
 		}
 	}
 	return
