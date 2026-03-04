@@ -39,6 +39,9 @@ func TestParseModuleArg(t *testing.T) {
 		{"./@v1.0.0", "", "v1.0.0", true},
 		{"./owner/repo", "owner/repo", "", true},
 		{"./owner/repo@v1.0.0", "owner/repo", "v1.0.0", true},
+		{"./..", "..", "", true},
+		{"./zlib/..", "zlib/..", "", true},
+		{"./zlib/../demo@v1.0.0", "zlib/../demo", "v1.0.0", true},
 	}
 
 	for _, tt := range tests {
@@ -61,7 +64,7 @@ func TestParseModuleArg(t *testing.T) {
 }
 
 func TestParseModuleArg_InvalidDotVersion(t *testing.T) {
-	invalidArgs := []string{".@v1.0.0", ".@latest", ".."}
+	invalidArgs := []string{".@v1.0.0", ".@latest", "..", "../zlib", "..@v1.0.0"}
 	for _, arg := range invalidArgs {
 		t.Run(arg, func(t *testing.T) {
 			_, _, _, err := parseModuleArg(arg)
