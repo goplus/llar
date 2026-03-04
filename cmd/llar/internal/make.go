@@ -195,7 +195,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 // Returns the pattern (with ./ prefix stripped), version, and whether the argument is local.
 // Returns an error for invalid patterns like ".@version" (use "./@version" instead).
 func parseModuleArg(arg string) (pattern, version string, isLocal bool, err error) {
-	if strings.HasPrefix(arg, ".") && !strings.HasPrefix(arg, "./") && arg != "." {
+	if strings.HasPrefix(arg, ".@") {
 		return "", "", false, fmt.Errorf("invalid local pattern %q: use \"./@version\" instead of \".@version\"", arg)
 	}
 
@@ -209,19 +209,26 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 		pattern = arg
 	}
 
-	// TODO(MeteorsLiu): support ./owner/... and ./... patterns (currently cannot specify version).
-	// For now, disable local "./..." wildcard entry.
-	if isLocal && (pattern == "..." || strings.HasPrefix(pattern, "...@")) {
-		return "", "", false, fmt.Errorf("invalid local pattern %q: \"./...\" is not supported", arg)
+	// TODO(MeteorsLiu): support wildcard patterns with "...".
+	// For now, disable all "..." patterns in `llar make`.
+	if strings.Contains(pattern, "...") {
+		return "", "", false, fmt.Errorf("invalid pattern %q: \"...\" wildcard is not supported", arg)
 	}
 
-	// Don't split @version for owner/... wildcard patterns.
-	if !strings.HasSuffix(pattern, "/...") && pattern != "..." {
-		for i := len(pattern) - 1; i >= 0; i-- {
-			if pattern[i] == '@' {
-				version = pattern[i+1:]
-				pattern = pattern[:i]
-				return
+	for i := len(pattern) - 1; i >= 0; i-- {
+		if pattern[i] == '@' {
+			version = pattern[i+1:]
+			pattern = pattern[:i]
+			break
+		}
+	}
+
+	// Parent directory references are unsupported for local ./... patterns.
+	// Use "." to walk up and find the nearest versions.json.
+	if isLocal {
+		for _, part := range strings.Split(pattern, "/") {
+			if part == ".." {
+				return "", "", false, fmt.Errorf("invalid local pattern %q: \"..\" is not supported; use \".\" instead", arg)
 			}
 		}
 	}

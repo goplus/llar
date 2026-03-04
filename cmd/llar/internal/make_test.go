@@ -34,14 +34,14 @@ func TestParseModuleArg(t *testing.T) {
 		{"simple@latest", "simple", "latest", false},
 		{"no-version", "no-version", "", false},
 		{"multiple@at@signs", "multiple@at", "signs", false},
+		{"..", "..", "", false},
+		{"../zlib", "../zlib", "", false},
+		{"..@v1.0.0", "..", "v1.0.0", false},
 		// Local patterns
 		{".", "", "", true},
 		{"./@v1.0.0", "", "v1.0.0", true},
 		{"./owner/repo", "owner/repo", "", true},
 		{"./owner/repo@v1.0.0", "owner/repo", "v1.0.0", true},
-		{"./..", "..", "", true},
-		{"./zlib/..", "zlib/..", "", true},
-		{"./zlib/../demo@v1.0.0", "zlib/../demo", "v1.0.0", true},
 	}
 
 	for _, tt := range tests {
@@ -63,15 +63,22 @@ func TestParseModuleArg(t *testing.T) {
 	}
 }
 
-func TestParseModuleArg_InvalidDotVersion(t *testing.T) {
+func TestParseModuleArg_InvalidPatterns(t *testing.T) {
 	invalidArgs := []string{
 		".@v1.0.0",
 		".@latest",
-		"..",
-		"../zlib",
-		"..@v1.0.0",
+		"./..",
+		"./../zlib",
+		"./zlib/..",
+		"./zlib/../demo@v1.0.0",
+		"...",
+		"...@v1.0.0",
+		"owner/...",
+		"owner/...@v1.0.0",
 		"./...",
 		"./...@v1.0.0",
+		"./owner/...",
+		"./owner/...@v1.0.0",
 	}
 	for _, arg := range invalidArgs {
 		t.Run(arg, func(t *testing.T) {
