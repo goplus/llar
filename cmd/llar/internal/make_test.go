@@ -280,7 +280,9 @@ func runMakeCmd(t *testing.T, args ...string) (string, error) {
 	makeVerbose = true
 	makeOutput = ""
 
-	// Capture stdout
+	// Execute rootCmd in-process to keep test coverage. Because build output
+	// flows through process-wide os.Stdout (including nested cmake commands),
+	// redirect to a pipe and drain concurrently to avoid blocking on full pipe buffers.
 	old := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
