@@ -64,7 +64,15 @@ func TestParseModuleArg(t *testing.T) {
 }
 
 func TestParseModuleArg_InvalidDotVersion(t *testing.T) {
-	invalidArgs := []string{".@v1.0.0", ".@latest", "..", "../zlib", "..@v1.0.0"}
+	invalidArgs := []string{
+		".@v1.0.0",
+		".@latest",
+		"..",
+		"../zlib",
+		"..@v1.0.0",
+		"./...",
+		"./...@v1.0.0",
+	}
 	for _, arg := range invalidArgs {
 		t.Run(arg, func(t *testing.T) {
 			_, _, _, err := parseModuleArg(arg)

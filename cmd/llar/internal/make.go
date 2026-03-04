@@ -209,8 +209,13 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 		pattern = arg
 	}
 
-	// TODO(MeteorsLiu): support ./owner/... and ./... patterns (currently cannot specify version)
-	// Don't split @version for ... patterns
+	// TODO(MeteorsLiu): support ./owner/... and ./... patterns (currently cannot specify version).
+	// For now, disable local "./..." wildcard entry.
+	if isLocal && (pattern == "..." || strings.HasPrefix(pattern, "...@")) {
+		return "", "", false, fmt.Errorf("invalid local pattern %q: \"./...\" is not supported", arg)
+	}
+
+	// Don't split @version for owner/... wildcard patterns.
 	if !strings.HasSuffix(pattern, "/...") && pattern != "..." {
 		for i := len(pattern) - 1; i >= 0; i-- {
 			if pattern[i] == '@' {
