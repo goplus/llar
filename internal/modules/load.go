@@ -19,6 +19,27 @@ import (
 	classfile "github.com/goplus/llar/formula"
 )
 
+func validateModulePath(modPath string) error {
+	if modPath == "" {
+		return fmt.Errorf("invalid module path %q: path is empty", modPath)
+	}
+	if modPath == "." || strings.HasPrefix(modPath, "./") {
+		return fmt.Errorf("invalid module path %q: local path pattern is not supported", modPath)
+	}
+	if strings.Contains(modPath, "...") {
+		return fmt.Errorf("invalid module path %q: \"...\" wildcard is not supported", modPath)
+	}
+	for _, part := range strings.Split(modPath, "/") {
+		if part == "." || part == ".." {
+			return fmt.Errorf("invalid module path %q: path traversal is not supported", modPath)
+		}
+	}
+	if _, err := module.EscapePath(modPath); err != nil {
+		return fmt.Errorf("invalid module path %q: %w", modPath, err)
+	}
+	return nil
+}
+
 // Module represents a loaded module with its formula, filesystem, and resolved dependencies.
 type Module struct {
 	*formula.Formula
@@ -38,7 +59,7 @@ type Module struct {
 // Options contains options for Load.
 type Options struct {
 	// FormulaStore is the store for downloading and caching formulas.
-	FormulaStore *repo.Store
+	FormulaStore repo.Store
 }
 
 func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
@@ -139,6 +160,10 @@ func (c *formulaContext) convertToModules(ctx context.Context, modList []module.
 // their dependencies using the MVS algorithm. It returns modules for all
 // packages in the computed build list.
 func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, error) {
+	if err := validateModulePath(main.Path); err != nil {
+		return nil, err
+	}
+
 	context := newFormulaContext(opts.FormulaStore.ModuleFS)
 
 	mainMod, err := context.moduleOf(ctx, main.Path)
@@ -247,6 +272,10 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
 func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula) ([]module.Version, error) {
+	if err := validateModulePath(mod.Path); err != nil {
+		return nil, err
+	}
+
 	var deps classfile.ModuleDeps
 
 	// TODO(MeteorsLiu): Support different code host sites.
@@ -288,6 +317,9 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 	// from the pinned table; unknown deps are safe to skip since MVS resolves
 	// them recursively through other paths in the dependency graph.
 	for _, dep := range deps.Deps() {
+		if err := validateModulePath(dep.Path); err != nil {
+			return nil, err
+		}
 		if dep.Version == "" {
 			// if a version of a dep input by onRequire is empty, try our best to resolve it.
 			idx := slices.IndexFunc(versionedDeps, func(depInTable module.Version) bool {
@@ -311,6 +343,9 @@ func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula)
 	}
 
 	for _, dep := range versionedDeps {
+		if err := validateModulePath(dep.Path); err != nil {
+			return nil, err
+		}
 		if dep.Version != "" {
 			vers = append(vers, module.Version{
 				Path:    dep.Path,

@@ -29,7 +29,7 @@ func (m *mockVCSRepo) Sync(ctx context.Context, ref, path, localDir string) erro
 }
 
 // setupTestStore creates a repo.Store backed by a copy of testdataDir.
-func setupTestStore(t *testing.T, testdataDir string) *repo.Store {
+func setupTestStore(t *testing.T, testdataDir string) repo.Store {
 	t.Helper()
 	tmpDir := t.TempDir()
 	if err := os.CopyFS(tmpDir, os.DirFS(testdataDir)); err != nil {

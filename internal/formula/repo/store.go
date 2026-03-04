@@ -15,17 +15,26 @@ import (
 	"github.com/goplus/llar/mod/module"
 )
 
-// Store manages a formula repository, handling storage layout and synchronization.
-// It provides access to module formulas through a filesystem abstraction.
-type Store struct {
+// Store provides access to module formulas through a filesystem abstraction.
+type Store interface {
+	// ModuleFS returns a filesystem interface for the specified module.
+	ModuleFS(ctx context.Context, modPath string) (fs.FS, error)
+
+	// LockModule acquires an exclusive lock for the given module path.
+	// Returns an unlock function that must be called to release the lock.
+	LockModule(modPath string) (unlock func(), err error)
+}
+
+// remoteStore manages a formula repository, handling storage layout and synchronization.
+type remoteStore struct {
 	dir     string
 	vcsRepo vcs.Repo
 }
 
 // New creates a new Store with the given directory and vcs.Repo.
 // The dir specifies where this formula repository is stored locally.
-func New(dir string, vcsRepo vcs.Repo) *Store {
-	return &Store{
+func New(dir string, vcsRepo vcs.Repo) Store {
+	return &remoteStore{
 		dir:     dir,
 		vcsRepo: vcsRepo,
 	}
@@ -33,7 +42,7 @@ func New(dir string, vcsRepo vcs.Repo) *Store {
 
 // ModuleFS returns a filesystem interface for the specified module.
 // It synchronizes the module from remote and returns an fs.FS rooted at the module's directory.
-func (s *Store) ModuleFS(ctx context.Context, modPath string) (fs.FS, error) {
+func (s *remoteStore) ModuleFS(ctx context.Context, modPath string) (fs.FS, error) {
 	modDir, err := s.moduleDirOf(modPath)
 	if err != nil {
 		return nil, err
@@ -50,7 +59,7 @@ func (s *Store) ModuleFS(ctx context.Context, modPath string) (fs.FS, error) {
 
 // moduleDirOf returns the directory path for a module within the repository.
 // It creates the directory with 0700 permissions if it doesn't exist.
-func (s *Store) moduleDirOf(modPath string) (string, error) {
+func (s *remoteStore) moduleDirOf(modPath string) (string, error) {
 	escapedModPath, err := module.EscapePath(modPath)
 	if err != nil {
 		return "", err
@@ -65,7 +74,7 @@ func (s *Store) moduleDirOf(modPath string) (string, error) {
 
 // LockModule acquires an exclusive lock for the given module path.
 // Returns an unlock function that must be called to release the lock.
-func (s *Store) LockModule(modPath string) (unlock func(), err error) {
+func (s *remoteStore) LockModule(modPath string) (unlock func(), err error) {
 	modDir, err := s.moduleDirOf(modPath)
 	if err != nil {
 		return nil, err

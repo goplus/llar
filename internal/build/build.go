@@ -18,7 +18,7 @@ import (
 )
 
 type Builder struct {
-	store        *repo.Store
+	store        repo.Store
 	matrix       string
 	workspaceDir string
 	newRepo func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
@@ -30,7 +30,7 @@ type Result struct {
 }
 
 type Options struct {
-	Store        *repo.Store
+	Store        repo.Store
 	MatrixStr    string
 	WorkspaceDir string
 }

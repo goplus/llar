@@ -288,7 +288,7 @@ func init() {
 
 // setupTestStore copies testdata/formulas to a temp dir and returns a Store.
 // The mock VCS Sync is a no-op since data is already in place.
-func setupTestStore(t *testing.T) *repo.Store {
+func setupTestStore(t *testing.T) repo.Store {
 	t.Helper()
 	storeDir := t.TempDir()
 	if err := os.CopyFS(storeDir, os.DirFS(testFormulaDir)); err != nil {
@@ -298,7 +298,7 @@ func setupTestStore(t *testing.T) *repo.Store {
 }
 
 // setupBuilder creates a Builder wired with a test Store and mock source repos.
-func setupBuilder(t *testing.T, store *repo.Store, matrix string) *Builder {
+func setupBuilder(t *testing.T, store repo.Store, matrix string) *Builder {
 	t.Helper()
 	return &Builder{
 		store:        store,
@@ -312,7 +312,7 @@ func setupBuilder(t *testing.T, store *repo.Store, matrix string) *Builder {
 }
 
 // loadAndBuild loads modules via modules.Load then builds them.
-func loadAndBuild(t *testing.T, b *Builder, store *repo.Store, main module.Version) ([]Result, []*modules.Module) {
+func loadAndBuild(t *testing.T, b *Builder, store repo.Store, main module.Version) ([]Result, []*modules.Module) {
 	t.Helper()
 	ctx := context.Background()
 	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})

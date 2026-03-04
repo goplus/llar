@@ -33,6 +33,10 @@ llar make -o ./output madler/zlib@v1.3.1
 
 # Build and export as a zip archive
 llar make -o zlib.zip madler/zlib@v1.3.1
+
+# Build a local formula
+llar make ./@1.0.0
+llar make ./madler/zlib@v1.3.1
 ```
 
 ### Commands
