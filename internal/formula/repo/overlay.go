@@ -4,9 +4,6 @@ import (
 	"context"
 	"io/fs"
 	"os"
-	"path/filepath"
-
-	"github.com/goplus/llar/internal/lockedfile"
 )
 
 // NewOverlayStore creates a Store that serves modules from local directories
@@ -30,9 +27,8 @@ func (s *overlayStore) ModuleFS(ctx context.Context, modPath string) (fs.FS, err
 }
 
 func (s *overlayStore) LockModule(modPath string) (func(), error) {
-	if dir, ok := s.locals[modPath]; ok {
-		lockFile := filepath.Join(dir, ".lock")
-		return lockedfile.MutexAt(lockFile).Lock()
-	}
+	// Locking is module-path scoped across both local and remote sources,
+	// because build cache/output paths are keyed by module path.
+	// Always delegate lock ownership to the shared backing store.
 	return s.remote.LockModule(modPath)
 }

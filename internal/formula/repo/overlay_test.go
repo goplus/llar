@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOverlayStore_ModuleFS_Local(t *testing.T) {
@@ -94,10 +95,66 @@ func TestOverlayStore_LockModule(t *testing.T) {
 		"test/mod": localDir,
 	})
 
-	// LockModule for local module uses a local lock file
+	// LockModule for local module should still use shared module-path lock.
 	unlock, err := store.LockModule("test/mod")
 	if err != nil {
 		t.Fatalf("LockModule() failed: %v", err)
 	}
 	defer unlock()
+
+	// Lock file should be module-path scoped under shared store root.
+	sharedLock := filepath.Join(tmpDir, "test", "mod", ".lock")
+	if _, err := os.Stat(sharedLock); err != nil {
+		t.Fatalf("shared lock file not created: %v", err)
+	}
+	// Local lock file should not be used.
+	if _, err := os.Stat(filepath.Join(localDir, ".lock")); err == nil {
+		t.Fatal("local .lock should not be used")
+	}
+}
+
+func TestOverlayStore_LockModule_ExclusiveAcrossLocalAndRemote(t *testing.T) {
+	tmpDir := t.TempDir()
+	remote := New(tmpDir, &mockRepo{})
+
+	localDir := filepath.Join(tmpDir, "local")
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewOverlayStore(remote, map[string]string{
+		"test/mod": localDir,
+	})
+
+	unlock, err := store.LockModule("test/mod")
+	if err != nil {
+		t.Fatalf("overlay LockModule() failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		unlock2, err := remote.LockModule("test/mod")
+		if err != nil {
+			t.Errorf("remote LockModule() failed: %v", err)
+			return
+		}
+		unlock2()
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("remote lock acquired before overlay lock released")
+	case <-time.After(50 * time.Millisecond):
+		// expected: blocked by the same module-path lock
+	}
+
+	unlock()
+
+	select {
+	case <-done:
+		// expected
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote lock not acquired after overlay lock released")
+	}
 }
