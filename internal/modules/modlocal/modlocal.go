@@ -23,7 +23,7 @@ type Module struct {
 //   - pattern="" (from "."): walk up from cwd to find versions.json
 //   - pattern="owner/repo": read cwd/owner/repo/versions.json
 func Resolve(cwd, pattern string) ([]Module, error) {
-	if err := validatePattern(pattern); err != nil {
+	if err := validatePattern(cwd, pattern); err != nil {
 		return nil, err
 	}
 
@@ -35,20 +35,42 @@ func Resolve(cwd, pattern string) ([]Module, error) {
 	}
 }
 
-func validatePattern(pattern string) error {
+func validatePattern(cwd, pattern string) error {
 	if pattern == "" {
 		return nil
+	}
+	if filepath.IsAbs(pattern) {
+		return fmt.Errorf("invalid local pattern %q: absolute path is not supported", pattern)
 	}
 	if strings.Contains(pattern, "...") {
 		return fmt.Errorf("invalid local pattern %q: \"...\" wildcard is not supported", pattern)
 	}
-	parts := strings.Split(pattern, "/")
-	for _, part := range parts {
-		if part == ".." {
-			return fmt.Errorf("invalid local pattern %q: \"..\" is not supported; use \".\" instead", pattern)
-		}
+	root := findLocalRoot(cwd)
+	target := filepath.Clean(filepath.Join(cwd, pattern))
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return fmt.Errorf("invalid local pattern %q: %w", pattern, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("invalid local pattern %q: path escapes local root %q", pattern, root)
 	}
 	return nil
+}
+
+// findLocalRoot returns the nearest ancestor directory containing versions.json.
+// If none is found, cwd itself is treated as the root boundary.
+func findLocalRoot(cwd string) string {
+	dir := filepath.Clean(cwd)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "versions.json")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return cwd
+		}
+		dir = parent
+	}
 }
 
 // resolveCurrentDir finds the module in the current directory by walking up

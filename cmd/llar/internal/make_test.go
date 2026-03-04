@@ -29,7 +29,9 @@ func TestParseModuleArg(t *testing.T) {
 	}{
 		{"owner/repo@v1.0.0", "owner/repo", "v1.0.0", false},
 		{"owner/repo@1.0.0", "owner/repo", "1.0.0", false},
+		{"owner/repo@", "owner/repo", "", false},
 		{"owner/repo", "owner/repo", "", false},
+		{"@", "", "", false},
 		{"org/owner/repo@v2.0.0", "org/owner/repo", "v2.0.0", false},
 		{"simple@latest", "simple", "latest", false},
 		{"no-version", "no-version", "", false},
@@ -43,8 +45,11 @@ func TestParseModuleArg(t *testing.T) {
 		{"owner/...@v1.0.0", "owner/...", "v1.0.0", false},
 		// Local patterns
 		{".", "", "", true},
+		{"./", "", "", true},
+		{"./@", "", "", true},
 		{"./@v1.0.0", "", "v1.0.0", true},
 		{"./owner/repo", "owner/repo", "", true},
+		{"./owner/repo@", "owner/repo", "", true},
 		{"./owner/repo@v1.0.0", "owner/repo", "v1.0.0", true},
 		{"./..", "..", "", true},
 		{"./../zlib", "../zlib", "", true},
