@@ -39,14 +39,11 @@ func validatePattern(cwd, pattern string) error {
 	if pattern == "" {
 		return nil
 	}
-	if filepath.IsAbs(pattern) {
-		return fmt.Errorf("invalid local pattern %q: absolute path is not supported", pattern)
-	}
 	if strings.Contains(pattern, "...") {
 		return fmt.Errorf("invalid local pattern %q: \"...\" wildcard is not supported", pattern)
 	}
 	root := findLocalRoot(cwd)
-	target := filepath.Clean(filepath.Join(cwd, pattern))
+	target := resolvePatternDir(cwd, pattern)
 	rel, err := filepath.Rel(root, target)
 	if err != nil {
 		return fmt.Errorf("invalid local pattern %q: %w", pattern, err)
@@ -55,6 +52,13 @@ func validatePattern(cwd, pattern string) error {
 		return fmt.Errorf("invalid local pattern %q: path escapes local root %q", pattern, root)
 	}
 	return nil
+}
+
+func resolvePatternDir(cwd, pattern string) string {
+	if filepath.IsAbs(pattern) {
+		return filepath.Clean(pattern)
+	}
+	return filepath.Clean(filepath.Join(cwd, pattern))
 }
 
 // findLocalRoot returns the nearest ancestor directory containing versions.json.
@@ -99,7 +103,7 @@ func resolveCurrentDir(cwd string) ([]Module, error) {
 
 // resolveSingleLocal resolves a single local module at cwd/pattern.
 func resolveSingleLocal(cwd, pattern string) ([]Module, error) {
-	dir := filepath.Join(cwd, pattern)
+	dir := resolvePatternDir(cwd, pattern)
 	vFile := filepath.Join(dir, "versions.json")
 	v, err := versions.Parse(vFile, nil)
 	if err != nil {

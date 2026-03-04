@@ -16,17 +16,20 @@ resolved from remote.
 | `owner/repo@ver` | Remote module | Specified by `@ver` |
 | `owner/repo` | Remote module | Resolved to latest via git tags |
 | `.` | Current directory module | Resolved to latest via git tags |
+| `..` | Parent directory module (subject to local root boundary) | Resolved to latest via git tags |
 | `./@ver` | Current directory module | Specified by `@ver` |
+| `../repo@ver` | Relative local module path | Specified by `@ver` |
 | `./owner/repo` | Module at specified path | Resolved to latest via git tags |
 | `./owner/repo@ver` | Module at specified path | Specified by `@ver` |
+| `/abs/path/to/module@ver` | Absolute local module path (subject to local root boundary) | Specified by `@ver` |
 
-All local patterns use `./` prefix. `.` is a shorthand for `./` without version.
+Local patterns follow Go-style filesystem forms (`.`, `..`, `./x`, `../x`,
+absolute paths). `.` is shorthand for current directory.
 The syntax `.@version` is **invalid** and produces an error — use `./@version`
 instead, which aligns with `./owner/repo@version`.
 
-`..` and `../path` are **not supported**. Use `.` instead — it automatically
-walks up from the current directory to find the nearest `versions.json`, so
-there is no need to navigate to a parent directory manually.
+For safety, local patterns are still constrained by the nearest local module
+root (`versions.json`): paths escaping that root are rejected.
 
 When version is omitted, `modules.Load` resolves the latest version from the
 module's source repository git tags using the formula-defined comparator.
@@ -67,8 +70,9 @@ modules.Load(ctx, main, Options{FormulaStore: store})
 Each component has a single responsibility and communicates through simple
 data (`map[string]string`) or interfaces (`repo.Store`):
 
-- **`parseModuleArg`** — Detects `.` / `./` prefix, separates `@version`,
-  validates syntax (rejects `.@version`), returns whether the argument
+- **`parseModuleArg`** — Detects local filesystem patterns (`.`, `..`, `./`,
+  `../`, absolute paths), separates `@version`, validates syntax
+  (rejects `.@version`), returns whether the argument
   targets local modules. CLI-specific logic, lives in `cmd/llar/internal/`.
 
 - **`modlocal.Resolve`** — Scans the filesystem for `versions.json` files
@@ -86,15 +90,12 @@ modules come from remote or local sources.
 
 ## Pattern Resolution Details
 
-### `.` and `./@ver` (current directory)
+### `.` / `..` / relative / absolute local paths
 
 Walks **up** from `cwd` looking for `versions.json`. Reads its `path` field
-to determine the module path. This handles being invoked from within a module
-subdirectory.
-
-### `./owner/repo` and `./owner/repo@ver`
-
-Reads `cwd/owner/repo/versions.json` directly. The `path` field determines
+to determine the module path. For non-empty local patterns, resolves a target
+directory from `(cwd, pattern)` (absolute patterns stay absolute; relative
+patterns are joined to `cwd`) and reads `targetDir/versions.json`. The `path` field determines
 the module path (which may differ from the directory structure).
 
 ## Store Interface

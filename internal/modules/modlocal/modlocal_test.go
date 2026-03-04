@@ -174,6 +174,26 @@ func TestResolve_SingleLocal_FromVersionDirParent(t *testing.T) {
 	}
 }
 
+func TestResolve_SingleLocal_AbsolutePath(t *testing.T) {
+	tmp := t.TempDir()
+	modDir := filepath.Join(tmp, "madler", "zlib")
+	writeVersionsJSON(t, modDir, "madler/zlib")
+
+	mods, err := Resolve(modDir, modDir)
+	if err != nil {
+		t.Fatalf("Resolve absolute path failed: %v", err)
+	}
+	if len(mods) != 1 {
+		t.Fatalf("got %d modules, want 1", len(mods))
+	}
+	if mods[0].Path != "madler/zlib" {
+		t.Errorf("path = %q, want %q", mods[0].Path, "madler/zlib")
+	}
+	if mods[0].Dir != modDir {
+		t.Errorf("dir = %q, want %q", mods[0].Dir, modDir)
+	}
+}
+
 func TestResolve_SingleLocal_NotFound(t *testing.T) {
 	tmp := t.TempDir()
 	_, err := Resolve(tmp, "nonexistent/repo")
@@ -225,7 +245,8 @@ func TestValidatePattern_CaseMatrix(t *testing.T) {
 	if err := os.MkdirAll(nestedLeaf, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	absPattern, err := filepath.Abs(filepath.Join(string(os.PathSeparator), "llar-abs-pattern"))
+	absInside := moduleRoot
+	absOutside, err := filepath.Abs(filepath.Join(string(os.PathSeparator), "llar-abs-pattern"))
 	if err != nil {
 		t.Fatalf("Abs() failed: %v", err)
 	}
@@ -240,13 +261,20 @@ func TestValidatePattern_CaseMatrix(t *testing.T) {
 		{"empty pattern", moduleRoot, "", false, ""},
 		{"wildcard all", moduleRoot, "...", true, "wildcard"},
 		{"wildcard owner", moduleRoot, "owner/...", true, "wildcard"},
+		{"wildcard all with local prefix", moduleRoot, "./...", true, "wildcard"},
+		{"wildcard owner with local prefix", moduleRoot, "./owner/...", true, "wildcard"},
+		{"wildcard all with local prefix and version", moduleRoot, "./...@v1.0.0", true, "wildcard"},
+		{"wildcard owner with local prefix and version", moduleRoot, "./owner/...@v1.0.0", true, "wildcard"},
 		{"version dir to module root", verDir, "..", false, ""},
 		{"version dir escapes root", verDir, "../..", true, "escapes local root"},
+		{"local prefix parent escapes root", moduleRoot, "./..", true, "escapes local root"},
+		{"local prefix parent escapes root nested", moduleRoot, "./../repo", true, "escapes local root"},
 		{"normalize within root", moduleRoot, "sub/../repo", false, ""},
 		{"rel equals dotdot", moduleRoot, "..", true, "escapes local root"},
 		{"nested root allows one up", nestedLeaf, "..", false, ""},
 		{"nested root blocks leaving nearest", nestedLeaf, "../..", true, "escapes local root"},
-		{"absolute path unsupported", moduleRoot, absPattern, true, "absolute path"},
+		{"absolute path within root", moduleRoot, absInside, false, ""},
+		{"absolute path escapes root", moduleRoot, absOutside, true, "escapes local root"},
 		{"no-root cwd escape", plain, "..", true, "escapes local root"},
 		{"no-root normalize within cwd", plain, "a/../b", false, ""},
 	}

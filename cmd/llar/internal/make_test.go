@@ -21,6 +21,8 @@ import (
 )
 
 func TestParseModuleArg(t *testing.T) {
+	// parseModuleArg only parses CLI shape (local detection + @version split).
+	// Pattern filtering (e.g. wildcard/escape checks) is covered in modlocal tests.
 	tests := []struct {
 		arg         string
 		wantPattern string
@@ -36,29 +38,19 @@ func TestParseModuleArg(t *testing.T) {
 		{"simple@latest", "simple", "latest", false},
 		{"no-version", "no-version", "", false},
 		{"multiple@at@signs", "multiple@at", "signs", false},
-		{"..", "..", "", false},
-		{"../zlib", "../zlib", "", false},
-		{"..@v1.0.0", "..", "v1.0.0", false},
-		{"...", "...", "", false},
-		{"...@v1.0.0", "...", "v1.0.0", false},
-		{"owner/...", "owner/...", "", false},
-		{"owner/...@v1.0.0", "owner/...", "v1.0.0", false},
 		// Local patterns
 		{".", "", "", true},
 		{"./", "", "", true},
 		{"./@", "", "", true},
 		{"./@v1.0.0", "", "v1.0.0", true},
+		{"..", "..", "", true},
+		{"../owner/repo", "../owner/repo", "", true},
+		{"..@v1.0.0", "..", "v1.0.0", true},
 		{"./owner/repo", "owner/repo", "", true},
+		{"./owner/../repo", "repo", "", true},
 		{"./owner/repo@", "owner/repo", "", true},
 		{"./owner/repo@v1.0.0", "owner/repo", "v1.0.0", true},
-		{"./..", "..", "", true},
-		{"./../zlib", "../zlib", "", true},
-		{"./zlib/..", "zlib/..", "", true},
-		{"./zlib/../demo@v1.0.0", "zlib/../demo", "v1.0.0", true},
-		{"./...", "...", "", true},
-		{"./...@v1.0.0", "...", "v1.0.0", true},
-		{"./owner/...", "owner/...", "", true},
-		{"./owner/...@v1.0.0", "owner/...", "v1.0.0", true},
+		{"../owner/repo@v1.0.0", "../owner/repo", "v1.0.0", true},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +67,36 @@ func TestParseModuleArg(t *testing.T) {
 			}
 			if isLocal != tt.wantIsLocal {
 				t.Errorf("parseModuleArg(%q) isLocal = %v, want %v", tt.arg, isLocal, tt.wantIsLocal)
+			}
+		})
+	}
+
+	absDir := filepath.Join(t.TempDir(), "absmod")
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		t.Fatalf("mkdir %q: %v", absDir, err)
+	}
+	absCases := []struct {
+		arg         string
+		wantPattern string
+		wantVersion string
+	}{
+		{absDir, filepath.Clean(absDir), ""},
+		{absDir + "@v1.2.3", filepath.Clean(absDir), "v1.2.3"},
+	}
+	for _, tt := range absCases {
+		t.Run(tt.arg, func(t *testing.T) {
+			pattern, version, isLocal, err := parseModuleArg(tt.arg)
+			if err != nil {
+				t.Fatalf("parseModuleArg(%q) unexpected error: %v", tt.arg, err)
+			}
+			if !isLocal {
+				t.Fatalf("parseModuleArg(%q) isLocal = false, want true", tt.arg)
+			}
+			if pattern != tt.wantPattern {
+				t.Fatalf("parseModuleArg(%q) pattern = %q, want %q", tt.arg, pattern, tt.wantPattern)
+			}
+			if version != tt.wantVersion {
+				t.Fatalf("parseModuleArg(%q) version = %q, want %q", tt.arg, version, tt.wantVersion)
 			}
 		})
 	}
@@ -771,6 +793,30 @@ func TestMakeLocal_ExplicitPath(t *testing.T) {
 
 	// ./test/liba@1.0.0: resolution succeeds, build fails (no real git repo)
 	_, err := runMakeCmd(t, "-v", "./test/liba@1.0.0")
+	if err == nil {
+		t.Fatal("expected build error for mock module")
+	}
+	if !strings.Contains(err.Error(), "failed to build test/liba@1.0.0") {
+		t.Errorf("expected 'failed to build test/liba@1.0.0', got: %v", err)
+	}
+}
+
+func TestMakeLocal_AbsolutePath(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
+
+	origDir, _ := os.Getwd()
+	os.Chdir(formulaDir)
+	defer os.Chdir(origDir)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get cwd: %v", err)
+	}
+	absModDir := filepath.Join(cwd, "test", "liba")
+
+	// absolute local path + pinned version: resolution succeeds, build fails (no real git repo)
+	_, err = runMakeCmd(t, "-v", absModDir+"@1.0.0")
 	if err == nil {
 		t.Fatal("expected build error for mock module")
 	}

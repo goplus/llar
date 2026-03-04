@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"fmt"
+	stdbuild "go/build"
 	"io"
 	"os"
 	"path/filepath"
@@ -191,29 +192,28 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 	return nil
 }
 
-// parseModuleArg parses a module argument, detecting local patterns (. or ./ prefix).
-// Returns the pattern (with ./ prefix stripped), version, and whether the argument is local.
+// parseModuleArg parses a module argument and detects local filesystem patterns.
+// Local patterns follow Go-style local import forms (., .., ./x, ../x, absolute path).
 // Returns an error for invalid patterns like ".@version" (use "./@version" instead).
 func parseModuleArg(arg string) (pattern, version string, isLocal bool, err error) {
 	if strings.HasPrefix(arg, ".@") {
 		return "", "", false, fmt.Errorf("invalid local pattern %q: use \"./@version\" instead of \".@version\"", arg)
 	}
 
-	if arg == "." || strings.HasPrefix(arg, "./") {
-		isLocal = true
-		pattern = strings.TrimPrefix(arg, "./")
-		if arg == "." {
-			pattern = ""
-		}
-	} else {
-		pattern = arg
-	}
-
+	pattern = arg
 	for i := len(pattern) - 1; i >= 0; i-- {
 		if pattern[i] == '@' {
 			version = pattern[i+1:]
 			pattern = pattern[:i]
 			break
+		}
+	}
+
+	if stdbuild.IsLocalImport(pattern) || filepath.IsAbs(pattern) {
+		isLocal = true
+		pattern = filepath.Clean(pattern)
+		if pattern == "." {
+			pattern = ""
 		}
 	}
 	return
