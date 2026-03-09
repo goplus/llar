@@ -128,6 +128,101 @@ func TestResolveDeps_InvalidModulePath(t *testing.T) {
 	}
 }
 
+func TestValidateModulePath(t *testing.T) {
+	tests := []struct {
+		name       string
+		modPath    string
+		wantErr    bool
+		errContain string
+	}{
+		{name: "valid owner repo", modPath: "owner/repo", wantErr: false},
+		{name: "valid single segment", modPath: "repo", wantErr: false},
+		{name: "empty", modPath: "", wantErr: true, errContain: "empty"},
+		{name: "wildcard all", modPath: "...", wantErr: true, errContain: "wildcard"},
+		{name: "wildcard owner", modPath: "owner/...", wantErr: true, errContain: "wildcard"},
+		{name: "dot path", modPath: ".", wantErr: true, errContain: "local path pattern"},
+		{name: "local prefix", modPath: "./owner/repo", wantErr: true, errContain: "local path pattern"},
+		{name: "traversal prefix", modPath: "../owner/repo", wantErr: true, errContain: "path traversal"},
+		{name: "traversal middle", modPath: "owner/../repo", wantErr: true, errContain: "path traversal"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateModulePath(tt.modPath)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("validateModulePath(%q) expected error", tt.modPath)
+				}
+				if tt.errContain != "" && !strings.Contains(err.Error(), tt.errContain) {
+					t.Fatalf("validateModulePath(%q) error = %q, want contains %q", tt.modPath, err.Error(), tt.errContain)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("validateModulePath(%q) unexpected error: %v", tt.modPath, err)
+			}
+		})
+	}
+}
+
+func TestLoad_InvalidMainModulePath(t *testing.T) {
+	store := setupTestStore(t, "testdata/load")
+
+	tests := []struct {
+		name       string
+		path       string
+		errContain string
+	}{
+		{name: "wildcard all", path: "...", errContain: "wildcard"},
+		{name: "wildcard owner", path: "owner/...", errContain: "wildcard"},
+		{name: "local prefix", path: "./owner/repo", errContain: "local path pattern"},
+		{name: "traversal", path: "../owner/repo", errContain: "path traversal"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(context.Background(), module.Version{Path: tt.path, Version: "1.0.0"}, Options{FormulaStore: store})
+			if err == nil {
+				t.Fatalf("Load(%q) expected error", tt.path)
+			}
+			if !strings.Contains(err.Error(), tt.errContain) {
+				t.Fatalf("Load(%q) error = %q, want contains %q", tt.path, err.Error(), tt.errContain)
+			}
+		})
+	}
+}
+
+func TestResolveDeps_InvalidDependencyPathFromVersions(t *testing.T) {
+	versionsJSON := []byte(`{
+		"path": "towner/main",
+		"deps": {
+			"1.0.0": [
+				{"path": "...", "version": "1.0.0"}
+			]
+		}
+	}`)
+
+	modFS := fakeReadFileFS{
+		readFile: func(name string) ([]byte, error) {
+			if name == "versions.json" {
+				return versionsJSON, nil
+			}
+			return nil, fs.ErrNotExist
+		},
+	}
+	mod := module.Version{Path: "towner/main", Version: "1.0.0"}
+	frla := &formula.Formula{ModPath: "towner/main", FromVer: "1.0.0"}
+
+	_, err := resolveDeps(mod, modFS, frla)
+	if err == nil {
+		t.Fatal("expected error for invalid dependency path")
+	}
+	if !strings.Contains(err.Error(), "wildcard") {
+		t.Fatalf("error = %q, want contains %q", err.Error(), "wildcard")
+	}
+}
+
 func TestResolveDeps_MissingVersionsFile(t *testing.T) {
 	modFS := os.DirFS("testdata/load/towner/badcmp").(fs.ReadFileFS)
 	mod := module.Version{Path: "towner/badcmp", Version: "1.0.0"}

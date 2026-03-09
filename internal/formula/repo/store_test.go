@@ -49,8 +49,9 @@ func TestNew(t *testing.T) {
 	if store == nil {
 		t.Fatal("New returned nil")
 	}
-	if store.dir != tmpDir {
-		t.Errorf("dir = %q, want %q", store.dir, tmpDir)
+	rs := store.(*remoteStore)
+	if rs.dir != tmpDir {
+		t.Errorf("dir = %q, want %q", rs.dir, tmpDir)
 	}
 }
 
@@ -165,7 +166,7 @@ func TestStore_ModuleFS_InvalidModulePath(t *testing.T) {
 
 func TestStore_moduleDirOf(t *testing.T) {
 	tmpDir := t.TempDir()
-	store := New(tmpDir, &mockRepo{})
+	store := New(tmpDir, &mockRepo{}).(*remoteStore)
 
 	tests := []struct {
 		modPath string
@@ -199,7 +200,7 @@ func TestStore_moduleDirOf(t *testing.T) {
 
 func TestStore_moduleDirOf_MkdirAllError(t *testing.T) {
 	tmpDir := t.TempDir()
-	store := New(tmpDir, &mockRepo{})
+	store := New(tmpDir, &mockRepo{}).(*remoteStore)
 
 	parent := filepath.Join(tmpDir, "owner")
 	if err := os.WriteFile(parent, []byte("not-a-dir"), 0600); err != nil {
