@@ -1,0 +1,81 @@
+import "strings"
+
+id "pocoproject/poco"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	encodingsOn := strings.contains(combo, "encodings-on")
+	jsonOn := strings.contains(combo, "json-on")
+	netOn := strings.contains(combo, "net-on")
+	xmlOn := strings.contains(combo, "xml-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "POCO_UNBUNDLED", false
+	c.defineBool "ENABLE_FOUNDATION", true
+	c.defineBool "ENABLE_ENCODINGS", encodingsOn
+	c.defineBool "ENABLE_JSON", jsonOn
+	c.defineBool "ENABLE_XML", xmlOn
+	c.defineBool "ENABLE_UTIL", false
+	c.defineBool "ENABLE_NET", netOn
+	c.defineBool "ENABLE_CRYPTO", false
+	c.defineBool "ENABLE_NETSSL", false
+	c.defineBool "ENABLE_NETSSL_WIN", false
+	c.defineBool "ENABLE_JWT", false
+	c.defineBool "ENABLE_DATA", false
+	c.defineBool "ENABLE_DATA_SQLITE", false
+	c.defineBool "ENABLE_MONGODB", false
+	c.defineBool "ENABLE_REDIS", false
+	c.defineBool "ENABLE_PROMETHEUS", false
+	c.defineBool "ENABLE_ZIP", false
+	c.defineBool "ENABLE_PDF", false
+	c.defineBool "ENABLE_PAGECOMPILER", false
+	c.defineBool "ENABLE_PAGECOMPILER_FILE2PAGE", false
+	c.defineBool "ENABLE_ACTIVERECORD", false
+	c.defineBool "ENABLE_ACTIVERECORD_COMPILER", false
+	c.defineBool "ENABLE_POCODOC", false
+	c.defineBool "ENABLE_CPPPARSER", false
+	c.defineBool "ENABLE_SAMPLES", false
+	c.defineBool "ENABLE_TESTS", false
+	c.defineBool "ENABLE_FUZZING", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := "-lPocoFoundation"
+	if encodingsOn {
+		meta += " -lPocoEncodings"
+	}
+	if jsonOn {
+		meta += " -lPocoJSON"
+	}
+	if netOn {
+		meta += " -lPocoNet"
+	}
+	if xmlOn {
+		meta += " -lPocoXML"
+	}
+	out.setMetadata meta
+}

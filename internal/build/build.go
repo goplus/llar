@@ -2,17 +2,21 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/trace"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
@@ -20,19 +24,41 @@ import (
 type Builder struct {
 	store        repo.Store
 	matrix       string
+	runTest      bool
+	trace        bool
 	workspaceDir string
-	newRepo func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
+	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
 type Result struct {
-	Metadata  string
-	OutputDir string
+	Metadata         string
+	OutputDir        string
+	Trace            []trace.Record
+	TraceScope       trace.Scope
+	TraceDiagnostics trace.ParseDiagnostics
+	InputDigests     map[string]string
 }
 
 type Options struct {
 	Store        repo.Store
 	MatrixStr    string
+	RunTest      bool
+	Trace        bool
 	WorkspaceDir string
+}
+
+var captureOnBuildTrace = trace.CaptureLockedThread
+
+func (b *Builder) traceRoots(targets []*modules.Module, mod *modules.Module, sourceDir, installDir string) ([]string, error) {
+	roots := []string{sourceDir, installDir}
+	for _, dep := range b.resolveModTransitiveDeps(targets, mod) {
+		dir, err := b.installDir(dep.Path, dep.Version)
+		if err != nil {
+			return nil, err
+		}
+		roots = append(roots, dir)
+	}
+	return roots, nil
 }
 
 func defaultWorkspaceDir() (string, error) {
@@ -61,6 +87,8 @@ func NewBuilder(opts Options) (*Builder, error) {
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
+		runTest:      opts.RunTest,
+		trace:        opts.Trace,
 		workspaceDir: workspaceDir,
 		newRepo:      vcs.NewRepo,
 	}, nil
@@ -179,20 +207,30 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
+	traceTarget := module.Version{}
+	if b.trace && len(targets) > 0 {
+		traceTarget = module.Version{Path: targets[0].Path, Version: targets[0].Version}
+	}
 
 	build := func(mod *modules.Module) (Result, error) {
+		traceEnabled := b.trace && mod.Path == traceTarget.Path && mod.Version == traceTarget.Version
+
 		unlock, err := b.store.LockModule(mod.Path)
 		if err != nil {
 			return Result{}, err
 		}
 		defer unlock()
 
-		// Check cache
-		cache, err := b.loadCache(mod.Path)
-		if err == nil {
-			if entry, ok := cache.get(mod.Version, b.matrix); ok {
-				dir, _ := b.installDir(mod.Path, mod.Version)
-				return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
+		// When onTest is requested, bypass the build cache so test execution
+		// cannot be skipped by a cached build hit.
+		var cache *buildCache
+		if !b.runTest && !traceEnabled {
+			cache, err = b.loadCache(mod.Path)
+			if err == nil {
+				if entry, ok := cache.get(mod.Version, b.matrix); ok {
+					dir, _ := b.installDir(mod.Path, mod.Version)
+					return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
+				}
 			}
 		}
 
@@ -240,25 +278,71 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 
 		var out classfile.BuildResult
-		mod.OnBuild(buildContext, project, &out)
+		var records []trace.Record
+		var traceDiagnostics trace.ParseDiagnostics
+		traceScope := trace.Scope{
+			SourceRoot:  tmpSourceDir,
+			BuildRoot:   filepath.Join(tmpSourceDir, "_build"),
+			InstallRoot: installDir,
+		}
+		runOnBuild := func() error {
+			mod.OnBuild(buildContext, project, &out)
+			return nil
+		}
+		if traceEnabled {
+			traceRoots, err := b.traceRoots(targets, mod, tmpSourceDir, installDir)
+			if err != nil {
+				return Result{}, err
+			}
+			traceResult, err := captureOnBuildTrace(ctx, trace.CaptureOptions{
+				RootCwd:   tmpSourceDir,
+				KeepRoots: traceRoots,
+			}, runOnBuild)
+			if err != nil {
+				return Result{}, err
+			}
+			records = traceResult.Records
+			traceDiagnostics = traceResult.Diagnostics
+			traceScope.KeepRoots = slices.Clone(traceRoots)
+		} else {
+			if err := runOnBuild(); err != nil {
+				return Result{}, err
+			}
+		}
 
 		if len(out.Errs()) > 0 {
 			return Result{}, errors.Join(out.Errs()...)
 		}
+		if b.runTest && mod.OnTest != nil {
+			var testOut classfile.BuildResult
+			mod.OnTest(buildContext, project, &testOut)
+			if len(testOut.Errs()) > 0 {
+				return Result{}, fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))
+			}
+		}
 
 		// Save to cache
-		if cache == nil {
-			cache = &buildCache{}
-		}
-		cache.set(mod.Version, b.matrix, &buildEntry{
-			Metadata:  out.Metadata(),
-			BuildTime: time.Now(),
-		})
-		if err := b.saveCache(mod.Path, cache); err != nil {
-			return Result{}, err
+		if !b.runTest {
+			if cache == nil {
+				cache = &buildCache{}
+			}
+			cache.set(mod.Version, b.matrix, &buildEntry{
+				Metadata:  out.Metadata(),
+				BuildTime: time.Now(),
+			})
+			if err := b.saveCache(mod.Path, cache); err != nil {
+				return Result{}, err
+			}
 		}
 
-		return Result{Metadata: out.Metadata(), OutputDir: installDir}, nil
+		return Result{
+			Metadata:         out.Metadata(),
+			OutputDir:        installDir,
+			Trace:            records,
+			TraceScope:       traceScope,
+			TraceDiagnostics: traceDiagnostics,
+			InputDigests:     collectTraceInputDigests(records, traceScope),
+		}, nil
 	}
 
 	var results []Result
@@ -293,4 +377,55 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		results = append(results, result)
 	}
 	return results, nil
+}
+
+func collectTraceInputDigests(records []trace.Record, scope trace.Scope) map[string]string {
+	buildRoot := filepath.Clean(scope.BuildRoot)
+	if buildRoot == "" || len(records) == 0 {
+		return nil
+	}
+
+	paths := make(map[string]struct{})
+	for _, rec := range records {
+		for _, path := range rec.Inputs {
+			if !pathWithinRoot(path, buildRoot) {
+				continue
+			}
+			paths[path] = struct{}{}
+		}
+	}
+
+	digests := make(map[string]string, len(paths))
+	for path := range paths {
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		sum, err := fileDigest(path)
+		if err != nil {
+			continue
+		}
+		digests[path] = sum
+	}
+	if len(digests) == 0 {
+		return nil
+	}
+	return digests
+}
+
+func pathWithinRoot(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func fileDigest(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8]), nil
 }

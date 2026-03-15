@@ -1,0 +1,44 @@
+import "strings"
+
+id "jbeder/yaml-cpp"
+
+fromVer "0.9.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	contribOn := strings.contains(combo, "contrib-on")
+	toolsOn := strings.contains(combo, "tools-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "YAML_BUILD_SHARED_LIBS", false
+	c.defineBool "YAML_CPP_BUILD_TESTS", false
+	c.defineBool "YAML_CPP_BUILD_CONTRIB", contribOn
+	c.defineBool "YAML_CPP_BUILD_TOOLS", toolsOn
+	c.defineBool "YAML_CPP_INSTALL", true
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lyaml-cpp"
+}

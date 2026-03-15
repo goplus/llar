@@ -1,0 +1,45 @@
+import "strings"
+
+id "facebook/zstd"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	programsOn := strings.contains(combo, "programs-on")
+	threadingOn := strings.contains(combo, "threading-on")
+
+	c := cmake.new(ctx.SourceDir+"/build/cmake", ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "ZSTD_BUILD_SHARED", false
+	c.defineBool "ZSTD_BUILD_STATIC", true
+	c.defineBool "ZSTD_BUILD_PROGRAMS", programsOn
+	c.defineBool "ZSTD_PROGRAMS_LINK_SHARED", false
+	c.defineBool "ZSTD_MULTITHREAD_SUPPORT", threadingOn
+	c.defineBool "ZSTD_BUILD_TESTS", false
+	c.defineBool "ZSTD_BUILD_CONTRIB", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lzstd"
+}

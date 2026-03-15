@@ -1,0 +1,49 @@
+import "strings"
+
+id "gabime/spdlog"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	noExceptionsOn := strings.contains(combo, "noexceptions-on")
+	wcharOn := strings.contains(combo, "wchar-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "SPDLOG_BUILD_SHARED", false
+	c.defineBool "SPDLOG_BUILD_EXAMPLE", false
+	c.defineBool "SPDLOG_BUILD_EXAMPLE_HO", false
+	c.defineBool "SPDLOG_BUILD_TESTS", false
+	c.defineBool "SPDLOG_BUILD_TESTS_HO", false
+	c.defineBool "SPDLOG_BUILD_BENCH", false
+	c.defineBool "SPDLOG_WCHAR_SUPPORT", wcharOn
+	c.defineBool "SPDLOG_WCHAR_FILENAMES", false
+	c.defineBool "SPDLOG_WCHAR_CONSOLE", false
+	c.defineBool "SPDLOG_NO_EXCEPTIONS", noExceptionsOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lspdlog"
+}

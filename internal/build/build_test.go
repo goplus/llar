@@ -8,12 +8,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/trace"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
@@ -386,6 +388,97 @@ func TestNewBuilder(t *testing.T) {
 			t.Errorf("workspace dir %q doesn't contain .llar", b.workspaceDir)
 		}
 	})
+}
+
+func TestBuild_TraceCapturesOnlyMainModule(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.trace = true
+
+	oldCapture := captureOnBuildTrace
+	defer func() {
+		captureOnBuildTrace = oldCapture
+	}()
+
+	var calls int
+	var gotOpts trace.CaptureOptions
+	wantTrace := []trace.Record{{Argv: []string{"trace", "main"}}}
+	captureOnBuildTrace = func(ctx context.Context, opts trace.CaptureOptions, run func() error) (trace.CaptureResult, error) {
+		calls++
+		gotOpts = opts
+		if err := run(); err != nil {
+			return trace.CaptureResult{}, err
+		}
+		return trace.CaptureResult{Records: wantTrace}, nil
+	}
+
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	results, mods := loadAndBuild(t, b, store, main)
+
+	if calls != 1 {
+		t.Fatalf("captureOnBuildTrace call count = %d, want 1", calls)
+	}
+
+	root, ok := findResult(results, b, mods, "test/depresult")
+	if !ok {
+		t.Fatal("missing result for test/depresult")
+	}
+	if !reflect.DeepEqual(root.Trace, wantTrace) {
+		t.Fatalf("root trace = %#v, want %#v", root.Trace, wantTrace)
+	}
+	if !root.TraceDiagnostics.Trusted() {
+		t.Fatalf("root trace diagnostics = %#v, want trusted", root.TraceDiagnostics)
+	}
+	if gotOpts.RootCwd == "" {
+		t.Fatal("RootCwd should not be empty")
+	}
+	if len(gotOpts.KeepRoots) < 2 {
+		t.Fatalf("KeepRoots = %#v, want source root plus install roots", gotOpts.KeepRoots)
+	}
+
+	dep, ok := findResult(results, b, mods, "test/liba")
+	if !ok {
+		t.Fatal("missing result for test/liba")
+	}
+	if len(dep.Trace) != 0 {
+		t.Fatalf("dependency trace = %#v, want empty", dep.Trace)
+	}
+}
+
+func TestBuild_TraceBypassesMainModuleCache(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.trace = true
+
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-lPRECACHED",
+		BuildTime: time.Now(),
+	})
+	if err := b.saveCache("test/liba", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	oldCapture := captureOnBuildTrace
+	defer func() {
+		captureOnBuildTrace = oldCapture
+	}()
+	captureOnBuildTrace = func(ctx context.Context, opts trace.CaptureOptions, run func() error) (trace.CaptureResult, error) {
+		if err := run(); err != nil {
+			return trace.CaptureResult{}, err
+		}
+		return trace.CaptureResult{Records: []trace.Record{{Argv: []string{"trace", "cache-bypass"}}}}, nil
+	}
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if results[0].Metadata != "-lA" {
+		t.Fatalf("metadata = %q, want %q", results[0].Metadata, "-lA")
+	}
+	if len(results[0].Trace) != 1 {
+		t.Fatalf("trace len = %d, want 1", len(results[0].Trace))
+	}
 }
 
 // ---------------------------------------------------------------------------
