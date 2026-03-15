@@ -9,3 +9,7 @@ onRequire (proj, deps) => {
 onBuild (ctx, proj, out) => {
     echo "hello"
 }
+
+onTest (ctx, proj, out) => {
+    echo "test"
+}

@@ -1,0 +1,51 @@
+import "strings"
+
+id "libexpat/libexpat"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	geOn := strings.contains(combo, "ge-on")
+	largeSizeOn := strings.contains(combo, "large_size-on")
+	minSizeOn := strings.contains(combo, "min_size-on")
+	nsOn := strings.contains(combo, "ns-on")
+
+	sourceDir := ctx.SourceDir + "/expat"
+	c := cmake.new(sourceDir, sourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "EXPAT_SHARED_LIBS", false
+	c.defineBool "EXPAT_BUILD_TESTS", false
+	c.defineBool "EXPAT_BUILD_EXAMPLES", false
+	c.defineBool "EXPAT_BUILD_TOOLS", false
+	c.defineBool "EXPAT_BUILD_PKGCONFIG", false
+	c.defineBool "EXPAT_DTD", false
+	c.defineBool "EXPAT_GE", geOn
+	c.defineBool "EXPAT_LARGE_SIZE", largeSizeOn
+	c.defineBool "EXPAT_MIN_SIZE", minSizeOn
+	c.defineBool "EXPAT_NS", nsOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lexpat"
+}

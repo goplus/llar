@@ -1,0 +1,46 @@
+import "strings"
+
+id "uriparser/uriparser"
+
+fromVer "0.9.8"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	toolsOn := strings.contains(combo, "tools-on")
+	wcharOn := strings.contains(combo, "wchar-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "URIPARSER_SHARED_LIBS", false
+	c.defineBool "URIPARSER_BUILD_DOCS", false
+	c.defineBool "URIPARSER_BUILD_TESTS", false
+	c.defineBool "URIPARSER_BUILD_TOOLS", toolsOn
+	c.defineBool "URIPARSER_BUILD_CHAR", true
+	c.defineBool "URIPARSER_BUILD_WCHAR_T", wcharOn
+	c.defineBool "URIPARSER_ENABLE_INSTALL", true
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-luriparser"
+}

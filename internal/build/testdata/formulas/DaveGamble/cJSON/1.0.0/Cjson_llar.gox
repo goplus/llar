@@ -1,0 +1,51 @@
+import "strings"
+
+id "DaveGamble/cJSON"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	localesOn := strings.contains(combo, "locales-on")
+	utilsOn := strings.contains(combo, "utils-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "ENABLE_CJSON_UTILS", utilsOn
+	c.defineBool "ENABLE_LOCALES", localesOn
+	c.defineBool "ENABLE_CJSON_TEST", false
+	c.defineBool "ENABLE_SANITIZERS", false
+	c.defineBool "ENABLE_SAFE_STACK", false
+	c.defineBool "ENABLE_TARGET_EXPORT", false
+	c.defineBool "ENABLE_CUSTOM_COMPILER_FLAGS", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := "-lcjson"
+	if utilsOn {
+		meta += " -lcjson_utils"
+	}
+	out.setMetadata meta
+}

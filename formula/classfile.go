@@ -22,6 +22,7 @@ type ModuleF struct {
 
 	fOnRequire func(proj *Project, deps *ModuleDeps)
 	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
+	fOnTest    func(ctx *Context, proj *Project, out *BuildResult)
 
 	modPath    string
 	modFromVer string
@@ -196,6 +197,11 @@ func (b *BuildResult) SetMetadata(metadata string) {
 // OnBuild event is used to instruct the Formula to compile a project.
 func (p *ModuleF) OnBuild(f func(ctx *Context, proj *Project, out *BuildResult)) {
 	p.fOnBuild = f
+}
+
+// OnTest event is used to run post-build verification for a project.
+func (p *ModuleF) OnTest(f func(ctx *Context, proj *Project, out *BuildResult)) {
+	p.fOnTest = f
 }
 
 // -----------------------------------------------------------------------------

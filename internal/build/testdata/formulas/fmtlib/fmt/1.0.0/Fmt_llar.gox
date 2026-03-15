@@ -1,0 +1,43 @@
+import "strings"
+
+id "fmtlib/fmt"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	osAPIOn := strings.contains(combo, "osapi-on")
+	unicodeOn := strings.contains(combo, "unicode-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "FMT_DOC", false
+	c.defineBool "FMT_TEST", false
+	c.defineBool "FMT_OS", osAPIOn
+	c.defineBool "FMT_UNICODE", unicodeOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lfmt"
+}

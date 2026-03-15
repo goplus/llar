@@ -1,0 +1,63 @@
+import "strings"
+
+id "sqlite/sqlite"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	buildDir := ctx.SourceDir + "/_build"
+	err = exec("mkdir", "-p", buildDir, installDir+"/include", installDir+"/lib")
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	cflags := "-O2 -DSQLITE_THREADSAFE=1"
+	if strings.contains(combo, "dbstat-on") {
+		cflags += " -DSQLITE_ENABLE_DBSTAT_VTAB"
+	}
+	if strings.contains(combo, "json1-on") {
+		cflags += " -DSQLITE_ENABLE_JSON1"
+	}
+	if strings.contains(combo, "rtree-on") {
+		cflags += " -DSQLITE_ENABLE_RTREE"
+	}
+	if strings.contains(combo, "soundex-on") {
+		cflags += " -DSQLITE_SOUNDEX"
+	}
+
+	err = exec("sh", "-c", "cc "+cflags+" -c "+ctx.SourceDir+"/sqlite3.c -o "+buildDir+"/sqlite3.o")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("ar", "rcs", buildDir+"/libsqlite3.a", buildDir+"/sqlite3.o")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", ctx.SourceDir+"/sqlite3.h", installDir+"/include/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", ctx.SourceDir+"/sqlite3ext.h", installDir+"/include/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", buildDir+"/libsqlite3.a", installDir+"/lib/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lsqlite3"
+}
