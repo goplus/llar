@@ -75,6 +75,8 @@ type parsedCall struct {
 	ret  string
 }
 
+const syntheticMainPID int64 = 0
+
 var (
 	straceLinePrefixRE = regexp.MustCompile(`^\s*(?:(?:\[pid\s+)?(\d+)(?:\])?\s+)?(?:\d+\.\d+\s+)?(.*)$`)
 	resumedCallRE      = regexp.MustCompile(`^<\.\.\.\s+([A-Za-z_][A-Za-z0-9_]*)\s+resumed>\s*(.*)$`)
@@ -154,6 +156,7 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 	unfinished := map[int64]string{}
 	var ordered []*Record
 	var diagnostics ParseDiagnostics
+	var fallbackPID int64 = syntheticMainPID
 	opts.keepRoots = normalizeKeepRoots(opts.keepRoots)
 
 	stateOf := func(pid int64) *procState {
@@ -179,7 +182,9 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 		}
 		if !hasPID {
 			diagnostics.MissingPIDLines++
-			continue
+			pid = fallbackPID
+		} else {
+			fallbackPID = pid
 		}
 		if strings.HasSuffix(rawCall, unfinishedSuffix) {
 			unfinished[pid] = strings.TrimSuffix(rawCall, unfinishedSuffix)
@@ -211,16 +216,30 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 			}
 			childPID, err := strconv.ParseInt(fields[0], 10, 64)
 			if err == nil && childPID > 0 {
-				if _, ok := states[childPID]; ok {
+				childState, ok := states[childPID]
+				_, childHasUnfinished := unfinished[childPID]
+				if ok && !childHasUnfinished {
 					diagnostics.PIDStateResets++
+					childState = &procState{}
+					states[childPID] = childState
 				}
-				if _, ok := unfinished[childPID]; ok {
-					diagnostics.PIDStateResets++
+				if !ok {
+					childState = &procState{}
+					states[childPID] = childState
 				}
-				delete(unfinished, childPID)
-				states[childPID] = &procState{
-					parentPID: pid,
-					cwd:       state.cwd,
+				if childState.parentPID == 0 {
+					childState.parentPID = pid
+				}
+				if childState.cwd == "" || childState.cwd == opts.rootCwd {
+					childState.cwd = state.cwd
+				}
+				if childState.current != nil {
+					if childState.current.ParentPID == 0 {
+						childState.current.ParentPID = pid
+					}
+					if childState.current.Cwd == "" || childState.current.Cwd == opts.rootCwd {
+						childState.current.Cwd = state.cwd
+					}
 				}
 			}
 		case "chdir":
