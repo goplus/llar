@@ -211,11 +211,16 @@ func collectBuildTrace(ctx context.Context, store repo.Store, moduleArg, modPath
 			return evaluator.ProbeResult{}, fmt.Errorf("failed to write trace dump for %s [%s]: %w", moduleArg, combo, err)
 		}
 	}
+	outputManifest, err := evaluator.BuildOutputManifest(result.OutputDir, result.Metadata)
+	if err != nil {
+		return evaluator.ProbeResult{}, fmt.Errorf("failed to build output manifest for %s [%s]: %w", moduleArg, combo, err)
+	}
 	return evaluator.ProbeResult{
 		Records:          records,
 		Scope:            result.TraceScope,
 		TraceDiagnostics: result.TraceDiagnostics,
 		InputDigests:     result.InputDigests,
+		OutputManifest:   outputManifest,
 	}, nil
 }
 

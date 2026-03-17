@@ -1,0 +1,66 @@
+import "fmt"
+import "runtime"
+import "strings"
+
+id "openssl/openssl"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	asmOn := strings.contains(combo, "asm-on")
+	zlibOn := strings.contains(combo, "zlib-on")
+
+	target := ""
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		target = "linux-x86_64"
+	} else if runtime.GOOS == "linux" && runtime.GOARCH == "arm64" {
+		target = "linux-aarch64"
+	} else {
+		out.addErr fmt.errorf("unsupported OpenSSL host %s/%s", runtime.GOOS, runtime.GOARCH)
+		return
+	}
+
+	script := "cd \"$1\" && perl ./Configure " + target + " no-shared no-tests --prefix=\"$2\""
+	if !asmOn {
+		script += " no-asm"
+	}
+	if zlibOn {
+		script += " zlib --with-zlib-include=\"$3/include\" --with-zlib-lib=\"$3/lib\""
+	}
+	script += " && make -j2 && make install_sw"
+
+	if zlibOn {
+		depDir := ""
+		for _, dep := range proj.Deps {
+			if dep.Path != "madler/zlib" {
+				continue
+			}
+			depDir, err = ctx.outputDir(dep)
+			if err != nil {
+				out.addErr err
+				return
+			}
+			break
+		}
+		if depDir == "" {
+			out.addErr fmt.errorf("zlib-on requires madler/zlib dependency")
+			return
+		}
+		exec "sh", "-c", script, "sh", ctx.SourceDir, installDir, depDir
+	} else {
+		exec "sh", "-c", script, "sh", ctx.SourceDir, installDir
+	}
+	if lastErr != nil {
+		out.addErr lastErr
+		return
+	}
+
+	out.setMetadata "-lssl -lcrypto"
+}

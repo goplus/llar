@@ -1,0 +1,65 @@
+import "strings"
+
+id "opencv/opencv"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	calib3dOn := strings.contains(combo, "calib3d-on")
+	dnnOn := strings.contains(combo, "dnn-on")
+
+	buildList := "core,imgproc"
+	if calib3dOn {
+		buildList += ",calib3d"
+	}
+	if dnnOn {
+		buildList += ",dnn"
+	}
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "BUILD_TESTS", false
+	c.defineBool "BUILD_PERF_TESTS", false
+	c.defineBool "BUILD_EXAMPLES", false
+	c.defineBool "BUILD_opencv_apps", false
+	c.defineBool "WITH_FFMPEG", false
+	c.defineBool "WITH_JPEG", false
+	c.defineBool "WITH_PNG", false
+	c.defineBool "WITH_TIFF", false
+	c.defineBool "WITH_WEBP", false
+	c.defineBool "WITH_OPENEXR", false
+	c.define "BUILD_LIST", buildList
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := "-lopencv_core -lopencv_imgproc"
+	if calib3dOn {
+		meta += " -lopencv_calib3d"
+	}
+	if dnnOn {
+		meta += " -lopencv_dnn"
+	}
+	out.setMetadata meta
+}

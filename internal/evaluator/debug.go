@@ -10,10 +10,13 @@ import (
 )
 
 type DebugSummaryOptions struct {
-	RoleSampleLimit   int
-	InterestingLimit  int
-	InterestingTokens []string
-	Scope             trace.Scope
+	RoleSampleLimit             int
+	InterestingLimit            int
+	InterestingTokens           []string
+	IncludeInterestingPathFacts bool
+	IncludeBusinessGenericLines bool
+	GenericActionLimit          int
+	Scope                       trace.Scope
 }
 
 type DebugDiffSummaryOptions struct {
@@ -73,9 +76,15 @@ func formatGraphSummary(graph actionGraph, opts DebugSummaryOptions) string {
 	writeRoleSection(&b, graph, roleTooling, roleLimit)
 	writeRoleSection(&b, graph, rolePropagating, roleLimit)
 	writeRoleSection(&b, graph, roleDelivery, roleLimit)
+	if opts.IncludeBusinessGenericLines {
+		writeBusinessGenericSection(&b, graph, opts.GenericActionLimit)
+	}
 
 	for _, token := range opts.InterestingTokens {
 		writeInterestingSection(&b, graph, token, interestingLimit)
+		if opts.IncludeInterestingPathFacts {
+			writeInterestingPathFactsSection(&b, graph, token)
+		}
 	}
 	return b.String()
 }
@@ -286,6 +295,76 @@ func writeInterestingSection(b *strings.Builder, graph actionGraph, token string
 	}
 }
 
+func writeInterestingPathFactsSection(b *strings.Builder, graph actionGraph, token string) {
+	var paths []string
+	for path := range graph.paths {
+		if strings.Contains(path, token) {
+			paths = append(paths, path)
+		}
+	}
+	slices.Sort(paths)
+
+	b.WriteString("path facts ")
+	b.WriteString(token)
+	b.WriteString(":\n")
+	if len(paths) == 0 {
+		b.WriteString("  absent\n")
+		return
+	}
+	for _, path := range paths {
+		facts := graph.paths[path]
+		b.WriteString("  ")
+		b.WriteString(path)
+		b.WriteString(" => ")
+		b.WriteString(facts.role.String())
+		b.WriteByte('\n')
+		writePathFactActions(b, "writers", graph, facts.writers)
+		writePathFactActions(b, "readers", graph, facts.readers)
+	}
+}
+
+func writeBusinessGenericSection(b *strings.Builder, graph actionGraph, limit int) {
+	indexes := make([]int, 0)
+	for idx, action := range graph.actions {
+		if action.kind != kindGeneric {
+			continue
+		}
+		if idx >= len(graph.business) || !graph.business[idx] {
+			continue
+		}
+		indexes = append(indexes, idx)
+	}
+	b.WriteString("business generic actions (")
+	b.WriteString(strconv.Itoa(len(indexes)))
+	b.WriteString("):\n")
+	if len(indexes) == 0 {
+		b.WriteString("  none\n")
+		return
+	}
+	selected := sampleActionIndexes(graph, indexes, limit)
+	for _, idx := range selected {
+		action := graph.actions[idx]
+		b.WriteString("  [")
+		b.WriteString(strconv.Itoa(idx))
+		b.WriteString("] key=")
+		b.WriteString(action.actionKey)
+		b.WriteByte('\n')
+		b.WriteString("    argv: ")
+		b.WriteString(strings.Join(action.argv, " "))
+		b.WriteByte('\n')
+		if len(action.reads) > 0 {
+			b.WriteString("    reads: ")
+			b.WriteString(strings.Join(action.reads, ", "))
+			b.WriteByte('\n')
+		}
+		if len(action.writes) > 0 {
+			b.WriteString("    writes: ")
+			b.WriteString(strings.Join(action.writes, ", "))
+			b.WriteByte('\n')
+		}
+	}
+}
+
 func writeActionSamples(b *strings.Builder, label string, graph actionGraph, indexes []int, limit int) {
 	b.WriteString("  ")
 	b.WriteString(label)
@@ -425,7 +504,7 @@ func sampleActionIndexes(graph actionGraph, indexes []int, limit int) []int {
 			return 0
 		}
 	})
-	if len(sorted) > limit {
+	if limit > 0 && len(sorted) > limit {
 		sorted = sorted[:limit]
 	}
 	return sorted

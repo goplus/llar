@@ -475,10 +475,15 @@ func TestE2E_TraceAnalyze_LocalTracecmakeBuild(t *testing.T) {
 }
 
 func probeResultFromBuildResult(result Result) evaluator.ProbeResult {
+	outputManifest, err := evaluator.BuildOutputManifest(result.OutputDir, result.Metadata)
+	if err != nil {
+		panic(fmt.Sprintf("BuildOutputManifest(%q): %v", result.OutputDir, err))
+	}
 	return evaluator.ProbeResult{
-		Records:      result.Trace,
-		Scope:        result.TraceScope,
-		InputDigests: maps.Clone(result.InputDigests),
+		Records:        result.Trace,
+		Scope:          result.TraceScope,
+		InputDigests:   maps.Clone(result.InputDigests),
+		OutputManifest: outputManifest,
 	}
 }
 
@@ -596,7 +601,35 @@ func TestE2E_Watch_RealOptionClassification_LocalTraceoptions(t *testing.T) {
 		}
 	}
 
-	logPath := writeGraphLogForTest(t, report.String())
+	evidenceTokens := []string{
+		"/_build/trace_options.h",
+		"/_build/libtracecore.a",
+		"/_build/tracecli",
+		"/install/bin/tracecli",
+		"/install/include/trace_alias.h",
+	}
+	var evidence strings.Builder
+	for _, combo := range []string{
+		"api-off-cli-off-ship-off",
+		"api-on-cli-off-ship-off",
+		"api-off-cli-on-ship-off",
+		"api-off-cli-off-ship-on",
+	} {
+		probe, ok := resultsByCombo[combo]
+		if !ok {
+			continue
+		}
+		if evidence.Len() > 0 {
+			evidence.WriteString("\n\n")
+		}
+		evidence.WriteString(formatProbeEvidenceForTest(combo, probe, evidenceTokens, 12))
+	}
+
+	graphDump := report.String()
+	if evidence.Len() > 0 {
+		graphDump += "\n\n" + evidence.String()
+	}
+	logPath := writeGraphLogForTest(t, graphDump)
 	t.Logf("option classification summary written to %s", logPath)
 	traceLogPath := writeTraceLogForTest(t, formatTraceCombosForTest(resultsByCombo))
 	t.Logf("option trace records written to %s", traceLogPath)
@@ -613,6 +646,183 @@ func TestE2E_Watch_RealOptionClassification_LocalTraceoptions(t *testing.T) {
 	}
 }
 
+func TestE2E_Watch_RealOptionClassification(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("real option classification test requires Linux")
+	}
+	if testing.Short() {
+		t.Skip("skipping real option classification test in short mode")
+	}
+
+	type testCase struct {
+		name              string
+		tools             []string
+		main              module.Version
+		matrix            formula.Matrix
+		interestingTokens []string
+		assert            func(t *testing.T, combos []string, trusted bool, matrix formula.Matrix)
+	}
+
+	cases := []testCase{
+		{
+			name:  "OpenSSLAsmZlib",
+			tools: []string{"git", "perl", "make", "cc", "strace"},
+			main:  module.Version{Path: "openssl/openssl", Version: "openssl-3.6.1"},
+			matrix: formula.Matrix{
+				Options: map[string][]string{
+					"asm":  {"asm-off", "asm-on"},
+					"zlib": {"zlib-off", "zlib-on"},
+				},
+				DefaultOptions: map[string][]string{
+					"asm":  {"asm-off"},
+					"zlib": {"zlib-off"},
+				},
+			},
+			interestingTokens: []string{
+				"/configdata.pm",
+				"/include/openssl/",
+				"/providers/legacy",
+				"/crypto/",
+				"/ssl/",
+			},
+			assert: func(t *testing.T, combos []string, trusted bool, matrix formula.Matrix) {
+				t.Helper()
+				if trusted {
+					t.Fatalf("Watch() unexpectedly returned trusted=true; combos=%v", combos)
+				}
+			},
+		},
+		{
+			name:  "FFmpegNetworkZlib",
+			tools: []string{"git", "make", "cc", "strace"},
+			main:  module.Version{Path: "FFmpeg/FFmpeg", Version: "n8.0.1"},
+			matrix: formula.Matrix{
+				Options: map[string][]string{
+					"network": {"network-off", "network-on"},
+					"zlib":    {"zlib-off", "zlib-on"},
+				},
+				DefaultOptions: map[string][]string{
+					"network": {"network-off"},
+					"zlib":    {"zlib-off"},
+				},
+			},
+			interestingTokens: []string{
+				"/config.h",
+				"/libavcodec/",
+				"/libavformat/",
+				"/libavutil/",
+				"/libswscale/",
+			},
+			assert: func(t *testing.T, combos []string, trusted bool, matrix formula.Matrix) {
+				t.Helper()
+				want := matrix.Combinations()
+				if !slices.Equal(combos, want) {
+					t.Fatalf("Watch() combos = %v, want full matrix %v", combos, want)
+				}
+			},
+		},
+		{
+			name:  "OpenCVDnnCalib3d",
+			tools: []string{"git", "cmake", "c++", "python3", "strace"},
+			main:  module.Version{Path: "opencv/opencv", Version: "4.9.0"},
+			matrix: formula.Matrix{
+				Options: map[string][]string{
+					"calib3d": {"calib3d-off", "calib3d-on"},
+					"dnn":     {"dnn-off", "dnn-on"},
+				},
+				DefaultOptions: map[string][]string{
+					"calib3d": {"calib3d-off"},
+					"dnn":     {"dnn-off"},
+				},
+			},
+			interestingTokens: []string{
+				"/opencv_modules.hpp",
+				"/opencv2/opencv_modules.hpp",
+				"/modules/dnn/",
+				"/modules/calib3d/",
+				"/python/",
+			},
+			assert: func(t *testing.T, combos []string, trusted bool, matrix formula.Matrix) {
+				t.Helper()
+				if trusted {
+					t.Fatalf("Watch() unexpectedly returned trusted=true; combos=%v", combos)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			for _, tool := range tc.tools {
+				if _, err := exec.LookPath(tool); err != nil {
+					t.Skipf("%s not found, skipping %s", tool, tc.name)
+				}
+			}
+
+			store := setupTestStore(t)
+			workspaceDir := t.TempDir()
+			var report evaluator.DebugReport
+			resultsByCombo := make(map[string]evaluator.ProbeResult)
+
+			combos, trusted, err := evaluator.Watch(context.Background(), tc.matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+				t.Logf("%s probe start: %s", tc.name, combo)
+				b := &Builder{
+					store:        store,
+					matrix:       combo,
+					trace:        true,
+					workspaceDir: workspaceDir,
+					newRepo:      vcs.NewRepo,
+				}
+
+				mods, err := modules.Load(ctx, tc.main, modules.Options{FormulaStore: store})
+				if err != nil {
+					return evaluator.ProbeResult{}, err
+				}
+
+				savedStdout, savedStderr := os.Stdout, os.Stderr
+				devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+				if err != nil {
+					return evaluator.ProbeResult{}, err
+				}
+				defer func() {
+					devNull.Close()
+					os.Stdout = savedStdout
+					os.Stderr = savedStderr
+				}()
+				os.Stdout = devNull
+				os.Stderr = devNull
+
+				results, err := b.Build(ctx, mods)
+				if err != nil {
+					return evaluator.ProbeResult{}, err
+				}
+				result := results[len(results)-1]
+				probeResult := probeResultFromBuildResult(result)
+				report.AddCombo(combo, probeResult, evaluator.DebugSummaryOptions{
+					RoleSampleLimit:             10,
+					InterestingLimit:            10,
+					InterestingTokens:           tc.interestingTokens,
+					IncludeInterestingPathFacts: true,
+					IncludeBusinessGenericLines: true,
+				})
+				resultsByCombo[combo] = probeResult
+				return probeResult, nil
+			})
+			if err != nil {
+				t.Fatalf("Watch() failed: %v", err)
+			}
+
+			logPath := writeGraphLogForTest(t, report.String())
+			t.Logf("%s option classification summary written to %s", tc.name, logPath)
+			traceLogPath := writeTraceLogForTest(t, formatTraceCombosForTest(resultsByCombo))
+			t.Logf("%s option trace records written to %s", tc.name, traceLogPath)
+
+			tc.assert(t, combos, trusted, tc.matrix)
+		})
+	}
+}
+
 func formatTraceCombosForTest(results map[string]evaluator.ProbeResult) string {
 	if len(results) == 0 {
 		return ""
@@ -626,6 +836,10 @@ func formatTraceCombosForTest(results map[string]evaluator.ProbeResult) string {
 		b.WriteString("COMBO ")
 		b.WriteString(combo)
 		b.WriteByte('\n')
+		if diagnostics := formatTraceDiagnosticsForTest(results[combo].TraceDiagnostics); diagnostics != "" {
+			b.WriteString("DIAGNOSTICS\n")
+			b.WriteString(diagnostics)
+		}
 		if len(results[combo].InputDigests) > 0 {
 			b.WriteString("DIGESTS\n")
 			for _, path := range slices.Sorted(maps.Keys(results[combo].InputDigests)) {
@@ -637,6 +851,83 @@ func formatTraceCombosForTest(results map[string]evaluator.ProbeResult) string {
 			}
 		}
 		b.WriteString(formatTraceRecordsForTest(results[combo].Records))
+	}
+	return b.String()
+}
+
+func formatTraceDiagnosticsForTest(d trace.ParseDiagnostics) string {
+	if d.UnrecognizedLines == 0 &&
+		d.ResumedMismatches == 0 &&
+		d.InvalidCalls == 0 &&
+		d.MissingPIDLines == 0 &&
+		d.PIDStateResets == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	if d.UnrecognizedLines != 0 {
+		b.WriteString("   unrecognized_lines = ")
+		b.WriteString(strconv.Itoa(d.UnrecognizedLines))
+		b.WriteByte('\n')
+	}
+	if d.ResumedMismatches != 0 {
+		b.WriteString("   resumed_mismatches = ")
+		b.WriteString(strconv.Itoa(d.ResumedMismatches))
+		b.WriteByte('\n')
+	}
+	if d.InvalidCalls != 0 {
+		b.WriteString("   invalid_calls = ")
+		b.WriteString(strconv.Itoa(d.InvalidCalls))
+		b.WriteByte('\n')
+	}
+	if d.MissingPIDLines != 0 {
+		b.WriteString("   missing_pid_lines = ")
+		b.WriteString(strconv.Itoa(d.MissingPIDLines))
+		b.WriteByte('\n')
+	}
+	if d.PIDStateResets != 0 {
+		b.WriteString("   pid_state_resets = ")
+		b.WriteString(strconv.Itoa(d.PIDStateResets))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func formatProbeEvidenceForTest(label string, probe evaluator.ProbeResult, tokens []string, limit int) string {
+	var b strings.Builder
+	b.WriteString("PROBE EVIDENCE ")
+	b.WriteString(label)
+	b.WriteString(":\n")
+	if diagnostics := formatTraceDiagnosticsForTest(probe.TraceDiagnostics); diagnostics != "" {
+		b.WriteString("trace diagnostics:\n")
+		b.WriteString(diagnostics)
+	} else {
+		b.WriteString("trace diagnostics: clean\n")
+	}
+	b.WriteString("digest matches:\n")
+	matchedDigests := 0
+	for _, path := range slices.Sorted(maps.Keys(probe.InputDigests)) {
+		for _, token := range tokens {
+			if token == "" || !strings.Contains(path, token) {
+				continue
+			}
+			b.WriteString("  ")
+			b.WriteString(path)
+			b.WriteString(" = ")
+			b.WriteString(probe.InputDigests[path])
+			b.WriteByte('\n')
+			matchedDigests++
+			break
+		}
+	}
+	if matchedDigests == 0 {
+		b.WriteString("  absent\n")
+	}
+	b.WriteString(strings.TrimRight(evaluator.DebugTraceMatches(probe.Records, tokens, limit), "\n"))
+	for _, token := range tokens {
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+		b.WriteString(strings.TrimRight(evaluator.DebugPathFacts(probe.Records, probe.Scope, token), "\n"))
 	}
 	return b.String()
 }

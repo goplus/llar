@@ -93,6 +93,47 @@ func TestWatchStopsReducingZeroDiffOption(t *testing.T) {
 	}
 }
 
+func TestIsTrustedGraphRejectsBusinessCodegen(t *testing.T) {
+	graph := actionGraph{
+		actions: []actionNode{
+			{kind: kindCodegen, writes: []string{"/build/generated.c"}},
+			{kind: kindCompile, reads: []string{"/build/generated.c"}, writes: []string{"/build/generated.o"}},
+			{kind: kindArchive, reads: []string{"/build/generated.o"}, writes: []string{"/build/libfoo.a"}},
+			{kind: kindInstall, reads: []string{"/build/libfoo.a"}, writes: []string{"/install/lib/libfoo.a"}},
+		},
+		business: []bool{true, true, true, true},
+		paths: map[string]pathFacts{
+			"/build/generated.c": {
+				path:    "/build/generated.c",
+				role:    rolePropagating,
+				writers: []int{0},
+				readers: []int{1},
+			},
+			"/build/generated.o": {
+				path:    "/build/generated.o",
+				role:    rolePropagating,
+				writers: []int{1},
+				readers: []int{2},
+			},
+			"/build/libfoo.a": {
+				path:    "/build/libfoo.a",
+				role:    roleDelivery,
+				writers: []int{2},
+				readers: []int{3},
+			},
+			"/install/lib/libfoo.a": {
+				path:    "/install/lib/libfoo.a",
+				role:    roleDelivery,
+				writers: []int{3},
+			},
+		},
+	}
+
+	if isTrustedGraph(graph) {
+		t.Fatalf("isTrustedGraph(codegen) = true, want false")
+	}
+}
+
 func TestWatchZeroDiffDoesNotBridgeIndependentOptions(t *testing.T) {
 	matrix := formula.Matrix{
 		Require: map[string][]string{
@@ -405,27 +446,75 @@ func TestWatchCollidingOptions(t *testing.T) {
 	}
 }
 
-func TestWatchCollidingProducerConsumerOptions(t *testing.T) {
+func TestWatchSuppressesPureWriteWriteCollisionWhenOutputManifestMatches(t *testing.T) {
 	matrix := testMatrix()
-	traces := map[string][]trace.Record{
+	manifest := outputManifest("share/generated.txt", OutputEntry{Kind: "file", Digest: "same"})
+	traces := map[string]ProbeResult{
 		"amd64-linux|doc-off-tls-off": {
-			record([]string{"cc", "-c", "core.c"}, "/tmp/work", []string{"/tmp/work/core.c"}, []string{"/tmp/work/build/core.o"}),
-			record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work", []string{"/tmp/work/build/core.o"}, []string{"/tmp/work/out/lib/libfoo.a"}),
+			OutputManifest: manifest,
 		},
 		"amd64-linux|doc-on-tls-off": {
-			record([]string{"cc", "-DDOC", "-c", "core.c"}, "/tmp/work", []string{"/tmp/work/core.c"}, []string{"/tmp/work/build/core.o"}),
-			record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work", []string{"/tmp/work/build/core.o"}, []string{"/tmp/work/out/lib/libfoo.a"}),
+			Records: []trace.Record{
+				record([]string{"python", "gen_doc_asset.py"}, "/tmp/work", []string{"/tmp/work/doc.in"}, []string{"/tmp/work/out/share/generated.txt"}),
+			},
+			OutputManifest: manifest,
 		},
 		"amd64-linux|doc-off-tls-on": {
-			record([]string{"cc", "-c", "core.c"}, "/tmp/work", []string{"/tmp/work/core.c"}, []string{"/tmp/work/build/core.o"}),
-			record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work", []string{"/tmp/work/build/core.o"}, []string{"/tmp/work/out/lib/libfoo.a"}),
-			record([]string{"cc", "-c", "cli.c"}, "/tmp/work", []string{"/tmp/work/cli.c"}, []string{"/tmp/work/build/cli.o"}),
-			record([]string{"cc", "build/cli.o", "out/lib/libfoo.a", "-o", "out/bin/foo"}, "/tmp/work", []string{"/tmp/work/build/cli.o", "/tmp/work/out/lib/libfoo.a"}, []string{"/tmp/work/out/bin/foo"}),
+			Records: []trace.Record{
+				record([]string{"perl", "gen_tls_asset.pl"}, "/tmp/work", []string{"/tmp/work/tls.in"}, []string{"/tmp/work/out/share/generated.txt"}),
+			},
+			OutputManifest: manifest,
 		},
 	}
 
 	got, _, err := Watch(context.Background(), matrix, func(_ context.Context, combo string) (ProbeResult, error) {
-		return ProbeResult{Records: traces[combo]}, nil
+		return traces[combo], nil
+	})
+	if err != nil {
+		t.Fatalf("Watch() unexpected error: %v", err)
+	}
+
+	want := []string{
+		"amd64-linux|doc-off-tls-off",
+		"amd64-linux|doc-off-tls-on",
+		"amd64-linux|doc-on-tls-off",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Watch() = %v, want %v", got, want)
+	}
+}
+
+func TestWatchCollidingProducerConsumerOptions(t *testing.T) {
+	matrix := testMatrix()
+	manifest := outputManifest("lib/libfoo.a", OutputEntry{Kind: "archive", Digest: "same"})
+	traces := map[string]ProbeResult{
+		"amd64-linux|doc-off-tls-off": {
+			Records: []trace.Record{
+				record([]string{"cc", "-c", "core.c"}, "/tmp/work", []string{"/tmp/work/core.c"}, []string{"/tmp/work/build/core.o"}),
+				record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work", []string{"/tmp/work/build/core.o"}, []string{"/tmp/work/out/lib/libfoo.a"}),
+			},
+			OutputManifest: manifest,
+		},
+		"amd64-linux|doc-on-tls-off": {
+			Records: []trace.Record{
+				record([]string{"cc", "-DDOC", "-c", "core.c"}, "/tmp/work", []string{"/tmp/work/core.c"}, []string{"/tmp/work/build/core.o"}),
+				record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work", []string{"/tmp/work/build/core.o"}, []string{"/tmp/work/out/lib/libfoo.a"}),
+			},
+			OutputManifest: manifest,
+		},
+		"amd64-linux|doc-off-tls-on": {
+			Records: []trace.Record{
+				record([]string{"cc", "-c", "core.c"}, "/tmp/work", []string{"/tmp/work/core.c"}, []string{"/tmp/work/build/core.o"}),
+				record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work", []string{"/tmp/work/build/core.o"}, []string{"/tmp/work/out/lib/libfoo.a"}),
+				record([]string{"cc", "-c", "cli.c"}, "/tmp/work", []string{"/tmp/work/cli.c"}, []string{"/tmp/work/build/cli.o"}),
+				record([]string{"cc", "build/cli.o", "out/lib/libfoo.a", "-o", "out/bin/foo"}, "/tmp/work", []string{"/tmp/work/build/cli.o", "/tmp/work/out/lib/libfoo.a"}, []string{"/tmp/work/out/bin/foo"}),
+			},
+			OutputManifest: manifest,
+		},
+	}
+
+	got, _, err := Watch(context.Background(), matrix, func(_ context.Context, combo string) (ProbeResult, error) {
+		return traces[combo], nil
 	})
 	if err != nil {
 		t.Fatalf("Watch() unexpected error: %v", err)
@@ -474,6 +563,70 @@ func TestWatchIgnoresToolingOnlyOptions(t *testing.T) {
 			record([]string{"cc", "OFF64_T.c.o", "-o", "cmTC_tls"}, "/tmp/work/_build/CMakeFiles/CMakeScratch/TryCompile-tls",
 				[]string{"/tmp/work/_build/CMakeFiles/CMakeScratch/TryCompile-tls/OFF64_T.c.o"},
 				[]string{"/tmp/work/_build/CMakeFiles/CMakeScratch/TryCompile-tls/cmTC_tls"}),
+		},
+	}
+
+	got, _, err := Watch(context.Background(), matrix, func(_ context.Context, combo string) (ProbeResult, error) {
+		return ProbeResult{Records: traces[combo]}, nil
+	})
+	if err != nil {
+		t.Fatalf("Watch() unexpected error: %v", err)
+	}
+
+	want := []string{
+		"amd64-linux|doc-off-tls-off",
+		"amd64-linux|doc-off-tls-on",
+		"amd64-linux|doc-on-tls-off",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Watch() = %v, want %v", got, want)
+	}
+}
+
+func TestWatchIgnoresSharedToolingParamTouches(t *testing.T) {
+	matrix := testMatrix()
+	traces := map[string][]trace.Record{
+		"amd64-linux|doc-off-tls-off": {
+			record([]string{"cc", "-c", "core.c"}, "/tmp/work",
+				[]string{"/tmp/work/core.c"},
+				[]string{"/tmp/work/build/core.o"}),
+			record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work",
+				[]string{"/tmp/work/build/core.o"},
+				[]string{"/tmp/work/out/lib/libfoo.a"}),
+		},
+		"amd64-linux|doc-on-tls-off": {
+			record([]string{"cc", "-c", "core.c"}, "/tmp/work",
+				[]string{"/tmp/work/core.c"},
+				[]string{"/tmp/work/build/core.o"}),
+			record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work",
+				[]string{"/tmp/work/build/core.o"},
+				[]string{"/tmp/work/out/lib/libfoo.a"}),
+			record([]string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
+				[]string{"/tmp/work/CMakeLists.txt"},
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-12345/CheckIncludeFile.c"}),
+			record([]string{"cc", "-c", "CheckIncludeFile.c", "-o", "CheckIncludeFile.c.o"}, "/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-12345",
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-12345/CheckIncludeFile.c"},
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-12345/CheckIncludeFile.c.o"}),
+			record([]string{"ld", "-o", "cmTC_a1b2c3", "CheckIncludeFile.c.o"}, "/tmp/work/_build/CMakeFiles/CMakeTmp",
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-12345/CheckIncludeFile.c.o"},
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/cmTC_a1b2c3"}),
+		},
+		"amd64-linux|doc-off-tls-on": {
+			record([]string{"cc", "-c", "core.c"}, "/tmp/work",
+				[]string{"/tmp/work/core.c"},
+				[]string{"/tmp/work/build/core.o"}),
+			record([]string{"ar", "rcs", "libfoo.a", "core.o"}, "/tmp/work",
+				[]string{"/tmp/work/build/core.o"},
+				[]string{"/tmp/work/out/lib/libfoo.a"}),
+			record([]string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
+				[]string{"/tmp/work/CMakeLists.txt"},
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-67890/OFF64_T.c"}),
+			record([]string{"cc", "-c", "OFF64_T.c", "-o", "OFF64_T.c.o"}, "/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-67890",
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-67890/OFF64_T.c"},
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-67890/OFF64_T.c.o"}),
+			record([]string{"ld", "-o", "cmTC_d4e5f6", "OFF64_T.c.o"}, "/tmp/work/_build/CMakeFiles/CMakeTmp",
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/TryCompile-67890/OFF64_T.c.o"},
+				[]string{"/tmp/work/_build/CMakeFiles/CMakeTmp/cmTC_d4e5f6"}),
 		},
 	}
 
@@ -578,7 +731,7 @@ func TestAddProfilePathKeepsUnknownSeparateButColliding(t *testing.T) {
 	if _, ok := left.unknownWrites[path]; !ok {
 		t.Fatalf("unknown write missing from unknownWrites")
 	}
-	if !profilesCollide([]optionProfile{left}, []optionProfile{right}) {
+	if !profilesCollide([]optionVariant{{profile: left}}, []optionVariant{{profile: right}}) {
 		t.Fatalf("profilesCollide() = false, want true")
 	}
 }
@@ -1361,6 +1514,14 @@ func record(argv []string, cwd string, inputs, changes []string) trace.Record {
 	}
 }
 
+func outputManifest(path string, entry OutputEntry) OutputManifest {
+	return OutputManifest{
+		Entries: map[string]OutputEntry{
+			path: entry,
+		},
+	}
+}
+
 func TestMatchActionFingerprintsIgnoresCompileCwd(t *testing.T) {
 	scope := trace.Scope{
 		SourceRoot:  "/tmp/work",
@@ -1572,7 +1733,7 @@ func TestDebugLocalTraceoptionsApiCliCollision(t *testing.T) {
 	t.Logf("cli unknown-reads=%v", slices.Sorted(maps.Keys(cliProfile.unknownReads)))
 	t.Logf("cli delivery-writes=%v", slices.Sorted(maps.Keys(cliProfile.deliveryWrites)))
 
-	t.Logf("profilesCollide=%v", profilesCollide([]optionProfile{apiProfile}, []optionProfile{cliProfile}))
+	t.Logf("profilesCollide=%v", profilesCollide([]optionVariant{{profile: apiProfile}}, []optionVariant{{profile: cliProfile}}))
 }
 
 func parseTraceDumpForTest(path string) (map[string]ProbeResult, error) {

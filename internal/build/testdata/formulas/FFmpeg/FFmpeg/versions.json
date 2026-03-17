@@ -1,0 +1,11 @@
+{
+	"path": "FFmpeg/FFmpeg",
+	"deps": {
+		"n8.0.1": [
+			{"path": "madler/zlib", "version": "v1.2.11"}
+		],
+		"1.0.0": [
+			{"path": "madler/zlib", "version": "v1.2.11"}
+		]
+	}
+}

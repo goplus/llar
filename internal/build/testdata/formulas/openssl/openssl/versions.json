@@ -1,0 +1,11 @@
+{
+	"path": "openssl/openssl",
+	"deps": {
+		"openssl-3.6.1": [
+			{"path": "madler/zlib", "version": "v1.2.11"}
+		],
+		"1.0.0": [
+			{"path": "madler/zlib", "version": "v1.2.11"}
+		]
+	}
+}

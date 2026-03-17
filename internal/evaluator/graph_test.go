@@ -95,6 +95,165 @@ func TestBuildGraphClassifiesActionsAndKeys(t *testing.T) {
 	}
 }
 
+func TestBuildGraphClassifiesPerlConfigureAndShellInstall(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot:  "/tmp/work",
+		BuildRoot:   "/tmp/work/_build",
+		InstallRoot: "/tmp/work/out",
+	}
+	records := []trace.Record{
+		record(
+			[]string{"perl", "configdata.pm"},
+			"/tmp/work",
+			[]string{"/tmp/work/configdata.pm", "/tmp/work/Makefile.in"},
+			[]string{"/tmp/work/Makefile.new", "/tmp/work/Makefile"},
+		),
+		record(
+			[]string{"sh", "-c", "cp apps/openssl /tmp/work/out/bin/openssl.new && mv -f /tmp/work/out/bin/openssl.new /tmp/work/out/bin/openssl"},
+			"/tmp/work",
+			[]string{"/tmp/work/apps/openssl"},
+			[]string{"/tmp/work/out/bin/openssl.new", "/tmp/work/out/bin/openssl"},
+		),
+	}
+
+	graph := buildGraphWithScope(records, scope)
+
+	if graph.actions[0].kind != kindConfigure {
+		t.Fatalf("perl configure kind = %v, want %v", graph.actions[0].kind, kindConfigure)
+	}
+	if graph.actions[1].kind != kindInstall {
+		t.Fatalf("shell install kind = %v, want %v", graph.actions[1].kind, kindInstall)
+	}
+}
+
+func TestBuildGraphClassifiesArtifactWritingShellCompile(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"sh", "-c", "cc -c foo.c -o build/foo.o"},
+			"/tmp/work",
+			[]string{"/tmp/work/foo.c"},
+			[]string{"/tmp/work/build/foo.o"},
+		),
+	}
+
+	graph := buildGraph(records)
+
+	if graph.actions[0].kind != kindCompile {
+		t.Fatalf("shell artifact writer kind = %v, want %v", graph.actions[0].kind, kindCompile)
+	}
+}
+
+func TestBuildGraphKeepsCodegenScriptGeneric(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"perl", "util/dofile.pl", "template.in", "providers/legacyprov.c"},
+			"/tmp/work",
+			[]string{"/tmp/work/template.in"},
+			[]string{"/tmp/work/providers/legacyprov.c"},
+		),
+		record(
+			[]string{"sh", "-c", "/usr/bin/perl arm-xlate.pl linux64 crypto/sha/sha1-armv8.S"},
+			"/tmp/work",
+			[]string{"/tmp/work/arm-xlate.pl"},
+			[]string{"/tmp/work/crypto/sha/sha1-armv8.S"},
+		),
+	}
+
+	graph := buildGraph(records)
+
+	if graph.actions[0].kind != kindGeneric {
+		t.Fatalf("perl codegen kind = %v, want %v", graph.actions[0].kind, kindGeneric)
+	}
+	if graph.actions[1].kind != kindGeneric {
+		t.Fatalf("shell codegen kind = %v, want %v", graph.actions[1].kind, kindGeneric)
+	}
+}
+
+func TestBuildGraphPromotesBusinessCodegenActions(t *testing.T) {
+	scope := trace.Scope{InstallRoot: "/tmp/work/install"}
+	records := []trace.Record{
+		record(
+			[]string{"perl", "util/dofile.pl", "template.in", "/tmp/work/_build/providers/legacyprov.c"},
+			"/tmp/work",
+			[]string{"/tmp/work/template.in"},
+			[]string{"/tmp/work/_build/providers/legacyprov.c"},
+		),
+		record(
+			[]string{"cc", "-c", "/tmp/work/_build/providers/legacyprov.c", "-o", "/tmp/work/_build/providers/legacyprov.o"},
+			"/tmp/work",
+			[]string{"/tmp/work/_build/providers/legacyprov.c"},
+			[]string{"/tmp/work/_build/providers/legacyprov.o"},
+		),
+		record(
+			[]string{"ar", "rcs", "/tmp/work/_build/libcrypto.a", "/tmp/work/_build/providers/legacyprov.o"},
+			"/tmp/work",
+			[]string{"/tmp/work/_build/providers/legacyprov.o"},
+			[]string{"/tmp/work/_build/libcrypto.a"},
+		),
+		record(
+			[]string{"install", "-m644", "/tmp/work/_build/libcrypto.a", "/tmp/work/install/lib/libcrypto.a"},
+			"/tmp/work",
+			[]string{"/tmp/work/_build/libcrypto.a"},
+			[]string{"/tmp/work/install/lib/libcrypto.a"},
+		),
+	}
+
+	graph := buildGraphWithScope(records, scope)
+
+	if graph.actions[0].kind != kindCodegen {
+		t.Fatalf("codegen kind = %v, want %v", graph.actions[0].kind, kindCodegen)
+	}
+	if !graph.business[0] {
+		t.Fatalf("codegen business = false, want true")
+	}
+	if got := graph.actions[0].actionKey; !strings.Contains(got, "codegen|perl|") {
+		t.Fatalf("codegen actionKey = %q, want codegen key", got)
+	}
+	if got := graph.paths[normalizePath("/tmp/work/_build/providers/legacyprov.c")].role; got != rolePropagating {
+		t.Fatalf("role(generated c) = %v, want %v", got, rolePropagating)
+	}
+}
+
+func TestBuildGraphClassifiesShellWrappedCompile(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"sh", "-c", "gcc -I. -MMD -MF build/foo.d.tmp -c -o build/foo.o src/foo.c"},
+			"/tmp/work",
+			[]string{"/tmp/work/src/foo.c"},
+			[]string{"/tmp/work/build/foo.d.tmp"},
+		),
+	}
+
+	graph := buildGraph(records)
+
+	if graph.actions[0].kind != kindCompile {
+		t.Fatalf("shell wrapped compile kind = %v, want %v", graph.actions[0].kind, kindCompile)
+	}
+	if got := graph.actions[0].actionKey; got != "compile|cc|cwd="+normalizePath("/tmp/work")+"|src="+normalizePath("/tmp/work/src/foo.c")+"|out="+normalizePath("/tmp/work/build/foo.o") {
+		t.Fatalf("shell wrapped compile actionKey = %q", got)
+	}
+}
+
+func TestBuildGraphClassifiesShellWrappedLink(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"sh", "-c", "gcc build/foo.o build/libfoo.a -o bin/foo"},
+			"/tmp/work",
+			[]string{"/tmp/work/build/foo.o", "/tmp/work/build/libfoo.a"},
+			nil,
+		),
+	}
+
+	graph := buildGraph(records)
+
+	if graph.actions[0].kind != kindLink {
+		t.Fatalf("shell wrapped link kind = %v, want %v", graph.actions[0].kind, kindLink)
+	}
+	if got := graph.actions[0].actionKey; got != "link|cc|cwd="+normalizePath("/tmp/work")+"|out="+normalizePath("/tmp/work/bin/foo") {
+		t.Fatalf("shell wrapped link actionKey = %q", got)
+	}
+}
+
 func TestBuildGraphDropsDirectoryPaths(t *testing.T) {
 	records := []trace.Record{
 		record([]string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
@@ -295,6 +454,102 @@ func TestBuildGraphCoalescesCompilePipeline(t *testing.T) {
 	}
 	if !slices.Contains(action.writes, normalizePath("/tmp/work/_build/CMakeFiles/core.dir/core.o.d")) {
 		t.Fatalf("merged writes = %v, want depfile output", action.writes)
+	}
+}
+
+func TestBuildGraphCoalescesShellWrappedCompilePipelineAndPropagatesGeneratedSource(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"perl", "util/dofile.pl", "template.in", "/tmp/work/_build/providers/legacyprov.c"},
+			"/tmp/work",
+			[]string{"/tmp/work/template.in"},
+			[]string{"/tmp/work/_build/providers/legacyprov.c"},
+		),
+		recordWithProc(30103, 18105, []string{"sh", "-c", "gcc -I /tmp/work/_build -MMD -MF providers/legacy-dso-legacyprov.d.tmp -c -o providers/legacy-dso-legacyprov.o /tmp/work/_build/providers/legacyprov.c"}, "/tmp/work/_build",
+			[]string{"/tmp/work/_build/providers/legacyprov.c", "/tmp/work/_build/configuration.h"},
+			[]string{"/tmp/work/_build/providers/legacy-dso-legacyprov.d.tmp"}),
+		recordWithProc(30104, 30103, []string{"cc1", "-I", "/tmp/work/_build", "/tmp/work/_build/providers/legacyprov.c"}, "/tmp/work/_build",
+			[]string{"/tmp/work/_build/providers/legacyprov.c", "/tmp/work/_build/configuration.h"},
+			[]string{"/tmp/work/_build/providers/legacy-dso-legacyprov.d.tmp"}),
+		recordWithProc(30135, 30103, []string{"as", "-o", "providers/legacy-dso-legacyprov.o", "/tmp/ccGQQJBl.s"}, "/tmp/work/_build",
+			nil,
+			[]string{"/tmp/work/_build/providers/legacy-dso-legacyprov.o"}),
+	}
+
+	graph := buildGraph(records)
+	if len(graph.actions) != 2 {
+		t.Fatalf("len(graph.actions) = %d, want 2", len(graph.actions))
+	}
+	if graph.actions[0].kind != kindCodegen {
+		t.Fatalf("graph.actions[0].kind = %v, want %v", graph.actions[0].kind, kindCodegen)
+	}
+	if graph.actions[1].kind != kindCompile {
+		t.Fatalf("graph.actions[1].kind = %v, want %v", graph.actions[1].kind, kindCompile)
+	}
+	if !slices.Contains(graph.actions[1].reads, normalizePath("/tmp/work/_build/providers/legacyprov.c")) {
+		t.Fatalf("graph.actions[1].reads = %v, want generated source", graph.actions[1].reads)
+	}
+	if !slices.Contains(graph.actions[1].writes, normalizePath("/tmp/work/_build/providers/legacy-dso-legacyprov.o")) {
+		t.Fatalf("graph.actions[1].writes = %v, want object output", graph.actions[1].writes)
+	}
+	if !slices.Contains(graph.actions[1].writes, normalizePath("/tmp/work/_build/providers/legacy-dso-legacyprov.d.tmp")) {
+		t.Fatalf("graph.actions[1].writes = %v, want depfile sidecar", graph.actions[1].writes)
+	}
+	if got := graph.paths[normalizePath("/tmp/work/_build/providers/legacyprov.c")].role; got != rolePropagating {
+		t.Fatalf("role(generated source) = %v, want %v", got, rolePropagating)
+	}
+}
+
+func TestBuildGraphCoalescesProcessCompilePipelineWithoutDriverReads(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"perl", "util/dofile.pl", "template.in", "/tmp/work/_build/providers/legacyprov.c"},
+			"/tmp/work",
+			[]string{"/tmp/work/template.in"},
+			[]string{"/tmp/work/_build/providers/legacyprov.c"},
+		),
+		recordWithProc(30103, 18105, []string{"gcc", "-MMD", "-MF", "providers/legacy-dso-legacyprov.d.tmp", "-c", "-o", "providers/legacy-dso-legacyprov.o", "/tmp/work/_build/providers/legacyprov.c"}, "/tmp/work/_build",
+			nil,
+			nil),
+		recordWithProc(30104, 30103, []string{"cc1", "-I", "/tmp/work/_build", "/tmp/work/_build/providers/legacyprov.c"}, "/tmp/work/_build",
+			[]string{"/tmp/work/_build/providers/legacyprov.c", "/tmp/work/_build/configuration.h"},
+			[]string{"/tmp/work/_build/providers/legacy-dso-legacyprov.d.tmp"}),
+		recordWithProc(30135, 30103, []string{"as", "-o", "providers/legacy-dso-legacyprov.o", "/tmp/ccGQQJBl.s"}, "/tmp/work/_build",
+			nil,
+			[]string{"/tmp/work/_build/providers/legacy-dso-legacyprov.o"}),
+	}
+
+	graph := buildGraph(records)
+	if len(graph.actions) != 2 {
+		t.Fatalf("len(graph.actions) = %d, want 2", len(graph.actions))
+	}
+	if graph.actions[1].kind != kindCompile {
+		t.Fatalf("graph.actions[1].kind = %v, want %v", graph.actions[1].kind, kindCompile)
+	}
+	if got := graph.actions[1].actionKey; !strings.Contains(got, "src="+normalizePath("/tmp/work/_build/providers/legacyprov.c")) {
+		t.Fatalf("compile actionKey = %q, want generated source", got)
+	}
+	if got := graph.actions[1].actionKey; !strings.Contains(got, "out="+normalizePath("/tmp/work/_build/providers/legacy-dso-legacyprov.o")) {
+		t.Fatalf("compile actionKey = %q, want object output", got)
+	}
+}
+
+func TestBuildGraphDoesNotMergeFrontendAssemblerWithDifferentParents(t *testing.T) {
+	records := []trace.Record{
+		recordWithProc(101, 100, []string{"cc1", "/tmp/work/a.c"}, "/tmp/work/_build",
+			[]string{"/tmp/work/a.c"},
+			nil),
+		recordWithProc(202, 200, []string{"as", "-o", "b.o", "/tmp/ccb.s"}, "/tmp/work/_build",
+			nil,
+			[]string{"/tmp/work/_build/b.o"}),
+	}
+
+	graph := buildGraph(records)
+	if len(graph.actions) != 2 {
+		t.Fatalf("len(graph.actions) = %d, want 2", len(graph.actions))
+	}
+	if got := graph.actions[0].actionKey; strings.Contains(got, "out="+normalizePath("/tmp/work/_build/b.o")) {
+		t.Fatalf("frontend actionKey = %q, unexpectedly merged with unrelated assembler", got)
 	}
 }
 
@@ -1042,6 +1297,38 @@ func TestBuildGraphClassifiesInstallStagingPathAsDelivery(t *testing.T) {
 	assertRole("/tmp/work/_build/libfoo.a", rolePropagating)
 	assertRole("/tmp/work/_build/install/libfoo-config.cmake", roleDelivery)
 	assertRole("/tmp/work/install/lib/cmake/libfoo-config.cmake", roleDelivery)
+}
+
+func TestBuildGraphClassifiesCompileSidecarPathAsTooling(t *testing.T) {
+	records := []trace.Record{
+		record(
+			[]string{"cc", "-MMD", "-MF", "/tmp/work/_build/core.d.tmp", "-c", "/tmp/work/src/core.c", "-o", "/tmp/work/_build/core.o"},
+			"/tmp/work",
+			[]string{"/tmp/work/src/core.c"},
+			[]string{"/tmp/work/_build/core.d.tmp", "/tmp/work/_build/core.o"},
+		),
+		record(
+			[]string{"ar", "rcs", "/tmp/work/_build/libfoo.a", "/tmp/work/_build/core.o"},
+			"/tmp/work",
+			[]string{"/tmp/work/_build/core.o"},
+			[]string{"/tmp/work/_build/libfoo.a"},
+		),
+		record(
+			[]string{"install", "-m644", "/tmp/work/_build/libfoo.a", "/tmp/work/install/lib/libfoo.a"},
+			"/tmp/work",
+			[]string{"/tmp/work/_build/libfoo.a"},
+			[]string{"/tmp/work/install/lib/libfoo.a"},
+		),
+	}
+
+	graph := buildGraphWithScope(records, trace.Scope{InstallRoot: "/tmp/work/install"})
+
+	if got := graph.paths[normalizePath("/tmp/work/_build/core.d.tmp")].role; got != roleTooling {
+		t.Fatalf("role(core.d.tmp) = %v, want %v", got, roleTooling)
+	}
+	if got := graph.paths[normalizePath("/tmp/work/_build/core.o")].role; got != rolePropagating {
+		t.Fatalf("role(core.o) = %v, want %v", got, rolePropagating)
+	}
 }
 
 func TestBuildGraphStabilizesInstallRootInFingerprint(t *testing.T) {

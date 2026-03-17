@@ -16,6 +16,7 @@ const (
 	kindCompile
 	kindLink
 	kindArchive
+	kindCodegen
 	kindCopy
 	kindInstall
 	kindConfigure
@@ -123,6 +124,7 @@ func buildGraphWithScopeAndDigests(records []trace.Record, scope trace.Scope, in
 	runProbeSubgraphPass(state)
 	runToolingFinalizePass(state)
 	runBusinessPass(state, state.tooling)
+	runCodegenPromotionPass(state)
 	runControlPlanePass(state, state.tooling)
 	runPathRoleFinalizePass(state)
 	return freezeActionGraph(state)
@@ -148,14 +150,12 @@ func runActionKindPass(state *analysisState) {
 	state.actions = make([]actionNode, 0, len(state.normalized))
 	for _, record := range state.normalized {
 		filtered := filterDirectoryPaths(record, state.directories)
-		tool := ""
-		if len(filtered.argv) > 0 {
-			tool = filepath.Base(filtered.argv[0])
-		}
+		kind := classifyActionKindWithScope(filtered, state.scope)
+		tool := actionToolForRecord(filtered, kind)
 		state.actions = append(state.actions, buildActionNode(
 			filtered,
 			tool,
-			classifyActionKind(filtered),
+			kind,
 			state.scope,
 			state.inputDigests,
 		))
@@ -272,6 +272,15 @@ func runToolingFinalizePass(state *analysisState) {
 	)
 }
 
+func runCodegenPromotionPass(state *analysisState) {
+	for i, action := range state.actions {
+		if !shouldPromoteCodegenAction(i, state.actions, state.paths, state.tooling, state.business) {
+			continue
+		}
+		state.actions[i] = rebuildActionNodeWithKind(action, kindCodegen, state.scope, state.inputDigests)
+	}
+}
+
 func runControlPlanePass(state *analysisState, tooling []bool) {
 	state.probeInputPaths = classifyProbeInputPaths(
 		state.paths,
@@ -318,6 +327,8 @@ func runPathRoleFinalizePass(state *analysisState) {
 			facts.role = roleDelivery
 		case isStagedDeliveryPath(state.actions, state.tooling, state.business, facts, state.scope):
 			facts.role = roleDelivery
+		case isBusinessSidecarPath(state.actions, state.tooling, state.business, facts):
+			facts.role = roleTooling
 		case isToolingPath(state.actions, state.tooling, facts, state.controlPlanePaths, state.probeInputPaths):
 			facts.role = roleTooling
 		case isBusinessPath(state.business, facts):
@@ -361,6 +372,19 @@ func buildActionNode(normalized normalizedRecord, tool string, kind actionKind, 
 		fullKey:     fingerprint,
 		fingerprint: fingerprint,
 	}
+}
+
+func rebuildActionNodeWithKind(action actionNode, kind actionKind, scope trace.Scope, inputDigests map[string]string) actionNode {
+	record := normalizedRecord{
+		pid:         action.pid,
+		parentPID:   action.parentPID,
+		argv:        slices.Clone(action.argv),
+		cwd:         action.cwd,
+		inputs:      slices.Clone(action.reads),
+		changes:     slices.Clone(action.writes),
+		inputOrigin: maps.Clone(action.inputOrigin),
+	}
+	return buildActionNode(record, action.tool, kind, scope, inputDigests)
 }
 
 func coalesceCompilePipelines(actions []actionNode, scope trace.Scope, inputDigests map[string]string) []actionNode {
@@ -450,13 +474,11 @@ func findCompilePipelineGroups(actions []actionNode) [][]int {
 
 func matchCompilePipelineByProcess(actions []actionNode, used []bool, driverIdx int) ([]int, bool) {
 	driver := actions[driverIdx]
-	sig := compileSignature{
-		source: actionPrimarySource(driver),
-		object: compileDriverObjectOutput(driver),
-	}
-	if sig.source == "" || sig.object == "" {
+	object := compileDriverObjectOutput(driver)
+	if object == "" {
 		return nil, false
 	}
+	driverSource := actionPrimarySource(driver)
 
 	var best []int
 	bestScore := 0
@@ -466,18 +488,24 @@ func matchCompilePipelineByProcess(actions []actionNode, used []bool, driverIdx 
 			continue
 		}
 		assembler := actions[assemblerIdx]
-		if compileStageOf(assembler) != compileStageAssembler || compileObjectOutput(assembler) != sig.object {
+		if compileStageOf(assembler) != compileStageAssembler || compileObjectOutput(assembler) != object {
+			continue
+		}
+		if compileRelationScore(driver, assembler) == 0 {
 			continue
 		}
 
 		group := []int{driverIdx, assemblerIdx}
 		score := compileRelationScore(driver, assembler)
-		if frontendIdx, frontendScore, ok := selectCompileFrontend(actions, used, driverIdx, assemblerIdx, sig.source); ok {
+		if frontendIdx, frontendScore, ok := selectCompileFrontend(actions, used, driverIdx, assemblerIdx, driverSource); ok {
 			candidate := []int{driverIdx, frontendIdx, assemblerIdx}
 			if isRecognizedCompilePipeline(compileGroupActions(actions, candidate)) {
 				group = candidate
 				score = max(score, frontendScore)
 			}
+		}
+		if driverSource == "" && len(group) == 2 {
+			continue
 		}
 		if score == 0 || !isRecognizedCompilePipeline(compileGroupActions(actions, group)) {
 			continue
@@ -510,7 +538,14 @@ func selectCompileFrontend(actions []actionNode, used []bool, driverIdx, assembl
 			continue
 		}
 		frontend := actions[i]
-		if compileStageOf(frontend) != compileStageFrontend || actionPrimarySource(frontend) != source {
+		if compileStageOf(frontend) != compileStageFrontend {
+			continue
+		}
+		frontendSource := actionPrimarySource(frontend)
+		if frontendSource == "" {
+			continue
+		}
+		if source != "" && frontendSource != source {
 			continue
 		}
 		score := max(compileRelationScore(driver, frontend), compileRelationScore(frontend, assembler))
@@ -569,9 +604,10 @@ const (
 )
 
 func isCompileFamilyAction(action actionNode) bool {
+	argv := wrappedOrDirectArgv(action.argv)
 	switch compileStageOf(action) {
 	case compileStageDriver:
-		return slices.Contains(action.argv, "-c") && actionPrimarySource(action) != ""
+		return slices.Contains(argv, "-c") && actionPrimarySource(action) != ""
 	case compileStageFrontend:
 		return actionPrimarySource(action) != ""
 	case compileStageAssembler:
@@ -627,17 +663,54 @@ func isRecognizedCompilePipeline(group []actionNode) bool {
 	if !compileFamiliesCompatible(group) {
 		return false
 	}
+	if !compileGroupProcessCompatible(group) {
+		return false
+	}
 	if !compileStagesVerified(group, sig.object) {
 		return false
 	}
 	return true
 }
 
+func compileGroupProcessCompatible(group []actionNode) bool {
+	hasProcessInfo := false
+	for _, action := range group {
+		if action.pid != 0 || action.parentPID != 0 {
+			hasProcessInfo = true
+			break
+		}
+	}
+	if !hasProcessInfo {
+		return true
+	}
+
+	switch len(group) {
+	case 2:
+		left, right := group[0], group[1]
+		switch {
+		case compileStageOf(left) == compileStageDriver && compileStageOf(right) == compileStageAssembler:
+			return left.pid != 0 && right.parentPID == left.pid
+		case compileStageOf(left) == compileStageFrontend && compileStageOf(right) == compileStageAssembler:
+			return left.parentPID != 0 && left.parentPID == right.parentPID
+		default:
+			return false
+		}
+	case 3:
+		driver, frontend, assembler := group[0], group[1], group[2]
+		if compileStageOf(driver) != compileStageDriver || compileStageOf(frontend) != compileStageFrontend || compileStageOf(assembler) != compileStageAssembler {
+			return false
+		}
+		return driver.pid != 0 && frontend.parentPID == driver.pid && assembler.parentPID == driver.pid
+	default:
+		return false
+	}
+}
+
 func compileStagesVerified(group []actionNode, object string) bool {
 	for _, action := range group {
 		switch compileStageOf(action) {
 		case compileStageDriver:
-			if !slices.Contains(action.argv, "-c") {
+			if !slices.Contains(wrappedOrDirectArgv(action.argv), "-c") {
 				return false
 			}
 			if out := compileDriverObjectOutput(action); out == "" || out != object {
@@ -915,6 +988,10 @@ func fingerprintChanges(kind actionKind, changes []string) []string {
 }
 
 func classifyActionKind(record normalizedRecord) actionKind {
+	return classifyActionKindWithScope(record, trace.Scope{})
+}
+
+func classifyActionKindWithScope(record normalizedRecord, scope trace.Scope) actionKind {
 	if len(record.argv) == 0 {
 		return kindGeneric
 	}
@@ -975,6 +1052,9 @@ func classifyActionKind(record normalizedRecord) actionKind {
 			return kindCompile
 		}
 	}
+	if kind, ok := classifyScriptWrapperAction(record, scope); ok {
+		return kind
+	}
 
 	switch family := toolFamily(tool); family {
 	case "cc", "cxx":
@@ -992,6 +1072,186 @@ func classifyActionKind(record normalizedRecord) actionKind {
 	return kindGeneric
 }
 
+func classifyScriptWrapperAction(record normalizedRecord, scope trace.Scope) (actionKind, bool) {
+	if len(record.argv) == 0 {
+		return kindGeneric, false
+	}
+	switch filepath.Base(record.argv[0]) {
+	case "perl", "sh", "bash", "dash":
+	default:
+		return kindGeneric, false
+	}
+
+	if scriptWrapperWritesDelivery(record, scope) {
+		return kindInstall, true
+	}
+	if kind, ok := classifyShellWrappedSemanticAction(record); ok {
+		return kind, true
+	}
+	if scriptWrapperLooksConfigureLike(record, scope) {
+		return kindConfigure, true
+	}
+	return kindGeneric, false
+}
+
+func classifyShellWrappedSemanticAction(record normalizedRecord) (actionKind, bool) {
+	wrappedArgv := shellWrappedArgv(record.argv)
+	if len(wrappedArgv) == 0 {
+		return kindGeneric, false
+	}
+	tool := filepath.Base(wrappedArgv[0])
+	switch tool {
+	case "ar":
+		if firstArchiveOutput(record.changes) != "" || declaredArchiveOutput(record.cwd, wrappedArgv) != "" {
+			return kindArchive, true
+		}
+	case "ranlib":
+		if firstArchiveOutput(record.changes) != "" || declaredArchiveOutput(record.cwd, wrappedArgv) != "" {
+			return kindArchive, true
+		}
+	case "ld", "collect2":
+		if firstLinkOutput(record.changes) != "" || declaredLinkOutput(record.cwd, wrappedArgv) != "" {
+			return kindLink, true
+		}
+	}
+	switch toolFamily(tool) {
+	case "cc", "cxx":
+		if shellWrappedCompile(record, wrappedArgv) {
+			return kindCompile, true
+		}
+		if shellWrappedLink(record, wrappedArgv) {
+			return kindLink, true
+		}
+	}
+	return kindGeneric, false
+}
+
+func shellWrappedCompile(record normalizedRecord, argv []string) bool {
+	if !slices.Contains(argv, "-c") {
+		return false
+	}
+	if firstPathByExt(record.inputs, ".c", ".cc", ".cpp", ".cxx") == "" {
+		return false
+	}
+	return firstPathByExt(record.changes, ".o", ".obj") != "" || declaredCompileObjectOutput(record.cwd, argv) != ""
+}
+
+func shellWrappedLink(record normalizedRecord, argv []string) bool {
+	if slices.Contains(argv, "-c") {
+		return false
+	}
+	if firstLinkOutput(record.changes) != "" || declaredLinkOutput(record.cwd, argv) != "" {
+		return slices.ContainsFunc(record.inputs, isArtifactPath) || firstPathByExt(record.inputs, ".c", ".cc", ".cpp", ".cxx") != ""
+	}
+	return false
+}
+
+func actionToolForRecord(record normalizedRecord, kind actionKind) string {
+	if len(record.argv) == 0 {
+		return ""
+	}
+	tool := filepath.Base(record.argv[0])
+	switch kind {
+	case kindCompile, kindLink, kindArchive:
+		if wrapped := shellWrappedTool(record.argv); wrapped != "" {
+			return wrapped
+		}
+	}
+	return tool
+}
+
+func shellWrappedTool(argv []string) string {
+	wrappedArgv := shellWrappedArgv(argv)
+	if len(wrappedArgv) == 0 {
+		return ""
+	}
+	return filepath.Base(wrappedArgv[0])
+}
+
+func shellWrappedArgv(argv []string) []string {
+	if len(argv) < 3 {
+		return nil
+	}
+	switch filepath.Base(argv[0]) {
+	case "sh", "bash", "dash":
+	default:
+		return nil
+	}
+	if argv[1] != "-c" {
+		return nil
+	}
+	command := strings.TrimSpace(argv[2])
+	if command == "" {
+		return nil
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return nil
+	}
+	start := 0
+	for start < len(fields) && looksLikeShellEnvAssignment(fields[start]) {
+		start++
+	}
+	if start >= len(fields) {
+		return nil
+	}
+	for i := start; i < len(fields); i++ {
+		fields[i] = strings.Trim(fields[i], `"'`)
+	}
+	return fields[start:]
+}
+
+func looksLikeShellEnvAssignment(token string) bool {
+	if token == "" || strings.Contains(token, "/") {
+		return false
+	}
+	name, value, ok := strings.Cut(token, "=")
+	if !ok || name == "" || value == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 {
+			if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+				return false
+			}
+			continue
+		}
+		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func scriptWrapperWritesDelivery(record normalizedRecord, scope trace.Scope) bool {
+	if len(record.changes) == 0 {
+		return false
+	}
+	for _, path := range record.changes {
+		if isExplicitDeliveryPath(path, scope) {
+			return true
+		}
+	}
+	return false
+}
+
+func scriptWrapperLooksConfigureLike(record normalizedRecord, scope trace.Scope) bool {
+	if len(record.changes) == 0 {
+		return false
+	}
+	for _, path := range record.changes {
+		if isExplicitDeliveryPath(path, scope) || isArtifactPath(path) || pathLooksLikeCompilationInput(path) {
+			return false
+		}
+	}
+	for _, path := range record.inputs {
+		if isExplicitDeliveryPath(path, scope) {
+			return false
+		}
+	}
+	return true
+}
+
 func buildActionKey(kind actionKind, tool string, record normalizedRecord, scope trace.Scope) string {
 	parts := []string{
 		kind.String(),
@@ -1002,6 +1262,9 @@ func buildActionKey(kind actionKind, tool string, record normalizedRecord, scope
 	case kindCompile:
 		src := firstPathByExt(record.inputs, ".c", ".cc", ".cpp", ".cxx")
 		out := firstPathByExt(record.changes, ".o", ".obj")
+		if out == "" {
+			out = declaredCompileObjectOutput(record.cwd, wrappedOrDirectArgv(record.argv))
+		}
 		if src != "" {
 			parts = append(parts, "src="+normalizeScopeToken(src, scope))
 		}
@@ -1013,7 +1276,16 @@ func buildActionKey(kind actionKind, tool string, record normalizedRecord, scope
 			parts = append(parts, "out="+normalizeScopeToken(out, scope))
 		}
 	case kindLink:
-		if out := firstLinkOutput(record.changes); out != "" {
+		if out := firstNonEmpty(
+			firstLinkOutput(record.changes),
+			declaredLinkOutput(record.cwd, wrappedOrDirectArgv(record.argv)),
+		); out != "" {
+			parts = append(parts, "out="+normalizeScopeToken(out, scope))
+		} else {
+			parts = append(parts, "argv="+normalizeScopeToken(argvSkeleton(record.argv), scope))
+		}
+	case kindCodegen:
+		if out := firstCompilationInputOutput(record.changes); out != "" {
 			parts = append(parts, "out="+normalizeScopeToken(out, scope))
 		} else {
 			parts = append(parts, "argv="+normalizeScopeToken(argvSkeleton(record.argv), scope))
@@ -1040,6 +1312,15 @@ func firstPathByExt(paths []string, exts ...string) string {
 			if strings.HasSuffix(path, ext) {
 				return path
 			}
+		}
+	}
+	return ""
+}
+
+func firstCompilationInputOutput(paths []string) string {
+	for _, path := range paths {
+		if pathLooksLikeCompilationInput(path) {
+			return path
 		}
 	}
 	return ""
@@ -1078,8 +1359,37 @@ func declaredCompileObjectOutput(cwd string, argv []string) string {
 	return ""
 }
 
+func declaredLinkOutput(cwd string, argv []string) string {
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "-o" && i+1 < len(argv) {
+			out := argv[i+1]
+			if !strings.HasSuffix(out, ".o") && !strings.HasSuffix(out, ".obj") {
+				return normalizeCompileOutputPath(cwd, out)
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-o") && len(arg) > 2 {
+			out := strings.TrimPrefix(arg, "-o")
+			if !strings.HasSuffix(out, ".o") && !strings.HasSuffix(out, ".obj") {
+				return normalizeCompileOutputPath(cwd, out)
+			}
+		}
+	}
+	return ""
+}
+
+func declaredArchiveOutput(cwd string, argv []string) string {
+	for _, arg := range argv[1:] {
+		if isArchivePath(arg) {
+			return normalizeCompileOutputPath(cwd, arg)
+		}
+	}
+	return ""
+}
+
 func compileDriverObjectOutput(action actionNode) string {
-	if out := declaredCompileObjectOutput(action.cwd, action.argv); out != "" {
+	if out := declaredCompileObjectOutput(action.cwd, wrappedOrDirectArgv(action.argv)); out != "" {
 		return out
 	}
 	src := actionPrimarySource(action)
@@ -1092,6 +1402,22 @@ func compileDriverObjectOutput(action actionNode) string {
 		return ""
 	}
 	return normalizePath(filepath.Join(action.cwd, strings.TrimSuffix(base, ext)+".o"))
+}
+
+func wrappedOrDirectArgv(argv []string) []string {
+	if wrapped := shellWrappedArgv(argv); len(wrapped) != 0 {
+		return wrapped
+	}
+	return argv
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func argvSkeleton(argv []string) string {
@@ -1131,6 +1457,8 @@ func (kind actionKind) String() string {
 		return "link"
 	case kindArchive:
 		return "archive"
+	case kindCodegen:
+		return "codegen"
 	case kindCopy:
 		return "copy"
 	case kindInstall:
@@ -1301,6 +1629,105 @@ func classifyToolingActions(actions []actionNode, paths map[string]pathFacts) []
 	}
 
 	return tooling
+}
+
+func isBusinessSidecarPath(actions []actionNode, tooling []bool, business []bool, facts pathFacts) bool {
+	if len(facts.writers) == 0 {
+		return false
+	}
+	for _, writer := range facts.writers {
+		if writer < 0 || writer >= len(actions) {
+			return false
+		}
+		if writer >= len(business) || !business[writer] {
+			return false
+		}
+		if writer < len(tooling) && tooling[writer] {
+			return false
+		}
+		switch actions[writer].kind {
+		case kindCompile, kindLink, kindArchive:
+		default:
+			return false
+		}
+		if facts.path == primaryBusinessOutput(actions[writer]) {
+			return false
+		}
+	}
+	for _, reader := range facts.readers {
+		if reader < 0 || reader >= len(actions) {
+			continue
+		}
+		if reader >= len(business) || !business[reader] {
+			continue
+		}
+		if actionConsumesBusinessData(actions[reader]) {
+			return false
+		}
+	}
+	return true
+}
+
+func primaryBusinessOutput(action actionNode) string {
+	switch action.kind {
+	case kindCompile:
+		return firstNonEmpty(
+			firstPathByExt(action.writes, ".o", ".obj"),
+			declaredCompileObjectOutput(action.cwd, wrappedOrDirectArgv(action.argv)),
+		)
+	case kindLink:
+		return firstNonEmpty(
+			firstLinkOutput(action.writes),
+			declaredLinkOutput(action.cwd, wrappedOrDirectArgv(action.argv)),
+		)
+	case kindArchive:
+		return firstNonEmpty(
+			firstArchiveOutput(action.writes),
+			declaredArchiveOutput(action.cwd, wrappedOrDirectArgv(action.argv)),
+		)
+	default:
+		return ""
+	}
+}
+
+func shouldPromoteCodegenAction(idx int, actions []actionNode, paths map[string]pathFacts, tooling, business []bool) bool {
+	if idx < 0 || idx >= len(actions) {
+		return false
+	}
+	if idx >= len(tooling) || tooling[idx] {
+		return false
+	}
+	if idx >= len(business) || !business[idx] {
+		return false
+	}
+	action := actions[idx]
+	if action.kind != kindGeneric {
+		return false
+	}
+	for _, path := range action.writes {
+		if !pathLooksLikeCompilationInput(path) {
+			continue
+		}
+		facts, ok := paths[path]
+		if !ok {
+			continue
+		}
+		for _, reader := range facts.readers {
+			if reader < 0 || reader >= len(actions) {
+				continue
+			}
+			if reader < len(tooling) && tooling[reader] {
+				continue
+			}
+			if reader >= len(business) || !business[reader] {
+				continue
+			}
+			if actions[reader].kind == kindCompile {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func classifyBusinessActions(actions []actionNode, in [][]graphEdge, outdeg []int, scope trace.Scope, seedTooling []bool) []bool {
@@ -1644,7 +2071,7 @@ func pathBlockedFromTooling(actions []actionNode, scope trace.Scope, business []
 
 func actionConsumesBusinessData(action actionNode) bool {
 	switch action.kind {
-	case kindCompile, kindLink, kindArchive, kindCopy, kindInstall:
+	case kindCompile, kindLink, kindArchive, kindCodegen, kindCopy, kindInstall:
 		return true
 	default:
 		return false
@@ -1653,7 +2080,7 @@ func actionConsumesBusinessData(action actionNode) bool {
 
 func actionProducesBusinessData(action actionNode) bool {
 	switch action.kind {
-	case kindCompile, kindLink, kindArchive, kindCopy, kindInstall:
+	case kindCompile, kindLink, kindArchive, kindCodegen, kindCopy, kindInstall:
 		return true
 	default:
 		return false

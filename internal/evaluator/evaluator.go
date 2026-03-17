@@ -17,6 +17,7 @@ type ProbeResult struct {
 	Scope            trace.Scope
 	TraceDiagnostics trace.ParseDiagnostics
 	InputDigests     map[string]string
+	OutputManifest   OutputManifest
 }
 
 type ProbeFunc func(context.Context, string) (ProbeResult, error)
@@ -45,6 +46,11 @@ type optionProfile struct {
 	toolingReads      map[string]struct{}
 	toolingWrites     map[string]struct{}
 	paramTouches      map[string]struct{}
+}
+
+type optionVariant struct {
+	profile    optionProfile
+	outputDiff outputManifestDiff
 }
 
 var (
@@ -79,7 +85,7 @@ func Watch(ctx context.Context, matrix formula.Matrix, probe ProbeFunc) ([]strin
 			continue
 		}
 
-		profiles := make(map[string][]optionProfile, len(optionKeys))
+		profiles := make(map[string][]optionVariant, len(optionKeys))
 		for _, key := range optionKeys {
 			values := slices.Clone(matrix.Options[key])
 			for _, value := range values {
@@ -95,7 +101,10 @@ func Watch(ctx context.Context, matrix formula.Matrix, probe ProbeFunc) ([]strin
 				}
 				probeGraph := buildGraphForProbe(result)
 				trusted = trusted && result.TraceDiagnostics.Trusted() && isTrustedGraph(probeGraph)
-				profiles[key] = append(profiles[key], diffProfile(baseGraph, probeGraph))
+				profiles[key] = append(profiles[key], optionVariant{
+					profile:    diffProfile(baseGraph, probeGraph),
+					outputDiff: diffOutputManifest(baseResult.OutputManifest, result.OutputManifest),
+				})
 			}
 		}
 
@@ -120,7 +129,7 @@ func isTrustedGraph(graph actionGraph) bool {
 		if !graph.business[idx] {
 			continue
 		}
-		if action.kind == kindGeneric && !isDeliveryOnlyAction(graph, idx) {
+		if (action.kind == kindGeneric || action.kind == kindCodegen) && !isDeliveryOnlyAction(graph, idx) {
 			return false
 		}
 	}
@@ -503,6 +512,12 @@ func groupSemanticActionKeys(graph actionGraph, indexes []int) map[string][]int 
 		if idx < 0 || idx >= len(graph.actions) {
 			continue
 		}
+		if idx >= len(graph.business) || !graph.business[idx] {
+			continue
+		}
+		if idx < len(graph.tooling) && graph.tooling[idx] {
+			continue
+		}
 		action := graph.actions[idx]
 		if action.actionKey == "" {
 			continue
@@ -609,15 +624,15 @@ func addProfilePath(profile *optionProfile, role pathRole, path string, write bo
 	}
 }
 
-func zeroDiffOptionKeys(profiles map[string][]optionProfile) map[string]struct{} {
+func zeroDiffOptionKeys(profiles map[string][]optionVariant) map[string]struct{} {
 	tainted := make(map[string]struct{})
 	for key, variants := range profiles {
 		if len(variants) == 0 {
 			continue
 		}
 		allEmpty := true
-		for _, profile := range variants {
-			if profile.empty() {
+		for _, variant := range variants {
+			if variant.empty() {
 				continue
 			}
 			allEmpty = false
@@ -630,7 +645,7 @@ func zeroDiffOptionKeys(profiles map[string][]optionProfile) map[string]struct{}
 	return tainted
 }
 
-func collisionComponents(optionKeys []string, profiles map[string][]optionProfile, zeroDiff map[string]struct{}) [][]string {
+func collisionComponents(optionKeys []string, profiles map[string][]optionVariant, zeroDiff map[string]struct{}) [][]string {
 	keys := make([]string, 0, len(optionKeys))
 	for _, key := range optionKeys {
 		if _, ok := zeroDiff[key]; ok {
@@ -691,10 +706,10 @@ func orthogonalOptionKeys(optionKeys []string, zeroDiff map[string]struct{}) []s
 	return keys
 }
 
-func profilesCollide(left, right []optionProfile) bool {
+func profilesCollide(left, right []optionVariant) bool {
 	for _, l := range left {
 		for _, r := range right {
-			if optionProfilesCollide(l, r) {
+			if optionVariantsCollide(l, r) {
 				return true
 			}
 		}
@@ -702,13 +717,18 @@ func profilesCollide(left, right []optionProfile) bool {
 	return false
 }
 
-func optionProfilesCollide(left, right optionProfile) bool {
-	// Writes collide both with writes and with dependent reads; param touches are
-	// checked separately because they are action-key, not path, evidence.
-	return overlapSets(profileCollisionWriteSets(left), profileCollisionWriteSets(right)) ||
-		overlapSets(profileCollisionWriteSets(left), profileCollisionReadSets(right)) ||
-		overlapSets(profileCollisionReadSets(left), profileCollisionWriteSets(right)) ||
-		overlap(left.paramTouches, right.paramTouches)
+func optionVariantsCollide(left, right optionVariant) bool {
+	writeWrite := overlapSets(profileCollisionWriteSets(left.profile), profileCollisionWriteSets(right.profile))
+	leftWriteRightRead := overlapSets(profileCollisionWriteSets(left.profile), profileCollisionReadSets(right.profile))
+	leftReadRightWrite := overlapSets(profileCollisionReadSets(left.profile), profileCollisionWriteSets(right.profile))
+	paramShared := overlap(left.profile.paramTouches, right.profile.paramTouches)
+	if leftWriteRightRead || leftReadRightWrite || paramShared {
+		return true
+	}
+	if !writeWrite {
+		return false
+	}
+	return outputManifestDiffsCollide(left.outputDiff, right.outputDiff)
 }
 
 func profileCollisionWriteSets(profile optionProfile) []map[string]struct{} {
@@ -734,6 +754,10 @@ func (profile optionProfile) empty() bool {
 		len(profile.toolingReads) == 0 &&
 		len(profile.toolingWrites) == 0 &&
 		len(profile.paramTouches) == 0
+}
+
+func (variant optionVariant) empty() bool {
+	return variant.profile.empty() && variant.outputDiff.empty()
 }
 
 func overlapSets(leftSets, rightSets []map[string]struct{}) bool {

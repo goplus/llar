@@ -55,3 +55,57 @@ func TestDebugReportFormatsSections(t *testing.T) {
 		}
 	}
 }
+
+func TestDebugSummaryIncludesBusinessGenericActionsWhenRequested(t *testing.T) {
+	records := []trace.Record{
+		record([]string{"python3", "emit.py"}, "/tmp/work",
+			[]string{"/tmp/work/input.cfg"},
+			[]string{"/tmp/work/output.bin"}),
+		record([]string{"install", "-m644", "/tmp/work/output.bin", "/tmp/work/install/output.bin"}, "/tmp/work",
+			[]string{"/tmp/work/output.bin"},
+			[]string{"/tmp/work/install/output.bin"}),
+	}
+
+	out := DebugSummary(records, DebugSummaryOptions{
+		IncludeBusinessGenericLines: true,
+	})
+
+	for _, token := range []string{
+		"business generic actions (1):",
+		"argv: python3 emit.py",
+		"reads: " + normalizePath("/tmp/work/input.cfg"),
+		"writes: " + normalizePath("/tmp/work/output.bin"),
+	} {
+		if !strings.Contains(out, token) {
+			t.Fatalf("debug summary missing %q:\n%s", token, out)
+		}
+	}
+}
+
+func TestDebugSummaryIncludesInterestingPathFactsWhenRequested(t *testing.T) {
+	records := []trace.Record{
+		record([]string{"python3", "emit.py"}, "/tmp/work",
+			[]string{"/tmp/work/input.cfg"},
+			[]string{"/tmp/work/generated.c"}),
+		record([]string{"cc", "-c", "/tmp/work/generated.c", "-o", "/tmp/work/generated.o"}, "/tmp/work",
+			[]string{"/tmp/work/generated.c"},
+			[]string{"/tmp/work/generated.o"}),
+	}
+
+	out := DebugSummary(records, DebugSummaryOptions{
+		InterestingTokens:           []string{"/generated."},
+		IncludeInterestingPathFacts: true,
+	})
+
+	for _, token := range []string{
+		"match /generated.:",
+		"path facts /generated.:",
+		normalizePath("/tmp/work/generated.c") + " => propagating",
+		"writers (1):",
+		"readers (1):",
+	} {
+		if !strings.Contains(out, token) {
+			t.Fatalf("debug summary missing %q:\n%s", token, out)
+		}
+	}
+}
