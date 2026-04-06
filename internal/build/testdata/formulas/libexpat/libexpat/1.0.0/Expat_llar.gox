@@ -49,3 +49,53 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-lexpat"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libexpat.a\"\n" +
+		"test -f \"$1/include/expat.h\"\n" +
+		"cat > \"$3/expat_feature_test.c\" <<'EOF'\n" +
+		"#include <expat.h>\n" +
+		"#include <string.h>\n" +
+		"static int has_feature(enum XML_FeatureEnum want) {\n" +
+		"  const XML_Feature *features = XML_GetFeatureList();\n" +
+		"  for (; features->feature != XML_FEATURE_END; ++features) {\n" +
+		"    if (features->feature == want) return 1;\n" +
+		"  }\n" +
+		"  return 0;\n" +
+		"}\n" +
+		"int main(int argc, char **argv) {\n" +
+		"  const char *combo = argv[1];\n" +
+		"  const int have_ge = has_feature(XML_FEATURE_GE);\n" +
+		"  const int have_large_size = has_feature(XML_FEATURE_LARGE_SIZE);\n" +
+		"  const int have_min_size = has_feature(XML_FEATURE_MIN_SIZE);\n" +
+		"  const int have_ns = has_feature(XML_FEATURE_NS);\n" +
+		"  if (have_ge != (strstr(combo, \"ge-on\") != 0)) return 1;\n" +
+		"  if (have_large_size != (strstr(combo, \"large_size-on\") != 0)) return 2;\n" +
+		"  if (have_min_size != (strstr(combo, \"min_size-on\") != 0)) return 3;\n" +
+		"  if (have_ns != (strstr(combo, \"ns-on\") != 0)) return 4;\n" +
+		"  return 0;\n" +
+		"}\n" +
+		"EOF\n" +
+		"cc -I\"$1/include\" \"$3/expat_feature_test.c\" -L\"$1/lib\" -lexpat -o \"$3/expat_feature_test\"\n" +
+		"\"$3/expat_feature_test\" \"$2\"\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

@@ -79,3 +79,40 @@ onBuild (ctx, proj, out) => {
 	}
 	out.setMetadata meta
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libPocoFoundation.a\"\n" +
+		"if echo \"$2\" | grep -q 'encodings-on'; then\n" +
+		"  test -f \"$1/lib/libPocoEncodings.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libPocoEncodings.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'json-on'; then\n" +
+		"  test -f \"$1/lib/libPocoJSON.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libPocoJSON.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'net-on'; then\n" +
+		"  test -f \"$1/lib/libPocoNet.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libPocoNet.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'xml-on'; then\n" +
+		"  test -f \"$1/lib/libPocoXML.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libPocoXML.a\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

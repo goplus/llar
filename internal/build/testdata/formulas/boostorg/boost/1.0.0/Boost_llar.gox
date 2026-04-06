@@ -55,3 +55,30 @@ onBuild (ctx, proj, out) => {
 	}
 	out.setMetadata strings.trimSpace(meta)
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/include/boost/config.hpp\"\n" +
+		"if echo \"$2\" | grep -q 'program_options-on'; then\n" +
+		"  test -f \"$1/lib/libboost_program_options.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libboost_program_options.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'timer-on'; then\n" +
+		"  test -f \"$1/lib/libboost_timer.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libboost_timer.a\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

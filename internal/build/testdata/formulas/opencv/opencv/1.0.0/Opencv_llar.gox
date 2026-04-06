@@ -63,3 +63,31 @@ onBuild (ctx, proj, out) => {
 	}
 	out.setMetadata meta
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libopencv_core.a\"\n" +
+		"test -f \"$1/lib/libopencv_imgproc.a\"\n" +
+		"if echo \"$2\" | grep -q 'calib3d-on'; then\n" +
+		"  test -f \"$1/lib/libopencv_calib3d.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libopencv_calib3d.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'dnn-on'; then\n" +
+		"  test -f \"$1/lib/libopencv_dnn.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libopencv_dnn.a\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

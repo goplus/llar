@@ -47,3 +47,38 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-lspdlog"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libspdlog.a\"\n" +
+		"test -f \"$1/include/spdlog/spdlog.h\"\n" +
+		"if echo \"$2\" | grep -q 'noexceptions-on'; then\n" +
+		"  grep -R -q 'SPDLOG_NO_EXCEPTIONS' \"$1/include\" \"$1/lib/cmake\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'wchar-on'; then\n" +
+		"  cat > \"$3/spdlog_wchar_test.cpp\" <<'EOF'\n" +
+		"  #include <spdlog/spdlog.h>\n" +
+		"  int main() { spdlog::info(L\"{}\", 42); return 0; }\n" +
+		"EOF\n" +
+		"  c++ -std=c++17 -I\"$1/include\" \"$3/spdlog_wchar_test.cpp\" -L\"$1/lib\" -lspdlog -o \"$3/spdlog_wchar_test\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

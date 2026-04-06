@@ -42,3 +42,35 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-lyaml-cpp"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libyaml-cpp.a\"\n" +
+		"test -f \"$1/include/yaml-cpp/yaml.h\"\n" +
+		"if echo \"$2\" | grep -q 'contrib-on'; then\n" +
+		"  test -d \"$1/include/yaml-cpp/contrib\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/include/yaml-cpp/contrib\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  test -f \"$1/bin/parse\"\n" +
+		"  test -f \"$1/bin/read\"\n" +
+		"  test -f \"$1/bin/sandbox\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/parse\"\n" +
+		"  test ! -e \"$1/bin/read\"\n" +
+		"  test ! -e \"$1/bin/sandbox\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

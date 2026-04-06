@@ -95,6 +95,10 @@ func readTraceDumpFile(t *testing.T, path string) []trace.Record {
 			if current != nil {
 				current.Cwd = strings.TrimSpace(strings.TrimPrefix(trimmed, "cwd: "))
 			}
+		case strings.HasPrefix(trimmed, "env: "):
+			if current != nil {
+				current.Env = splitDumpPaths(strings.TrimPrefix(trimmed, "env: "))
+			}
 		case strings.HasPrefix(trimmed, "inputs: "):
 			if current != nil {
 				current.Inputs = splitDumpPaths(strings.TrimPrefix(trimmed, "inputs: "))
@@ -136,4 +140,50 @@ func parseInt64DumpField(t *testing.T, raw string) int64 {
 		t.Fatalf("parse int64 dump field %q: %v", raw, err)
 	}
 	return value
+}
+
+func TestReplayStepInitializesBuildRoot(t *testing.T) {
+	if !replayStepInitializesBuildRoot(replayRoot{
+		reads:  []string{"$SRC/CMakeLists.txt"},
+		writes: []string{"$BUILD/CMakeCache.txt", "$BUILD/config.h"},
+	}) {
+		t.Fatal("configure-style replay root should initialize build root")
+	}
+	if replayStepInitializesBuildRoot(replayRoot{
+		reads:  []string{"$BUILD/config.h", "$SRC/lib/xmlparse.c"},
+		writes: []string{"$BUILD/CMakeFiles/expat.dir/lib/xmlparse.c.o"},
+	}) {
+		t.Fatal("build-style replay root should not initialize build root")
+	}
+}
+
+func TestPrepareReplayBuildRootClearsInitializerState(t *testing.T) {
+	buildRoot := filepath.Join(t.TempDir(), "_build")
+	if err := os.MkdirAll(filepath.Join(buildRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(buildRoot): %v", err)
+	}
+	stale := filepath.Join(buildRoot, "CMakeCache.txt")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stale): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(buildRoot, "nested", "keep.txt"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested stale): %v", err)
+	}
+
+	err := prepareReplayBuildRoot(buildRoot, []replayRoot{{
+		reads:  []string{"$SRC/CMakeLists.txt"},
+		writes: []string{"$BUILD/CMakeCache.txt"},
+	}})
+	if err != nil {
+		t.Fatalf("prepareReplayBuildRoot() error: %v", err)
+	}
+	if _, err := os.Stat(buildRoot); err != nil {
+		t.Fatalf("build root missing after prepare: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale CMakeCache.txt still exists, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(buildRoot, "nested", "keep.txt")); !os.IsNotExist(err) {
+		t.Fatalf("nested stale file still exists, err=%v", err)
+	}
 }

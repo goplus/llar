@@ -23,12 +23,16 @@ func (report *DebugReport) AddCollision(base, left, right ProbeResult, opts Debu
 	report.appendSection(DebugCollisionSummary(base, left, right, opts))
 }
 
-func (report *DebugReport) AddPathFacts(records []trace.Record, scope trace.Scope, token string) {
-	report.appendSection(DebugPathFacts(records, scope, token))
+func (report *DebugReport) AddTraceMatches(probe ProbeResult, tokens []string, limit int) {
+	report.appendSection(DebugProbeTraceMatches(probe, tokens, limit))
 }
 
-func (report *DebugReport) AddTraceMatches(records []trace.Record, tokens []string, limit int) {
-	report.appendSection(DebugTraceMatches(records, tokens, limit))
+func (report *DebugReport) AddSection(section string) {
+	report.appendSection(section)
+}
+
+func (report *DebugReport) AddSynthesizedPair(observation SynthesizedPairObservation) {
+	report.appendSection(DebugSynthesizedPairSummary(observation))
 }
 
 func (report *DebugReport) String() string {

@@ -64,3 +64,32 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-lssl -lcrypto"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libssl.a\"\n" +
+		"test -f \"$1/lib/libcrypto.a\"\n" +
+		"test -f \"$1/include/openssl/ssl.h\"\n" +
+		"if echo \"$2\" | grep -q 'asm-on'; then\n" +
+		"  if grep -R -q 'OPENSSL_NO_ASM' \"$1/include/openssl\"; then exit 1; fi\n" +
+		"else\n" +
+		"  grep -R -q 'OPENSSL_NO_ASM' \"$1/include/openssl\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'zlib-on'; then\n" +
+		"  if grep -R -q 'OPENSSL_NO_ZLIB' \"$1/include/openssl\"; then exit 1; fi\n" +
+		"else\n" +
+		"  grep -R -q 'OPENSSL_NO_ZLIB' \"$1/include/openssl\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

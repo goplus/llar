@@ -54,3 +54,36 @@ onBuild (ctx, proj, out) => {
 	}
 	out.setMetadata meta
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libpcre2-8.a\"\n" +
+		"test -f \"$1/lib/libpcre2-posix.a\"\n" +
+		"if echo \"$2\" | grep -q 'width16-on'; then\n" +
+		"  test -f \"$1/lib/libpcre2-16.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libpcre2-16.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'width32-on'; then\n" +
+		"  test -f \"$1/lib/libpcre2-32.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libpcre2-32.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'grep-on'; then\n" +
+		"  test -f \"$1/bin/pcre2grep\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/pcre2grep\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

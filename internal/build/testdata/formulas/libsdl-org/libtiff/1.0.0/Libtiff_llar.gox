@@ -60,3 +60,31 @@ onBuild (ctx, proj, out) => {
 	}
 	out.setMetadata meta
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libtiff.a\"\n" +
+		"test -f \"$1/include/tiffio.h\"\n" +
+		"if echo \"$2\" | grep -q 'cxx-on'; then\n" +
+		"  test -f \"$1/lib/libtiffxx.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libtiffxx.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  find \"$1/bin\" -maxdepth 1 -type f -name 'tiff*' | grep -q .\n" +
+		"else\n" +
+		"  if test -d \"$1/bin\" && find \"$1/bin\" -maxdepth 1 -type f -name 'tiff*' | grep -q .; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

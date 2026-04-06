@@ -20,10 +20,62 @@ type Record struct {
 	ParentPID int64 `json:"parent_pid,omitempty"`
 
 	Argv []string `json:"argv"`
+	Env  []string `json:"env,omitempty"`
 	Cwd  string   `json:"cwd"`
 
 	Inputs  []string `json:"inputs,omitempty"`
 	Changes []string `json:"changes,omitempty"`
+}
+
+type EventKind uint8
+
+const (
+	EventExec EventKind = iota
+	EventChdir
+	EventRead
+	EventWrite
+	EventRename
+	EventUnlink
+	EventMkdir
+	EventSymlink
+	EventClone
+)
+
+type Event struct {
+	Seq         int64     `json:"seq"`
+	PID         int64     `json:"pid,omitempty"`
+	ParentPID   int64     `json:"parent_pid,omitempty"`
+	Cwd         string    `json:"cwd,omitempty"`
+	Kind        EventKind `json:"kind"`
+	Path        string    `json:"path,omitempty"`
+	RelatedPath string    `json:"related_path,omitempty"`
+	Argv        []string  `json:"argv,omitempty"`
+	ChildPID    int64     `json:"child_pid,omitempty"`
+}
+
+func (kind EventKind) String() string {
+	switch kind {
+	case EventExec:
+		return "exec"
+	case EventChdir:
+		return "chdir"
+	case EventRead:
+		return "read"
+	case EventWrite:
+		return "write"
+	case EventRename:
+		return "rename"
+	case EventUnlink:
+		return "unlink"
+	case EventMkdir:
+		return "mkdir"
+	case EventSymlink:
+		return "symlink"
+	case EventClone:
+		return "clone"
+	default:
+		return "unknown"
+	}
 }
 
 type ParseDiagnostics struct {
@@ -43,6 +95,7 @@ func (d ParseDiagnostics) Trusted() bool {
 
 type CaptureResult struct {
 	Records     []Record
+	Events      []Event
 	Diagnostics ParseDiagnostics
 }
 
@@ -67,6 +120,12 @@ type procState struct {
 	parentPID int64
 	cwd       string
 	current   *Record
+}
+
+type parseResult struct {
+	records     []Record
+	events      []Event
+	diagnostics ParseDiagnostics
 }
 
 type parsedCall struct {
@@ -120,6 +179,7 @@ func watchWithStrace(ctx context.Context, moduleArg, combo string) (CaptureResul
 		"-f",
 		"-ttt",
 		"-yy",
+		"-v",
 		"-s", "65535",
 		"-e", "trace=execve,execveat,chdir,open,openat,openat2,creat,rename,renameat,renameat2,unlink,unlinkat,mkdir,mkdirat,symlink,symlinkat,clone,fork,vfork",
 		"-o", outFile,
@@ -142,21 +202,31 @@ func watchWithStrace(ctx context.Context, moduleArg, combo string) (CaptureResul
 	if err != nil {
 		return CaptureResult{}, err
 	}
-	records, diagnostics := parseStraceRecordsDetailed(string(data), parseOptions{rootCwd: wd})
-	return CaptureResult{Records: records, Diagnostics: diagnostics}, nil
+	parsed := parseStraceOutputDetailed(string(data), parseOptions{rootCwd: wd})
+	return CaptureResult{Records: parsed.records, Events: parsed.events, Diagnostics: parsed.diagnostics}, nil
 }
 
 func parseStraceRecords(content string, opts parseOptions) []Record {
-	records, _ := parseStraceRecordsDetailed(content, opts)
-	return records
+	return parseStraceOutputDetailed(content, opts).records
+}
+
+func parseStraceEvents(content string, opts parseOptions) []Event {
+	return parseStraceOutputDetailed(content, opts).events
 }
 
 func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, ParseDiagnostics) {
+	parsed := parseStraceOutputDetailed(content, opts)
+	return parsed.records, parsed.diagnostics
+}
+
+func parseStraceOutputDetailed(content string, opts parseOptions) parseResult {
 	states := map[int64]*procState{}
 	unfinished := map[int64]string{}
 	var ordered []*Record
+	var events []Event
 	var diagnostics ParseDiagnostics
 	var fallbackPID int64 = syntheticMainPID
+	var nextSeq int64 = 1
 	opts.keepRoots = normalizeKeepRoots(opts.keepRoots)
 
 	stateOf := func(pid int64) *procState {
@@ -216,6 +286,13 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 			}
 			childPID, err := strconv.ParseInt(fields[0], 10, 64)
 			if err == nil && childPID > 0 {
+				events = appendEvent(events, &nextSeq, Event{
+					PID:       pid,
+					ParentPID: state.parentPID,
+					Cwd:       state.cwd,
+					Kind:      EventClone,
+					ChildPID:  childPID,
+				})
 				childState, ok := states[childPID]
 				_, childHasUnfinished := unfinished[childPID]
 				if ok && !childHasUnfinished {
@@ -245,12 +322,19 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 		case "chdir":
 			if callSucceeded(call) && len(call.args) > 0 {
 				state.cwd = resolvePath(state.cwd, parseQuoted(call.args[0]))
+				events = appendEvent(events, &nextSeq, Event{
+					PID:       pid,
+					ParentPID: state.parentPID,
+					Cwd:       state.cwd,
+					Kind:      EventChdir,
+					Path:      state.cwd,
+				})
 			}
 		case "execve", "execveat":
 			if !callSucceeded(call) {
 				continue
 			}
-			path, argv := parseExecArgs(call)
+			path, argv, env := parseExecArgs(call)
 			if len(argv) == 0 && path != "" {
 				argv = []string{path}
 			}
@@ -261,12 +345,21 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 				PID:       pid,
 				ParentPID: state.parentPID,
 				Argv:      argv,
+				Env:       env,
 				Cwd:       state.cwd,
 			}
 			state.current = rec
 			ordered = append(ordered, rec)
+			events = appendEvent(events, &nextSeq, Event{
+				PID:       pid,
+				ParentPID: state.parentPID,
+				Cwd:       state.cwd,
+				Kind:      EventExec,
+				Path:      resolvePath(state.cwd, path),
+				Argv:      slices.Clone(argv),
+			})
 		case "open", "openat", "openat2", "creat":
-			if state.current == nil || !callSucceeded(call) {
+			if !callSucceeded(call) {
 				continue
 			}
 			path := parseResolvedOpenPath(state.cwd, call)
@@ -276,7 +369,28 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 			if !shouldKeepPath(path, opts.keepRoots) {
 				continue
 			}
-			if isWriteOpen(call) {
+			write := isWriteOpen(call)
+			if write {
+				events = appendEvent(events, &nextSeq, Event{
+					PID:       pid,
+					ParentPID: state.parentPID,
+					Cwd:       state.cwd,
+					Kind:      EventWrite,
+					Path:      path,
+				})
+			} else {
+				events = appendEvent(events, &nextSeq, Event{
+					PID:       pid,
+					ParentPID: state.parentPID,
+					Cwd:       state.cwd,
+					Kind:      EventRead,
+					Path:      path,
+				})
+			}
+			if state.current == nil {
+				continue
+			}
+			if write {
 				if !slices.Contains(state.current.Changes, path) {
 					state.current.Changes = append(state.current.Changes, path)
 				}
@@ -286,14 +400,25 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 				}
 			}
 		case "rename", "renameat", "renameat2":
-			if state.current == nil || !callSucceeded(call) {
+			if !callSucceeded(call) {
 				continue
 			}
-			for _, path := range parseResolvedRenamePaths(state.cwd, call) {
-				if path == "" {
-					continue
-				}
-				if !shouldKeepPath(path, opts.keepRoots) {
+			paths := parseResolvedRenamePaths(state.cwd, call)
+			if len(paths) >= 2 && (shouldKeepPath(paths[0], opts.keepRoots) || shouldKeepPath(paths[1], opts.keepRoots)) {
+				events = appendEvent(events, &nextSeq, Event{
+					PID:         pid,
+					ParentPID:   state.parentPID,
+					Cwd:         state.cwd,
+					Kind:        EventRename,
+					Path:        paths[1],
+					RelatedPath: paths[0],
+				})
+			}
+			if state.current == nil {
+				continue
+			}
+			for _, path := range paths {
+				if path == "" || !shouldKeepPath(path, opts.keepRoots) {
 					continue
 				}
 				if !slices.Contains(state.current.Changes, path) {
@@ -301,7 +426,7 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 				}
 			}
 		case "unlink", "unlinkat", "mkdir", "mkdirat", "symlink", "symlinkat":
-			if state.current == nil || !callSucceeded(call) {
+			if !callSucceeded(call) {
 				continue
 			}
 			path := parseResolvedChangePath(state.cwd, call)
@@ -309,6 +434,17 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 				continue
 			}
 			if !shouldKeepPath(path, opts.keepRoots) {
+				continue
+			}
+			events = appendEvent(events, &nextSeq, Event{
+				PID:         pid,
+				ParentPID:   state.parentPID,
+				Cwd:         state.cwd,
+				Kind:        eventKindForChangeCall(call.name),
+				Path:        path,
+				RelatedPath: parseRelatedChangePath(call),
+			})
+			if state.current == nil {
 				continue
 			}
 			if !slices.Contains(state.current.Changes, path) {
@@ -324,7 +460,17 @@ func parseStraceRecordsDetailed(content string, opts parseOptions) ([]Record, Pa
 		}
 		out = append(out, *rec)
 	}
-	return out, diagnostics
+	return parseResult{
+		records:     out,
+		events:      events,
+		diagnostics: diagnostics,
+	}
+}
+
+func appendEvent(events []Event, nextSeq *int64, event Event) []Event {
+	event.Seq = *nextSeq
+	*nextSeq = *nextSeq + 1
+	return append(events, event)
 }
 
 func splitStraceLine(line string) (int64, bool, string, bool) {
@@ -474,28 +620,38 @@ func splitTopLevel(s string) []string {
 	return parts
 }
 
-func parseExecArgs(call parsedCall) (string, []string) {
+func parseExecArgs(call parsedCall) (string, []string, []string) {
 	switch call.name {
 	case "execve":
 		path := ""
 		if len(call.args) > 0 {
 			path = parseQuoted(call.args[0])
 		}
+		var argv []string
 		if len(call.args) > 1 {
-			return path, parseStringArray(call.args[1])
+			argv = parseStringArray(call.args[1])
 		}
-		return path, nil
+		var env []string
+		if len(call.args) > 2 {
+			env = parseStringArray(call.args[2])
+		}
+		return path, argv, env
 	case "execveat":
 		path := ""
 		if len(call.args) > 1 {
 			path = parseQuoted(call.args[1])
 		}
+		var argv []string
 		if len(call.args) > 2 {
-			return path, parseStringArray(call.args[2])
+			argv = parseStringArray(call.args[2])
 		}
-		return path, nil
+		var env []string
+		if len(call.args) > 3 {
+			env = parseStringArray(call.args[3])
+		}
+		return path, argv, env
 	default:
-		return "", nil
+		return "", nil, nil
 	}
 }
 
@@ -615,6 +771,27 @@ func parseResolvedChangePath(cwd string, call parsedCall) string {
 		}
 	}
 	return ""
+}
+
+func parseRelatedChangePath(call parsedCall) string {
+	switch call.name {
+	case "symlink", "symlinkat":
+		if len(call.args) > 0 {
+			return parseQuoted(call.args[0])
+		}
+	}
+	return ""
+}
+
+func eventKindForChangeCall(name string) EventKind {
+	switch name {
+	case "mkdir", "mkdirat":
+		return EventMkdir
+	case "symlink", "symlinkat":
+		return EventSymlink
+	default:
+		return EventUnlink
+	}
 }
 
 func callSucceeded(call parsedCall) bool {

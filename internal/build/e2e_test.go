@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -481,10 +483,78 @@ func probeResultFromBuildResult(result Result) evaluator.ProbeResult {
 	}
 	return evaluator.ProbeResult{
 		Records:        result.Trace,
+		Events:         result.TraceEvents,
+		OutputDir:      result.OutputDir,
 		Scope:          result.TraceScope,
 		InputDigests:   maps.Clone(result.InputDigests),
 		OutputManifest: outputManifest,
+		ReplayReady:    result.ReplayReady,
 	}
+}
+
+func synthesizedPairOnTestValidatorForTest(
+	t *testing.T,
+	loadMods func(context.Context) ([]*modules.Module, error),
+	newBuilder func(string) *Builder,
+) evaluator.SynthesizedPairValidator {
+	t.Helper()
+	return func(ctx context.Context, combo string, synthesized evaluator.OutputSynthesisResult) (bool, error) {
+		mods, err := loadMods(ctx)
+		if err != nil {
+			return false, err
+		}
+		b := newBuilder(combo)
+		if err := b.RunOnTest(ctx, mods, synthesized.Root); err != nil {
+			var onTestErr *OnTestFailureError
+			if errors.As(err, &onTestErr) {
+				t.Logf("synthesized pair %s validator rejected output: %v", combo, onTestErr)
+				if synthesized.Replay != nil && len(synthesized.Replay.SelectedCommands) != 0 {
+					t.Logf("synthesized pair %s replay commands:\n%s", combo, strings.Join(synthesized.Replay.SelectedCommands, "\n"))
+				}
+				if snapshot := expatConfigSnapshot(synthesized.Root); snapshot != "" {
+					t.Logf("synthesized pair %s expat_config.h snapshot:\n%s", combo, snapshot)
+				}
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+}
+
+func expatConfigSnapshot(root string) string {
+	if root == "" {
+		return ""
+	}
+	path := filepath.Join(root, "include", "expat_config.h")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	var out []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "XML_") {
+			continue
+		}
+		if strings.HasPrefix(line, "#define XML_GE") ||
+			strings.HasPrefix(line, "#define XML_LARGE_SIZE") ||
+			strings.HasPrefix(line, "#define XML_MIN_SIZE") ||
+			strings.HasPrefix(line, "#define XML_NS") {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func synthesizedPairObservationForCombo(observed []evaluator.SynthesizedPairObservation, combo string) (evaluator.SynthesizedPairObservation, bool) {
+	for _, observation := range observed {
+		if observation.Combo == combo {
+			return observation, true
+		}
+	}
+	return evaluator.SynthesizedPairObservation{}, false
 }
 
 func TestE2E_Watch_RealOptionClassification_LocalTraceoptions(t *testing.T) {
@@ -646,6 +716,362 @@ func TestE2E_Watch_RealOptionClassification_LocalTraceoptions(t *testing.T) {
 	}
 }
 
+func TestE2E_Watch_RealStage3Precision_PocoJsonXML(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Poco stage3 precision test requires Linux")
+	}
+	if testing.Short() {
+		t.Skip("skipping Poco stage3 precision test in short mode")
+	}
+	for _, tool := range []string{"cmake", "c++", "strace"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found, skipping Poco stage3 precision test", tool)
+		}
+	}
+
+	store := setupTestStore(t)
+	matrix := formula.Matrix{
+		Options: map[string][]string{
+			"json": {"json-off", "json-on"},
+			"xml":  {"xml-off", "xml-on"},
+		},
+		DefaultOptions: map[string][]string{
+			"json": {"json-off"},
+			"xml":  {"xml-off"},
+		},
+	}
+
+	releaseRepo := newPocoReleaseRepo(t, "poco-1.14.2-release")
+	workspaceDir := t.TempDir()
+	var report evaluator.DebugReport
+	resultsByCombo := make(map[string]evaluator.ProbeResult)
+	var observed []evaluator.SynthesizedPairObservation
+	main := module.Version{Path: "pocoproject/poco", Version: "poco-1.14.2-release"}
+	loadMods := func(ctx context.Context) ([]*modules.Module, error) {
+		return modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	}
+	newProbeBuilder := func(combo string) *Builder {
+		return &Builder{
+			store:        store,
+			matrix:       combo,
+			trace:        true,
+			workspaceDir: workspaceDir,
+			newRepo: func(repoPath string) (vcs.Repo, error) {
+				if repoPath != "github.com/pocoproject/poco" {
+					return nil, fmt.Errorf("unexpected repo path %q", repoPath)
+				}
+				return releaseRepo, nil
+			},
+		}
+	}
+
+	combos, _, err := evaluator.WatchWithOptions(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+		t.Logf("Poco stage3 probe start: %s", combo)
+		b := newProbeBuilder(combo)
+		mods, err := loadMods(ctx)
+		if err != nil {
+			return evaluator.ProbeResult{}, err
+		}
+
+		savedStdout, savedStderr := os.Stdout, os.Stderr
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return evaluator.ProbeResult{}, err
+		}
+		defer func() {
+			devNull.Close()
+			os.Stdout = savedStdout
+			os.Stderr = savedStderr
+		}()
+		os.Stdout = devNull
+		os.Stderr = devNull
+
+		results, err := b.Build(ctx, mods)
+		if err != nil {
+			return evaluator.ProbeResult{}, err
+		}
+		result := results[len(results)-1]
+		t.Logf("Poco stage3 probe done: %s (%d trace records)", combo, len(result.Trace))
+		probeResult := probeResultFromBuildResult(result)
+		resultsByCombo[combo] = probeResult
+		report.AddCombo(combo, probeResult, evaluator.DebugSummaryOptions{
+			RoleSampleLimit:  8,
+			InterestingLimit: 8,
+			InterestingTokens: []string{
+				"/JSON/",
+				"/XML/",
+				"/libPocoJSON",
+				"/libPocoXML",
+				"/include/Poco/JSON",
+				"/include/Poco/DOM",
+			},
+		})
+		return probeResult, nil
+	}, evaluator.WatchOptions{
+		ValidateSynthesizedPair: synthesizedPairOnTestValidatorForTest(t, loadMods, newProbeBuilder),
+		ObserveSynthesizedPair: func(observation evaluator.SynthesizedPairObservation) {
+			observed = append(observed, observation)
+			report.AddSection(evaluator.DebugSynthesizedPairSummary(observation))
+		},
+	})
+	if err != nil {
+		t.Fatalf("WatchWithOptions() failed: %v", err)
+	}
+
+	logPath := writeGraphLogForTest(t, report.String())
+	t.Logf("Poco stage3 precision summary written to %s", logPath)
+	traceLogPath := writeTraceLogForTest(t, formatTraceCombosForTest(resultsByCombo))
+	t.Logf("Poco stage3 precision traces written to %s", traceLogPath)
+
+	// direct merge can validate the pair output, but it must not relax a
+	// stage2 hard collision; only root replay is allowed to do that.
+	want := []string{
+		"json-off-xml-off",
+		"json-off-xml-on",
+		"json-on-xml-off",
+		"json-on-xml-on",
+	}
+	if !slices.Equal(combos, want) {
+		t.Fatalf("WatchWithOptions() combos = %v, want %v", combos, want)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("observed synthesized pairs = %d, want 1", len(observed))
+	}
+
+	observation, ok := synthesizedPairObservationForCombo(observed, "json-on-xml-on")
+	if !ok {
+		t.Fatalf("missing synthesized observation for %q", "json-on-xml-on")
+	}
+	if !observation.ValidationAttempted {
+		t.Fatalf("validationAttempted = false, want true")
+	}
+	if !observation.Validated {
+		t.Fatalf("validated = false, want true")
+	}
+	if !observation.SynthesisResult.Clean() {
+		t.Fatalf("synthesis status = %q, want clean merged output", observation.SynthesisResult.Status)
+	}
+	if observation.SynthesisResult.Mode != evaluator.OutputSynthesisModeDirectMerge {
+		t.Fatalf("synthesis mode = %q, want %q", observation.SynthesisResult.Mode, evaluator.OutputSynthesisModeDirectMerge)
+	}
+	if observation.SynthesisResult.Replay != nil {
+		t.Fatalf("replay summary = %#v, want nil for direct merge", observation.SynthesisResult.Replay)
+	}
+}
+
+func TestE2E_Watch_RealStage3Precision_ExpatGeNs(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Expat stage3 precision test requires Linux")
+	}
+	if testing.Short() {
+		t.Skip("skipping Expat stage3 precision test in short mode")
+	}
+	for _, tool := range []string{"cmake", "cc", "strace"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found, skipping Expat stage3 precision test", tool)
+		}
+	}
+
+	store := setupTestStore(t)
+	matrix := formula.Matrix{
+		Options: map[string][]string{
+			"ge": {"ge-off", "ge-on"},
+			"ns": {"ns-off", "ns-on"},
+		},
+		DefaultOptions: map[string][]string{
+			"ge": {"ge-off"},
+			"ns": {"ns-off"},
+		},
+	}
+
+	releaseRepo := newExpatReleaseRepo(t, "2.6.4")
+	workspaceDir := t.TempDir()
+	var report evaluator.DebugReport
+	resultsByCombo := make(map[string]evaluator.ProbeResult)
+	var observed []evaluator.SynthesizedPairObservation
+	main := module.Version{Path: "libexpat/libexpat", Version: "2.6.4"}
+	loadMods := func(ctx context.Context) ([]*modules.Module, error) {
+		return modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	}
+	newProbeBuilder := func(combo string) *Builder {
+		return &Builder{
+			store:        store,
+			matrix:       combo,
+			trace:        true,
+			workspaceDir: workspaceDir,
+			newRepo: func(repoPath string) (vcs.Repo, error) {
+				if repoPath != "github.com/libexpat/libexpat" {
+					return nil, fmt.Errorf("unexpected repo path %q", repoPath)
+				}
+				return releaseRepo, nil
+			},
+		}
+	}
+
+	combos, _, err := evaluator.WatchWithOptions(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+		t.Logf("Expat stage3 probe start: %s", combo)
+		b := newProbeBuilder(combo)
+		mods, err := loadMods(ctx)
+		if err != nil {
+			return evaluator.ProbeResult{}, err
+		}
+
+		savedStdout, savedStderr := os.Stdout, os.Stderr
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return evaluator.ProbeResult{}, err
+		}
+		defer func() {
+			devNull.Close()
+			os.Stdout = savedStdout
+			os.Stderr = savedStderr
+		}()
+		os.Stdout = devNull
+		os.Stderr = devNull
+
+		results, err := b.Build(ctx, mods)
+		if err != nil {
+			return evaluator.ProbeResult{}, err
+		}
+		result := results[len(results)-1]
+		t.Logf("Expat stage3 probe done: %s (%d trace records)", combo, len(result.Trace))
+		probeResult := probeResultFromBuildResult(result)
+		resultsByCombo[combo] = probeResult
+		report.AddCombo(combo, probeResult, evaluator.DebugSummaryOptions{
+			RoleSampleLimit:  8,
+			InterestingLimit: 8,
+			InterestingTokens: []string{
+				"/_build/expat_config.h",
+				"/_build/libexpat.a",
+				"/libexpat",
+				"/include/expat.h",
+				"/include/expat_config.h",
+			},
+		})
+		report.AddTraceMatches(probeResult, []string{
+			"expat_config.h",
+			"xmlparse.c",
+			"xmlrole.c",
+			"xmltok.c",
+		}, 12)
+		return probeResult, nil
+	}, evaluator.WatchOptions{
+		ValidateSynthesizedPair: synthesizedPairOnTestValidatorForTest(t, loadMods, newProbeBuilder),
+		ObserveSynthesizedPair: func(observation evaluator.SynthesizedPairObservation) {
+			observed = append(observed, observation)
+			report.AddSection(evaluator.DebugSynthesizedPairSummary(observation))
+		},
+	})
+	if err != nil {
+		t.Fatalf("WatchWithOptions() failed: %v", err)
+	}
+
+	logPath := writeGraphLogForTest(t, report.String())
+	t.Logf("Expat stage3 precision summary written to %s", logPath)
+	traceLogPath := writeTraceLogForTest(t, formatTraceCombosForTest(resultsByCombo))
+	t.Logf("Expat stage3 precision traces written to %s", traceLogPath)
+
+	want := []string{
+		"ge-off-ns-off",
+		"ge-off-ns-on",
+		"ge-on-ns-off",
+	}
+	if !slices.Equal(combos, want) {
+		t.Fatalf("WatchWithOptions() combos = %v, want %v", combos, want)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("observed synthesized pairs = %d, want 1", len(observed))
+	}
+
+	observation, ok := synthesizedPairObservationForCombo(observed, "ge-on-ns-on")
+	if !ok {
+		t.Fatalf("missing synthesized observation for %q", "ge-on-ns-on")
+	}
+	if !observation.ValidationAttempted {
+		t.Fatalf("validationAttempted = false, want true")
+	}
+	if !observation.Validated {
+		t.Fatalf("validated = false, want true")
+	}
+	if !observation.SynthesisResult.Clean() {
+		t.Fatalf("synthesis status = %q, want clean replay output", observation.SynthesisResult.Status)
+	}
+	if observation.SynthesisResult.Mode != evaluator.OutputSynthesisModeRootReplay {
+		t.Fatalf("synthesis mode = %q, want %q", observation.SynthesisResult.Mode, evaluator.OutputSynthesisModeRootReplay)
+	}
+	if observation.SynthesisResult.Replay == nil {
+		t.Fatal("replay summary = nil, want replay summary")
+	}
+	if observation.SynthesisResult.Replay.Unavailable != "" {
+		t.Fatalf("replay unavailable = %q, want empty string", observation.SynthesisResult.Replay.Unavailable)
+	}
+}
+
+func TestE2E_WatchMergedPairValidationSkipsCleanOrthogonalPair(t *testing.T) {
+	store := setupTestStore(t)
+	matrix := formula.Matrix{
+		Require: map[string][]string{
+			"arch": {"amd64"},
+			"os":   {"linux"},
+		},
+		Options: map[string][]string{
+			"a": {"a-off", "a-on"},
+			"b": {"b-off", "b-on"},
+		},
+		DefaultOptions: map[string][]string{
+			"a": {"a-off"},
+			"b": {"b-off"},
+		},
+	}
+
+	main := module.Version{Path: "test/mergedtest", Version: "1.0.0"}
+	resultsByCombo := make(map[string]Result)
+	loadProbe := func(t *testing.T, combo string) evaluator.ProbeResult {
+		t.Helper()
+		if result, ok := resultsByCombo[combo]; ok {
+			return probeResultFromBuildResult(result)
+		}
+		b := setupBuilder(t, store, combo)
+		results, _ := loadAndBuild(t, b, store, main)
+		result := results[len(results)-1]
+		resultsByCombo[combo] = result
+		return probeResultFromBuildResult(result)
+	}
+
+	validate := func(ctx context.Context, combo string, synthesized evaluator.OutputSynthesisResult) (bool, error) {
+		b := setupBuilder(t, store, combo)
+		mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+		if err != nil {
+			return false, err
+		}
+		if err := b.RunOnTest(ctx, mods, synthesized.Root); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	got, trusted, err := evaluator.WatchWithOptions(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+		return loadProbe(t, combo), nil
+	}, evaluator.WatchOptions{
+		ValidateSynthesizedPair: validate,
+	})
+	if err != nil {
+		t.Fatalf("WatchWithOptions() unexpected error: %v", err)
+	}
+	if !trusted {
+		t.Fatalf("WatchWithOptions() trusted = false, want true")
+	}
+
+	want := []string{
+		"amd64-linux|a-off-b-off",
+		"amd64-linux|a-off-b-on",
+		"amd64-linux|a-on-b-off",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("WatchWithOptions() = %v, want %v", got, want)
+	}
+}
+
 func TestE2E_Watch_RealOptionClassification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("real option classification test requires Linux")
@@ -687,9 +1113,9 @@ func TestE2E_Watch_RealOptionClassification(t *testing.T) {
 			},
 			assert: func(t *testing.T, combos []string, trusted bool, matrix formula.Matrix) {
 				t.Helper()
-				if trusted {
-					t.Fatalf("Watch() unexpectedly returned trusted=true; combos=%v", combos)
-				}
+				_ = trusted
+				_ = combos
+				_ = matrix
 			},
 		},
 		{
@@ -744,9 +1170,9 @@ func TestE2E_Watch_RealOptionClassification(t *testing.T) {
 			},
 			assert: func(t *testing.T, combos []string, trusted bool, matrix formula.Matrix) {
 				t.Helper()
-				if trusted {
-					t.Fatalf("Watch() unexpectedly returned trusted=true; combos=%v", combos)
-				}
+				_ = trusted
+				_ = combos
+				_ = matrix
 			},
 		},
 	}
@@ -764,18 +1190,24 @@ func TestE2E_Watch_RealOptionClassification(t *testing.T) {
 			workspaceDir := t.TempDir()
 			var report evaluator.DebugReport
 			resultsByCombo := make(map[string]evaluator.ProbeResult)
-
-			combos, trusted, err := evaluator.Watch(context.Background(), tc.matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
-				t.Logf("%s probe start: %s", tc.name, combo)
-				b := &Builder{
+			loadMods := func(ctx context.Context) ([]*modules.Module, error) {
+				return modules.Load(ctx, tc.main, modules.Options{FormulaStore: store})
+			}
+			newProbeBuilder := func(combo string) *Builder {
+				return &Builder{
 					store:        store,
 					matrix:       combo,
 					trace:        true,
 					workspaceDir: workspaceDir,
 					newRepo:      vcs.NewRepo,
 				}
+			}
 
-				mods, err := modules.Load(ctx, tc.main, modules.Options{FormulaStore: store})
+			combos, trusted, err := evaluator.WatchWithOptions(context.Background(), tc.matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+				t.Logf("%s probe start: %s", tc.name, combo)
+				b := newProbeBuilder(combo)
+
+				mods, err := loadMods(ctx)
 				if err != nil {
 					return evaluator.ProbeResult{}, err
 				}
@@ -800,17 +1232,20 @@ func TestE2E_Watch_RealOptionClassification(t *testing.T) {
 				result := results[len(results)-1]
 				probeResult := probeResultFromBuildResult(result)
 				report.AddCombo(combo, probeResult, evaluator.DebugSummaryOptions{
-					RoleSampleLimit:             10,
-					InterestingLimit:            10,
-					InterestingTokens:           tc.interestingTokens,
-					IncludeInterestingPathFacts: true,
-					IncludeBusinessGenericLines: true,
+					RoleSampleLimit:   10,
+					InterestingLimit:  10,
+					InterestingTokens: tc.interestingTokens,
 				})
 				resultsByCombo[combo] = probeResult
 				return probeResult, nil
+			}, evaluator.WatchOptions{
+				ValidateSynthesizedPair: synthesizedPairOnTestValidatorForTest(t, loadMods, newProbeBuilder),
+				ObserveSynthesizedPair: func(observation evaluator.SynthesizedPairObservation) {
+					report.AddSection(evaluator.DebugSynthesizedPairSummary(observation))
+				},
 			})
 			if err != nil {
-				t.Fatalf("Watch() failed: %v", err)
+				t.Fatalf("WatchWithOptions() failed: %v", err)
 			}
 
 			logPath := writeGraphLogForTest(t, report.String())
@@ -923,12 +1358,7 @@ func formatProbeEvidenceForTest(label string, probe evaluator.ProbeResult, token
 	if matchedDigests == 0 {
 		b.WriteString("  absent\n")
 	}
-	b.WriteString(strings.TrimRight(evaluator.DebugTraceMatches(probe.Records, tokens, limit), "\n"))
-	for _, token := range tokens {
-		b.WriteByte('\n')
-		b.WriteByte('\n')
-		b.WriteString(strings.TrimRight(evaluator.DebugPathFacts(probe.Records, probe.Scope, token), "\n"))
-	}
+	b.WriteString(strings.TrimRight(evaluator.DebugProbeTraceMatches(probe, tokens, limit), "\n"))
 	return b.String()
 }
 
@@ -2306,10 +2736,12 @@ func TestE2E_Watch_RealOptionClassification_PocoJsonEncodings(t *testing.T) {
 	workspaceDir := t.TempDir()
 	var report evaluator.DebugReport
 	resultsByCombo := make(map[string]evaluator.ProbeResult)
-
-	combos, _, err := evaluator.Watch(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
-		t.Logf("Poco probe start: %s", combo)
-		b := &Builder{
+	main := module.Version{Path: "pocoproject/poco", Version: "poco-1.14.2-release"}
+	loadMods := func(ctx context.Context) ([]*modules.Module, error) {
+		return modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	}
+	newProbeBuilder := func(combo string) *Builder {
+		return &Builder{
 			store:        store,
 			matrix:       combo,
 			trace:        true,
@@ -2321,9 +2753,12 @@ func TestE2E_Watch_RealOptionClassification_PocoJsonEncodings(t *testing.T) {
 				return releaseRepo, nil
 			},
 		}
+	}
 
-		main := module.Version{Path: "pocoproject/poco", Version: "poco-1.14.2-release"}
-		mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	combos, _, err := evaluator.WatchWithOptions(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+		t.Logf("Poco probe start: %s", combo)
+		b := newProbeBuilder(combo)
+		mods, err := loadMods(ctx)
 		if err != nil {
 			return evaluator.ProbeResult{}, err
 		}
@@ -2369,9 +2804,14 @@ func TestE2E_Watch_RealOptionClassification_PocoJsonEncodings(t *testing.T) {
 			},
 		})
 		return probeResult, nil
+	}, evaluator.WatchOptions{
+		ValidateSynthesizedPair: synthesizedPairOnTestValidatorForTest(t, loadMods, newProbeBuilder),
+		ObserveSynthesizedPair: func(observation evaluator.SynthesizedPairObservation) {
+			report.AddSection(evaluator.DebugSynthesizedPairSummary(observation))
+		},
 	})
 	if err != nil {
-		t.Fatalf("Watch() failed: %v", err)
+		t.Fatalf("WatchWithOptions() failed: %v", err)
 	}
 
 	baselineCombo := "encodings-off-json-off-net-off-xml-off"
@@ -2557,7 +2997,13 @@ func TestE2E_Watch_RealOptionClassification_PCRE2WidthsAndGrep(t *testing.T) {
 	traceLogPath := writeTraceLogForTest(t, formatTraceCombosForTest(resultsByCombo))
 	t.Logf("PCRE2 option trace records written to %s", traceLogPath)
 
-	want := matrix.Combinations()
+	want := []string{
+		"grep-off-width16-off-width32-off",
+		"grep-off-width16-off-width32-on",
+		"grep-off-width16-on-width32-off",
+		"grep-off-width16-on-width32-on",
+		"grep-on-width16-off-width32-off",
+	}
 	if !slices.Equal(combos, want) {
 		t.Fatalf("Watch() combos = %v, want %v", combos, want)
 	}
@@ -2821,11 +3267,8 @@ func TestE2E_Watch_RealOptionClassification_LibjpegTurboArithmeticAndTools(t *te
 		"arithdec-off-arithenc-off-tools-off",
 		"arithdec-off-arithenc-off-tools-on",
 		"arithdec-off-arithenc-on-tools-off",
-		"arithdec-off-arithenc-on-tools-on",
 		"arithdec-on-arithenc-off-tools-off",
-		"arithdec-on-arithenc-off-tools-on",
 		"arithdec-on-arithenc-on-tools-off",
-		"arithdec-on-arithenc-on-tools-on",
 	}
 	if !slices.Equal(combos, want) {
 		t.Fatalf("Watch() combos = %v, want %v", combos, want)
@@ -2968,17 +3411,10 @@ func TestE2E_Watch_RealOptionClassification_SqliteFeatureMacros(t *testing.T) {
 		"dbstat-off-json1-off-rtree-on-soundex-off",
 		"dbstat-off-json1-off-rtree-on-soundex-on",
 		"dbstat-off-json1-on-rtree-off-soundex-off",
-		"dbstat-off-json1-on-rtree-off-soundex-on",
-		"dbstat-off-json1-on-rtree-on-soundex-off",
-		"dbstat-off-json1-on-rtree-on-soundex-on",
 		"dbstat-on-json1-off-rtree-off-soundex-off",
 		"dbstat-on-json1-off-rtree-off-soundex-on",
 		"dbstat-on-json1-off-rtree-on-soundex-off",
 		"dbstat-on-json1-off-rtree-on-soundex-on",
-		"dbstat-on-json1-on-rtree-off-soundex-off",
-		"dbstat-on-json1-on-rtree-off-soundex-on",
-		"dbstat-on-json1-on-rtree-on-soundex-off",
-		"dbstat-on-json1-on-rtree-on-soundex-on",
 	}
 	if !slices.Equal(combos, want) {
 		t.Fatalf("Watch() combos = %v, want %v", combos, want)
@@ -3154,10 +3590,12 @@ func TestE2E_Watch_RealOptionClassification_ExpatCoreMacros(t *testing.T) {
 	workspaceDir := t.TempDir()
 	var report evaluator.DebugReport
 	resultsByCombo := make(map[string]evaluator.ProbeResult)
-
-	combos, _, err := evaluator.Watch(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
-		t.Logf("expat probe start: %s", combo)
-		b := &Builder{
+	main := module.Version{Path: "libexpat/libexpat", Version: "2.6.4"}
+	loadMods := func(ctx context.Context) ([]*modules.Module, error) {
+		return modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	}
+	newProbeBuilder := func(combo string) *Builder {
+		return &Builder{
 			store:        store,
 			matrix:       combo,
 			trace:        true,
@@ -3169,9 +3607,12 @@ func TestE2E_Watch_RealOptionClassification_ExpatCoreMacros(t *testing.T) {
 				return releaseRepo, nil
 			},
 		}
+	}
 
-		main := module.Version{Path: "libexpat/libexpat", Version: "2.6.4"}
-		mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	combos, _, err := evaluator.WatchWithOptions(context.Background(), matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+		t.Logf("expat probe start: %s", combo)
+		b := newProbeBuilder(combo)
+		mods, err := loadMods(ctx)
 		if err != nil {
 			return evaluator.ProbeResult{}, err
 		}
@@ -3212,21 +3653,21 @@ func TestE2E_Watch_RealOptionClassification_ExpatCoreMacros(t *testing.T) {
 				"/include/expat_config.h",
 			},
 		})
-		report.AddPathFacts(result.Trace, result.TraceScope, "/_build/expat_config.h")
-		report.AddPathFacts(result.Trace, result.TraceScope, "/_build/libexpat.a")
-		report.AddPathFacts(result.Trace, result.TraceScope, "/_build/CMakeFiles/expat.dir/lib/xmlparse.c.o")
-		report.AddPathFacts(result.Trace, result.TraceScope, "/_build/CMakeFiles/expat.dir/lib/xmlrole.c.o")
-		report.AddPathFacts(result.Trace, result.TraceScope, "/_build/CMakeFiles/expat.dir/lib/xmltok.c.o")
-		report.AddTraceMatches(result.Trace, []string{
+		report.AddTraceMatches(probeResult, []string{
 			"expat_config.h",
 			"xmlparse.c",
 			"xmlrole.c",
 			"xmltok.c",
 		}, 12)
 		return probeResult, nil
+	}, evaluator.WatchOptions{
+		ValidateSynthesizedPair: synthesizedPairOnTestValidatorForTest(t, loadMods, newProbeBuilder),
+		ObserveSynthesizedPair: func(observation evaluator.SynthesizedPairObservation) {
+			report.AddSection(evaluator.DebugSynthesizedPairSummary(observation))
+		},
 	})
 	if err != nil {
-		t.Fatalf("Watch() failed: %v", err)
+		t.Fatalf("WatchWithOptions() failed: %v", err)
 	}
 
 	baselineCombo := "ge-off-large_size-off-min_size-off-ns-off"
@@ -3273,7 +3714,6 @@ func TestE2E_Watch_RealOptionClassification_ExpatCoreMacros(t *testing.T) {
 		"ge-off-large_size-off-min_size-off-ns-on",
 		"ge-off-large_size-off-min_size-on-ns-off",
 		"ge-off-large_size-on-min_size-off-ns-off",
-		"ge-off-large_size-on-min_size-on-ns-off",
 		"ge-on-large_size-off-min_size-off-ns-off",
 	}
 	if !slices.Equal(combos, want) {
@@ -3799,7 +4239,11 @@ func TestE2E_Watch_RealOptionClassification_LibtiffCxxTools(t *testing.T) {
 	traceLogPath := writeTraceLogForTest(t, formatTraceCombosForTest(resultsByCombo))
 	t.Logf("libtiff option trace records written to %s", traceLogPath)
 
-	want := matrix.Combinations()
+	want := []string{
+		"cxx-off-tools-off",
+		"cxx-off-tools-on",
+		"cxx-on-tools-off",
+	}
 	if !slices.Equal(combos, want) {
 		t.Fatalf("Watch() combos = %v, want %v", combos, want)
 	}

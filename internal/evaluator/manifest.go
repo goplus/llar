@@ -327,7 +327,7 @@ func resolveArchiveMember(name string, payload, stringTable []byte) (string, []b
 		if err != nil || n < 0 || n > len(payload) {
 			return "", nil, fmt.Errorf("invalid BSD archive name %q", name)
 		}
-		return string(payload[:n]), payload[n:], nil
+		return strings.TrimRight(string(payload[:n]), "\x00"), payload[n:], nil
 	case strings.HasPrefix(name, "/") && len(name) > 1 && isDecimal(name[1:]):
 		if len(stringTable) == 0 {
 			return "", nil, fmt.Errorf("archive member %q missing string table", name)

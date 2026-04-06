@@ -39,6 +39,52 @@ func TestParseStraceRecords(t *testing.T) {
 	}
 }
 
+func TestParseStraceEvents_CapturesSyscallSequence(t *testing.T) {
+	content := `
+1234 1741260000.000001 chdir("/tmp/work") = 0
+1234 1741260000.000002 execve("/usr/bin/cc", ["cc", "-c", "core.c", "-o", "core.o"], 0x0) = 0
+1234 1741260000.000003 openat(AT_FDCWD, "core.c", O_RDONLY|O_CLOEXEC) = 3
+1234 1741260000.000004 openat(AT_FDCWD, "core.o", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 4
+1234 1741260000.000005 rename("core.o.tmp", "core.o") = 0
+1234 1741260000.000006 unlink("core.o.tmp") = 0
+`
+
+	got := parseStraceEvents(content, parseOptions{rootCwd: "/repo"})
+	want := []Event{
+		{Seq: 1, PID: 1234, Cwd: "/tmp/work", Kind: EventChdir, Path: "/tmp/work"},
+		{Seq: 2, PID: 1234, Cwd: "/tmp/work", Kind: EventExec, Path: "/usr/bin/cc", Argv: []string{"cc", "-c", "core.c", "-o", "core.o"}},
+		{Seq: 3, PID: 1234, Cwd: "/tmp/work", Kind: EventRead, Path: "/tmp/work/core.c"},
+		{Seq: 4, PID: 1234, Cwd: "/tmp/work", Kind: EventWrite, Path: "/tmp/work/core.o"},
+		{Seq: 5, PID: 1234, Cwd: "/tmp/work", Kind: EventRename, Path: "/tmp/work/core.o", RelatedPath: "/tmp/work/core.o.tmp"},
+		{Seq: 6, PID: 1234, Cwd: "/tmp/work", Kind: EventUnlink, Path: "/tmp/work/core.o.tmp"},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseStraceEvents() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseStraceEvents_TracksCloneAndPidFallback(t *testing.T) {
+	content := `
+1234 1741260000.000001 chdir("/tmp/work") = 0
+1234 1741260000.000002 clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 5678
+5678 1741260000.000003 execve("/usr/bin/ld", ["ld", "-o", "tracecli"], 0x0) = 0
+1741260000.000004 openat(AT_FDCWD, "tracecli", O_WRONLY|O_CREAT|O_TRUNC, 0777) = 5
+`
+
+	got := parseStraceEvents(content, parseOptions{rootCwd: "/repo"})
+	want := []Event{
+		{Seq: 1, PID: 1234, Cwd: "/tmp/work", Kind: EventChdir, Path: "/tmp/work"},
+		{Seq: 2, PID: 1234, Cwd: "/tmp/work", Kind: EventClone, ChildPID: 5678},
+		{Seq: 3, PID: 5678, ParentPID: 1234, Cwd: "/tmp/work", Kind: EventExec, Path: "/usr/bin/ld", Argv: []string{"ld", "-o", "tracecli"}},
+		{Seq: 4, PID: 5678, ParentPID: 1234, Cwd: "/tmp/work", Kind: EventWrite, Path: "/tmp/work/tracecli"},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseStraceEvents() = %#v, want %#v", got, want)
+	}
+}
+
 func TestParseStraceRecords_IgnoresFailedSyscalls(t *testing.T) {
 	content := `
 1234 1741260000.000001 chdir("/tmp/work") = 0
@@ -81,6 +127,31 @@ func TestParseStraceRecords_MergesUnfinishedExecve(t *testing.T) {
 		{
 			PID:     1234,
 			Argv:    []string{"cmake", "-S", "/src", "-B", "/tmp/work/_build"},
+			Cwd:     "/tmp/work",
+			Inputs:  []string{"/tmp/work/CMakeLists.txt"},
+			Changes: []string{"/tmp/work/_build/CMakeCache.txt"},
+		},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseStraceRecords() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseStraceRecords_CapturesExecEnvironment(t *testing.T) {
+	content := `
+1234 1741260000.000001 chdir("/tmp/work") = 0
+1234 1741260000.000002 execve("/usr/bin/cmake", ["cmake", "-S", "/src", "-B", "/tmp/work/_build"], ["PWD=/tmp/work", "CFLAGS=-O2", "TRACE_FEATURE=ON"]) = 0
+1234 1741260000.000003 openat(AT_FDCWD, "CMakeLists.txt", O_RDONLY|O_CLOEXEC) = 3
+1234 1741260000.000004 openat(AT_FDCWD, "_build/CMakeCache.txt", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 4
+`
+
+	got := parseStraceRecords(content, parseOptions{rootCwd: "/repo"})
+	want := []Record{
+		{
+			PID:     1234,
+			Argv:    []string{"cmake", "-S", "/src", "-B", "/tmp/work/_build"},
+			Env:     []string{"PWD=/tmp/work", "CFLAGS=-O2", "TRACE_FEATURE=ON"},
 			Cwd:     "/tmp/work",
 			Inputs:  []string{"/tmp/work/CMakeLists.txt"},
 			Changes: []string{"/tmp/work/_build/CMakeCache.txt"},

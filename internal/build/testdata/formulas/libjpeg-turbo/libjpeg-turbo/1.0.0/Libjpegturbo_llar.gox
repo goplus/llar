@@ -47,3 +47,36 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-ljpeg"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libjpeg.a\"\n" +
+		"test -f \"$1/include/jconfig.h\"\n" +
+		"if echo \"$2\" | grep -q 'arithdec-on'; then\n" +
+		"  grep -q '^#define D_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"\n" +
+		"else\n" +
+		"  if grep -q '^#define D_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"; then exit 1; fi\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'arithenc-on'; then\n" +
+		"  grep -q '^#define C_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"\n" +
+		"else\n" +
+		"  if grep -q '^#define C_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"; then exit 1; fi\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  test -f \"$1/bin/cjpeg\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/cjpeg\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

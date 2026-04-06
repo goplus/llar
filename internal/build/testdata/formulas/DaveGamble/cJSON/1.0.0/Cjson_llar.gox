@@ -49,3 +49,31 @@ onBuild (ctx, proj, out) => {
 	}
 	out.setMetadata meta
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libcjson.a\"\n" +
+		"test -f \"$1/include/cjson/cJSON.h\"\n" +
+		"if echo \"$2\" | grep -q 'utils-on'; then\n" +
+		"  test -f \"$1/lib/libcjson_utils.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libcjson_utils.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'locales-on'; then\n" +
+		"  grep -q 'localeconv' \"$1/lib/libcjson.a\"\n" +
+		"else\n" +
+		"  if grep -q 'localeconv' \"$1/lib/libcjson.a\"; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

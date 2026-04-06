@@ -34,9 +34,11 @@ type Result struct {
 	Metadata         string
 	OutputDir        string
 	Trace            []trace.Record
+	TraceEvents      []trace.Event
 	TraceScope       trace.Scope
 	TraceDiagnostics trace.ParseDiagnostics
 	InputDigests     map[string]string
+	ReplayReady      bool
 }
 
 type Options struct {
@@ -235,11 +237,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 
 		// TODO(MeteorsLiu): Source cache dir
-		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
+		tmpSourceDir, cleanupSourceDir, err := b.sourceDir(mod.Path, mod.Version, traceEnabled)
 		if err != nil {
 			return Result{}, err
 		}
-		defer os.RemoveAll(tmpSourceDir)
+		defer cleanupSourceDir()
 
 		// Before we start to build, clone source to tmpSourceDir
 		// And switch current dir to it.
@@ -273,12 +275,20 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		project := &classfile.Project{Deps: b.resolveModTransitiveDeps(targets, mod), SourceFS: mod.FS.(fs.ReadFileFS)}
 
 		// Ready! Go!
+		cwd, err := os.Getwd()
+		if err != nil {
+			return Result{}, err
+		}
+		defer func() {
+			_ = os.Chdir(cwd)
+		}()
 		if err := os.Chdir(tmpSourceDir); err != nil {
 			return Result{}, err
 		}
 
 		var out classfile.BuildResult
 		var records []trace.Record
+		var events []trace.Event
 		var traceDiagnostics trace.ParseDiagnostics
 		traceScope := trace.Scope{
 			SourceRoot:  tmpSourceDir,
@@ -302,7 +312,9 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 				return Result{}, err
 			}
 			records = traceResult.Records
+			events = traceResult.Events
 			traceDiagnostics = traceResult.Diagnostics
+			traceScope.BuildRoot = inferTraceBuildRoot(records, traceScope)
 			traceScope.KeepRoots = slices.Clone(traceRoots)
 		} else {
 			if err := runOnBuild(); err != nil {
@@ -339,9 +351,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			Metadata:         out.Metadata(),
 			OutputDir:        installDir,
 			Trace:            records,
+			TraceEvents:      events,
 			TraceScope:       traceScope,
 			TraceDiagnostics: traceDiagnostics,
 			InputDigests:     collectTraceInputDigests(records, traceScope),
+			ReplayReady:      traceEnabled,
 		}, nil
 	}
 
@@ -379,6 +393,151 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	return results, nil
 }
 
+func inferTraceBuildRoot(records []trace.Record, scope trace.Scope) string {
+	sourceRoot := filepath.Clean(scope.SourceRoot)
+	if sourceRoot == "" {
+		return filepath.Clean(scope.BuildRoot)
+	}
+	installRoot := filepath.Clean(scope.InstallRoot)
+	candidates := make([]string, 0, len(records))
+	for _, rec := range records {
+		for _, path := range rec.Changes {
+			dir, ok := traceBuildCandidateDir(path, sourceRoot, installRoot)
+			if !ok {
+				continue
+			}
+			candidates = append(candidates, dir)
+		}
+	}
+	if len(candidates) == 0 {
+		return filepath.Clean(scope.BuildRoot)
+	}
+	root := filepath.Clean(candidates[0])
+	for _, dir := range candidates[1:] {
+		root = commonPathPrefix(root, filepath.Clean(dir))
+		if root == sourceRoot {
+			break
+		}
+	}
+	if root == "" || root == "." || root == sourceRoot {
+		return filepath.Clean(scope.BuildRoot)
+	}
+	return root
+}
+
+func traceBuildCandidateDir(path, sourceRoot, installRoot string) (string, bool) {
+	path = filepath.Clean(path)
+	if path == "" {
+		return "", false
+	}
+	if path == sourceRoot || path == installRoot {
+		return "", false
+	}
+	if !isWithinRoot(path, sourceRoot) {
+		return "", false
+	}
+	if installRoot != "" && isWithinRoot(path, installRoot) {
+		return "", false
+	}
+	info, err := os.Stat(path)
+	switch {
+	case err == nil && info.IsDir():
+		return path, true
+	case err == nil:
+		return filepath.Dir(path), true
+	case errors.Is(err, os.ErrNotExist):
+		if strings.HasSuffix(path, string(filepath.Separator)) {
+			return strings.TrimSuffix(path, string(filepath.Separator)), true
+		}
+		return filepath.Dir(path), true
+	default:
+		return "", false
+	}
+}
+
+func commonPathPrefix(left, right string) string {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if left == right {
+		return left
+	}
+	leftParts := splitPathParts(left)
+	rightParts := splitPathParts(right)
+	n := minInt(len(leftParts), len(rightParts))
+	parts := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		if leftParts[i] != rightParts[i] {
+			break
+		}
+		parts = append(parts, leftParts[i])
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if filepath.IsAbs(left) {
+		return string(filepath.Separator) + filepath.Join(parts...)
+	}
+	return filepath.Join(parts...)
+}
+
+func splitPathParts(path string) []string {
+	path = filepath.Clean(path)
+	if path == "." || path == string(filepath.Separator) {
+		return nil
+	}
+	if filepath.IsAbs(path) {
+		path = strings.TrimPrefix(path, string(filepath.Separator))
+	}
+	return strings.Split(path, string(filepath.Separator))
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func isWithinRoot(path, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+func (b *Builder) sourceDir(modPath, version string, preserve bool) (string, func(), error) {
+	if !preserve {
+		dir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(modPath, "/", "-"), version))
+		if err != nil {
+			return "", nil, err
+		}
+		return dir, func() {
+			_ = os.RemoveAll(dir)
+		}, nil
+	}
+
+	escaped, err := module.EscapePath(modPath)
+	if err != nil {
+		return "", nil, err
+	}
+	dir := filepath.Join(b.workspaceDir, ".trace-src", fmt.Sprintf("%s@%s-%s", escaped, version, b.matrix))
+	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", nil, err
+	}
+	return dir, func() {}, nil
+}
+
 func collectTraceInputDigests(records []trace.Record, scope trace.Scope) map[string]string {
 	buildRoot := filepath.Clean(scope.BuildRoot)
 	if buildRoot == "" || len(records) == 0 {
@@ -388,6 +547,12 @@ func collectTraceInputDigests(records []trace.Record, scope trace.Scope) map[str
 	paths := make(map[string]struct{})
 	for _, rec := range records {
 		for _, path := range rec.Inputs {
+			if !pathWithinRoot(path, buildRoot) {
+				continue
+			}
+			paths[path] = struct{}{}
+		}
+		for _, path := range rec.Changes {
 			if !pathWithinRoot(path, buildRoot) {
 				continue
 			}

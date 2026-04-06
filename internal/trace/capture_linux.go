@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -62,7 +61,6 @@ func CaptureLockedThread(ctx context.Context, opts CaptureOptions, run func() er
 
 	runErr := run()
 	stopErr := stopAttachedTracer(tracer)
-	rawPersistErr := persistRawStraceIfRequested(outFile, tid)
 	data, readErr := os.ReadFile(outFile)
 
 	if runErr != nil {
@@ -71,36 +69,14 @@ func CaptureLockedThread(ctx context.Context, opts CaptureOptions, run func() er
 	if stopErr != nil {
 		return CaptureResult{}, stopErr
 	}
-	if rawPersistErr != nil {
-		return CaptureResult{}, rawPersistErr
-	}
 	if readErr != nil {
 		return CaptureResult{}, readErr
 	}
-	records, diagnostics := parseStraceRecordsDetailed(string(data), parseOptions{
+	parsed := parseStraceOutputDetailed(string(data), parseOptions{
 		rootCwd:   opts.RootCwd,
 		keepRoots: opts.KeepRoots,
 	})
-	return CaptureResult{Records: records, Diagnostics: diagnostics}, nil
-}
-
-func persistRawStraceIfRequested(outFile string, tid int) error {
-	dir := strings.TrimSpace(os.Getenv("LLAR_RAW_STRACE_DIR"))
-	if dir == "" {
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create raw strace dir %s: %w", dir, err)
-	}
-	data, err := os.ReadFile(outFile)
-	if err != nil {
-		return fmt.Errorf("read raw strace log %s: %w", outFile, err)
-	}
-	path := filepath.Join(dir, fmt.Sprintf("raw-strace-tid-%d-%d.log", tid, time.Now().UnixNano()))
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write raw strace log %s: %w", path, err)
-	}
-	return nil
+	return CaptureResult{Records: parsed.records, Events: parsed.events, Diagnostics: parsed.diagnostics}, nil
 }
 
 func allowPtraceAttach() (func(), error) {
@@ -131,6 +107,7 @@ func startAttachedTracer(ctx context.Context, tid int, outFile string) (*attache
 		"-f",
 		"-ttt",
 		"-yy",
+		"-v",
 		"-s", "65535",
 		"-e", "trace=execve,execveat,chdir,open,openat,openat2,creat,rename,renameat,renameat2,unlink,unlinkat,mkdir,mkdirat,symlink,symlinkat,clone,fork,vfork",
 		"-o", outFile,

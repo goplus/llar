@@ -42,3 +42,45 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-lcares"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libcares.a\"\n" +
+		"test -f \"$1/include/ares.h\"\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  test -f \"$1/bin/adig\"\n" +
+		"  test -f \"$1/bin/ahost\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/adig\"\n" +
+		"  test ! -e \"$1/bin/ahost\"\n" +
+		"fi\n" +
+		"cat > \"$3/cares_threads_test.c\" <<'EOF'\n" +
+		"#include <ares.h>\n" +
+		"int main(void) { return ares_threadsafety() ? 0 : 1; }\n" +
+		"EOF\n" +
+		"cc -I\"$1/include\" \"$3/cares_threads_test.c\" -L\"$1/lib\" -lcares -o \"$3/cares_threads_test\"\n" +
+		"if echo \"$2\" | grep -q 'threads-on'; then\n" +
+		"  \"$3/cares_threads_test\"\n" +
+		"else\n" +
+		"  if \"$3/cares_threads_test\"; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

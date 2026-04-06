@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -102,8 +103,12 @@ func testModule(ctx context.Context, store repo.Store, modPath, version string) 
 			moduleArg = modPath + "@" + version
 		}
 		var trusted bool
-		combos, trusted, err = evaluator.Watch(ctx, matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
-			return collectBuildTrace(ctx, store, moduleArg, modPath, version, combo)
+		combos, trusted, err = evaluator.WatchWithOptions(ctx, matrix, func(ctx context.Context, combo string) (evaluator.ProbeResult, error) {
+			return collectAutoProbe(ctx, store, moduleArg, modPath, version, combo)
+		}, evaluator.WatchOptions{
+			ValidateSynthesizedPair: func(ctx context.Context, combo string, synthesized evaluator.OutputSynthesisResult) (bool, error) {
+				return validateSynthesizedPairTest(ctx, store, modPath, version, combo, synthesized)
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("automatic matrix evaluation failed: %w", err)
@@ -161,7 +166,7 @@ func defaultMatrixCombo() string {
 	return matrix.Combinations()[0]
 }
 
-func collectBuildTrace(ctx context.Context, store repo.Store, moduleArg, modPath, version, combo string) (evaluator.ProbeResult, error) {
+func collectAutoProbe(ctx context.Context, store repo.Store, moduleArg, modPath, version, combo string) (evaluator.ProbeResult, error) {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
 	})
@@ -194,12 +199,12 @@ func collectBuildTrace(ctx context.Context, store repo.Store, moduleArg, modPath
 		Trace:     true,
 	})
 	if err != nil {
-		return evaluator.ProbeResult{}, fmt.Errorf("failed to create trace builder for %s: %w", moduleArg, err)
+		return evaluator.ProbeResult{}, fmt.Errorf("failed to create auto probe builder for %s: %w", moduleArg, err)
 	}
 
 	results, err := builder.Build(ctx, mods)
 	if err != nil {
-		return evaluator.ProbeResult{}, fmt.Errorf("failed to trace build for %s [%s]: %w", moduleArg, combo, err)
+		return evaluator.ProbeResult{}, fmt.Errorf("failed to build auto probe for %s [%s]: %w", moduleArg, combo, err)
 	}
 	if len(results) == 0 {
 		return evaluator.ProbeResult{}, nil
@@ -217,11 +222,60 @@ func collectBuildTrace(ctx context.Context, store repo.Store, moduleArg, modPath
 	}
 	return evaluator.ProbeResult{
 		Records:          records,
+		Events:           result.TraceEvents,
+		OutputDir:        result.OutputDir,
 		Scope:            result.TraceScope,
 		TraceDiagnostics: result.TraceDiagnostics,
 		InputDigests:     result.InputDigests,
 		OutputManifest:   outputManifest,
+		ReplayReady:      result.ReplayReady,
 	}, nil
+}
+
+func validateSynthesizedPairTest(ctx context.Context, store repo.Store, modPath, version, combo string, synthesized evaluator.OutputSynthesisResult) (bool, error) {
+	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to load modules for merged validation %s@%s [%s]: %w", modPath, version, combo, err)
+	}
+
+	var savedStdout, savedStderr *os.File
+	if !testVerbose {
+		for _, mod := range mods {
+			mod.SetStdout(io.Discard)
+			mod.SetStderr(io.Discard)
+		}
+		savedStdout = os.Stdout
+		savedStderr = os.Stderr
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return false, fmt.Errorf("failed to open devnull for synthesized validation %s@%s [%s]: %w", modPath, version, combo, err)
+		}
+		defer func() {
+			devNull.Close()
+			os.Stdout = savedStdout
+			os.Stderr = savedStderr
+		}()
+		os.Stdout = devNull
+		os.Stderr = devNull
+	}
+
+	builder, err := build.NewBuilder(build.Options{
+		Store:     store,
+		MatrixStr: combo,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to create merged validation builder for %s@%s [%s]: %w", modPath, version, combo, err)
+	}
+	if err := builder.RunOnTest(ctx, mods, synthesized.Root); err != nil {
+		var onTestErr *build.OnTestFailureError
+		if errors.As(err, &onTestErr) {
+			return false, nil
+		}
+		return false, fmt.Errorf("synthesized validation failed for %s@%s [%s]: %w", modPath, version, combo, err)
+	}
+	return true, nil
 }
 
 func formatTraceDump(moduleArg, combo string, records []trace.Record, inputDigests map[string]string) string {
@@ -241,6 +295,9 @@ func formatTraceDump(moduleArg, combo string, records []trace.Record, inputDiges
 		fmt.Fprintf(&b, "%d. argv: %s\n", i+1, strings.Join(rec.Argv, " "))
 		if rec.Cwd != "" {
 			fmt.Fprintf(&b, "   cwd: %s\n", rec.Cwd)
+		}
+		if len(rec.Env) > 0 {
+			fmt.Fprintf(&b, "   env: %s\n", strings.Join(rec.Env, ", "))
 		}
 		if len(rec.Inputs) > 0 {
 			fmt.Fprintf(&b, "   inputs: %s\n", strings.Join(rec.Inputs, ", "))

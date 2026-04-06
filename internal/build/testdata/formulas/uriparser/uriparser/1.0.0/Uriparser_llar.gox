@@ -44,3 +44,50 @@ onBuild (ctx, proj, out) => {
 
 	out.setMetadata "-luriparser"
 }
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/liburiparser.a\"\n" +
+		"test -f \"$1/include/uriparser/Uri.h\"\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  test -f \"$1/bin/uriparse\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/uriparse\"\n" +
+		"fi\n" +
+		"cat > \"$3/uriparser_wchar_test.c\" <<'EOF'\n" +
+		"#include <uriparser/Uri.h>\n" +
+		"#include <wchar.h>\n" +
+		"int main(void) {\n" +
+		"  UriUriW uri;\n" +
+		"  const wchar_t *errorPos = 0;\n" +
+		"  int rc = uriParseSingleUriW(&uri, L\"https://example.com/path\", &errorPos);\n" +
+		"  if (rc == URI_SUCCESS) uriFreeUriMembersW(&uri);\n" +
+		"  return rc == URI_SUCCESS ? 0 : 1;\n" +
+		"}\n" +
+		"EOF\n" +
+		"if echo \"$2\" | grep -q 'wchar-on'; then\n" +
+		"  cc -I\"$1/include\" \"$3/uriparser_wchar_test.c\" -L\"$1/lib\" -luriparser -o \"$3/uriparser_wchar_test\"\n" +
+		"  \"$3/uriparser_wchar_test\"\n" +
+		"else\n" +
+		"  if cc -I\"$1/include\" \"$3/uriparser_wchar_test.c\" -L\"$1/lib\" -luriparser -o \"$3/uriparser_wchar_test\"; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}
