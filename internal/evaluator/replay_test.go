@@ -1,146 +1,12 @@
 package evaluator
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/goplus/llar/internal/trace"
 )
-
-func TestReplayTraceDumpSummary(t *testing.T) {
-	path := strings.TrimSpace(os.Getenv("LLAR_TRACE_REPLAY"))
-	if path == "" {
-		t.Skip("set LLAR_TRACE_REPLAY to a trace dump file to inspect graph roles")
-	}
-
-	records := readTraceDumpFile(t, path)
-	graph := buildGraph(records)
-
-	t.Logf("trace file: %s", path)
-	t.Logf("records=%d actions=%d", len(records), len(graph.actions))
-	t.Logf("action counts: %s", formatActionSummary(graph))
-	t.Logf("path role counts: %s", formatPathRoleSummary(graph))
-
-	for _, role := range []pathRole{roleTooling, rolePropagating, roleDelivery} {
-		paths := samplePathsByRole(graph, role, 8)
-		t.Logf("%s sample (%d):", role.String(), len(paths))
-		for _, path := range paths {
-			t.Logf("  %s", path)
-		}
-	}
-
-	for _, want := range []string{
-		"/_build/zconf.h",
-		"/TryCompile-",
-		"/libz.so.1.3.1",
-		"/include/zlib.h",
-		"/zlib.map",
-	} {
-		paths := sampleInterestingPaths(graph, want, 6)
-		if len(paths) == 0 {
-			t.Logf("match %q: absent", want)
-			continue
-		}
-		t.Logf("match %q:", want)
-		for _, path := range paths {
-			t.Logf("  %s", path)
-		}
-	}
-}
-
-func readTraceDumpFile(t *testing.T, path string) []trace.Record {
-	t.Helper()
-
-	file, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		t.Fatalf("open trace dump: %v", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 1024), 1024*1024)
-
-	records := make([]trace.Record, 0, 256)
-	var current *trace.Record
-	flush := func() {
-		if current == nil {
-			return
-		}
-		records = append(records, *current)
-		current = nil
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.Contains(trimmed, ". argv: "):
-			flush()
-			argvLine := trimmed[strings.Index(trimmed, "argv: ")+len("argv: "):]
-			current = &trace.Record{Argv: strings.Fields(argvLine)}
-		case strings.HasPrefix(trimmed, "pid: "):
-			if current != nil {
-				current.PID = parseInt64DumpField(t, strings.TrimSpace(strings.TrimPrefix(trimmed, "pid: ")))
-			}
-		case strings.HasPrefix(trimmed, "ppid: "):
-			if current != nil {
-				current.ParentPID = parseInt64DumpField(t, strings.TrimSpace(strings.TrimPrefix(trimmed, "ppid: ")))
-			}
-		case strings.HasPrefix(trimmed, "cwd: "):
-			if current != nil {
-				current.Cwd = strings.TrimSpace(strings.TrimPrefix(trimmed, "cwd: "))
-			}
-		case strings.HasPrefix(trimmed, "env: "):
-			if current != nil {
-				current.Env = splitDumpPaths(strings.TrimPrefix(trimmed, "env: "))
-			}
-		case strings.HasPrefix(trimmed, "inputs: "):
-			if current != nil {
-				current.Inputs = splitDumpPaths(strings.TrimPrefix(trimmed, "inputs: "))
-			}
-		case strings.HasPrefix(trimmed, "changes: "):
-			if current != nil {
-				current.Changes = splitDumpPaths(strings.TrimPrefix(trimmed, "changes: "))
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan trace dump: %v", err)
-	}
-	flush()
-
-	if len(records) == 0 {
-		t.Fatalf("no trace records parsed from %s", path)
-	}
-	return records
-}
-
-func splitDumpPaths(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	return slices.DeleteFunc(parts, func(part string) bool { return part == "" })
-}
-
-func parseInt64DumpField(t *testing.T, raw string) int64 {
-	t.Helper()
-
-	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil {
-		t.Fatalf("parse int64 dump field %q: %v", raw, err)
-	}
-	return value
-}
 
 func TestReplayStepInitializesBuildRoot(t *testing.T) {
 	if !replayStepInitializesBuildRoot(replayRoot{
@@ -185,5 +51,270 @@ func TestPrepareReplayBuildRootClearsInitializerState(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(buildRoot, "nested", "keep.txt")); !os.IsNotExist(err) {
 		t.Fatalf("nested stale file still exists, err=%v", err)
+	}
+}
+
+func TestNormalizeReplayEnvMatchesTraceSSARules(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot: "/tmp/src",
+		BuildRoot:  "/tmp/src/_build",
+	}
+	got := normalizeReplayEnv([]string{
+		"PWD=/tmp/src",
+		"SHLVL=2",
+		"TERM=xterm-256color",
+		"CFLAGS=-O2",
+		"TMPDIR=/tmp/src/_tmp",
+	}, scope)
+	want := []string{
+		"CFLAGS=-O2",
+		"TMPDIR=$SRC/_tmp",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeReplayEnv() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("normalizeReplayEnv()[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestPlanRootReplayIgnoresNoiseOnlyEnvChanges(t *testing.T) {
+	makeProbe := func(sourceRoot, outputDir string, pid int64, pwd string) ProbeResult {
+		return ProbeResult{
+			Records: []trace.Record{{
+				PID:       pid,
+				ParentPID: 0,
+				Argv: []string{
+					filepath.Join(sourceRoot, "emit.sh"),
+					"--out=" + filepath.Join(outputDir, "share", "config.txt"),
+				},
+				Cwd: sourceRoot,
+				Env: []string{
+					"PWD=" + pwd,
+					"SHLVL=2",
+					"TERM=xterm-256color",
+				},
+				Changes: []string{
+					filepath.Join(outputDir, "share", "config.txt"),
+				},
+			}},
+			OutputDir:   outputDir,
+			ReplayReady: true,
+			Scope: trace.Scope{
+				SourceRoot:  sourceRoot,
+				BuildRoot:   filepath.Join(sourceRoot, "_build"),
+				InstallRoot: outputDir,
+			},
+		}
+	}
+
+	baseSource := t.TempDir()
+	leftSource := t.TempDir()
+	rightSource := t.TempDir()
+	baseOut := t.TempDir()
+	leftOut := t.TempDir()
+	rightOut := t.TempDir()
+
+	plan, unavailable := planRootReplay(
+		makeProbe(baseSource, baseOut, 100, filepath.Join(baseSource, "work")),
+		makeProbe(leftSource, leftOut, 200, filepath.Join(leftSource, "nested", "cwd")),
+		makeProbe(rightSource, rightOut, 300, filepath.Join(rightSource, "other", "cwd")),
+	)
+	if unavailable != "no replay root parameters changed across probes" {
+		t.Fatalf("planRootReplay() unavailable = %q, want noise-only env differences to be ignored", unavailable)
+	}
+	if plan.summary == nil || len(plan.summary.ChangedRoots) != 0 {
+		t.Fatalf("planRootReplay() changed roots = %v, want none", plan.summary)
+	}
+}
+
+func TestSelectReplayJoinFrontierPrunesPreJoinSideBranch(t *testing.T) {
+	steps := []replayRoot{
+		{writes: []string{"$BUILD/a.txt"}},
+		{reads: []string{"$BUILD/a.txt"}, writes: []string{"$BUILD/side.txt"}},
+		{writes: []string{"$BUILD/b.txt"}},
+		{reads: []string{"$BUILD/a.txt", "$BUILD/b.txt"}, writes: []string{"$INSTALL/out.txt"}},
+	}
+	changed := map[int]struct{}{0: {}, 2: {}}
+	join := map[int]struct{}{3: {}}
+
+	got := selectReplayJoinFrontier(steps, changed, join)
+	want := []int{0, 2, 3}
+	if len(got) != len(want) {
+		t.Fatalf("selectReplayJoinFrontier() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("selectReplayJoinFrontier()[%d] = %d, want %d (full=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestReplayJoinRootIndexesMapsJoinSetToReplayRoots(t *testing.T) {
+	makeProbe := func(sourceRoot string, variant string) ProbeResult {
+		buildRoot := filepath.Join(sourceRoot, "build")
+		installRoot := filepath.Join(sourceRoot, "out")
+		compileAArgv := []string{"cc", "-c", filepath.Join(sourceRoot, "a.c"), "-o", filepath.Join(buildRoot, "a.o")}
+		if variant != "" {
+			compileAArgv = []string{"cc", "-DFEATURE", "-c", filepath.Join(sourceRoot, "a.c"), "-o", filepath.Join(buildRoot, "a.o")}
+		}
+		return ProbeResult{
+			Records: []trace.Record{
+				{
+					PID:       100,
+					ParentPID: 0,
+					Argv:      compileAArgv,
+					Cwd:       sourceRoot,
+					Inputs:    []string{filepath.Join(sourceRoot, "a.c")},
+					Changes:   []string{filepath.Join(buildRoot, "a.o")},
+				},
+				{
+					PID:       200,
+					ParentPID: 0,
+					Argv:      []string{"cc", "-c", filepath.Join(sourceRoot, "b.c"), "-o", filepath.Join(buildRoot, "b.o")},
+					Cwd:       sourceRoot,
+					Inputs:    []string{filepath.Join(sourceRoot, "b.c")},
+					Changes:   []string{filepath.Join(buildRoot, "b.o")},
+				},
+				{
+					PID:       300,
+					ParentPID: 0,
+					Argv: []string{
+						"cc",
+						filepath.Join(buildRoot, "a.o"),
+						filepath.Join(buildRoot, "b.o"),
+						"-o",
+						filepath.Join(buildRoot, "app"),
+					},
+					Cwd: sourceRoot,
+					Inputs: []string{
+						filepath.Join(buildRoot, "a.o"),
+						filepath.Join(buildRoot, "b.o"),
+					},
+					Changes: []string{
+						filepath.Join(buildRoot, "app"),
+					},
+				},
+			},
+			Scope: trace.Scope{
+				SourceRoot:  sourceRoot,
+				BuildRoot:   buildRoot,
+				InstallRoot: installRoot,
+			},
+		}
+	}
+
+	base := makeProbe(t.TempDir(), "")
+	probe := makeProbe(t.TempDir(), "left")
+	scan := replayRoots(probe)
+	got := replayJoinRootIndexes(base, probe, scan)
+	if len(got) != 1 {
+		t.Fatalf("replayJoinRootIndexes() len = %d, want 1 (%v)", len(got), got)
+	}
+	if _, ok := got[2]; !ok {
+		t.Fatalf("replayJoinRootIndexes() = %v, want root index 2", got)
+	}
+}
+
+func TestReplayJoinRootIndexesUsesMinJoinRoots(t *testing.T) {
+	makeProbe := func(sourceRoot string, feature bool) ProbeResult {
+		buildRoot := filepath.Join(sourceRoot, "build")
+		installRoot := filepath.Join(sourceRoot, "out")
+		compileAArgv := []string{"cc", "-c", filepath.Join(sourceRoot, "a.c"), "-o", filepath.Join(buildRoot, "a.o")}
+		if feature {
+			compileAArgv = []string{"cc", "-DFEATURE", "-c", filepath.Join(sourceRoot, "a.c"), "-o", filepath.Join(buildRoot, "a.o")}
+		}
+		return ProbeResult{
+			Records: []trace.Record{
+				{
+					PID:       100,
+					ParentPID: 0,
+					Argv:      compileAArgv,
+					Cwd:       sourceRoot,
+					Inputs:    []string{filepath.Join(sourceRoot, "a.c")},
+					Changes:   []string{filepath.Join(buildRoot, "a.o")},
+				},
+				{
+					PID:       200,
+					ParentPID: 0,
+					Argv:      []string{"cc", "-c", filepath.Join(sourceRoot, "b.c"), "-o", filepath.Join(buildRoot, "b.o")},
+					Cwd:       sourceRoot,
+					Inputs:    []string{filepath.Join(sourceRoot, "b.c")},
+					Changes:   []string{filepath.Join(buildRoot, "b.o")},
+				},
+				{
+					PID:       300,
+					ParentPID: 0,
+					Argv: []string{
+						"cc",
+						filepath.Join(buildRoot, "a.o"),
+						filepath.Join(buildRoot, "b.o"),
+						"-o",
+						filepath.Join(buildRoot, "app"),
+					},
+					Cwd: sourceRoot,
+					Inputs: []string{
+						filepath.Join(buildRoot, "a.o"),
+						filepath.Join(buildRoot, "b.o"),
+					},
+					Changes: []string{
+						filepath.Join(buildRoot, "app"),
+					},
+				},
+				{
+					PID:       400,
+					ParentPID: 0,
+					Argv: []string{
+						"pkg",
+						filepath.Join(buildRoot, "app"),
+						filepath.Join(sourceRoot, "manifest.txt"),
+						"-o",
+						filepath.Join(buildRoot, "app.pkg"),
+					},
+					Cwd: sourceRoot,
+					Inputs: []string{
+						filepath.Join(buildRoot, "app"),
+						filepath.Join(sourceRoot, "manifest.txt"),
+					},
+					Changes: []string{
+						filepath.Join(buildRoot, "app.pkg"),
+					},
+				},
+				{
+					PID:       500,
+					ParentPID: 0,
+					Argv: []string{
+						"/bin/cp",
+						filepath.Join(buildRoot, "app.pkg"),
+						filepath.Join(installRoot, "app.pkg"),
+					},
+					Cwd: sourceRoot,
+					Inputs: []string{
+						filepath.Join(buildRoot, "app.pkg"),
+					},
+					Changes: []string{
+						filepath.Join(installRoot, "app.pkg"),
+					},
+				},
+			},
+			Scope: trace.Scope{
+				SourceRoot:  sourceRoot,
+				BuildRoot:   buildRoot,
+				InstallRoot: installRoot,
+			},
+		}
+	}
+
+	base := makeProbe(t.TempDir(), false)
+	probe := makeProbe(t.TempDir(), true)
+	scan := replayRoots(probe)
+	got := replayJoinRootIndexes(base, probe, scan)
+	if len(got) != 1 {
+		t.Fatalf("replayJoinRootIndexes() len = %d, want 1 (%v)", len(got), got)
+	}
+	if _, ok := got[2]; !ok {
+		t.Fatalf("replayJoinRootIndexes() = %v, want only minimal join root index 2", got)
 	}
 }

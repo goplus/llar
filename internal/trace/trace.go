@@ -33,6 +33,7 @@ const (
 	EventExec EventKind = iota
 	EventChdir
 	EventRead
+	EventReadMiss
 	EventWrite
 	EventRename
 	EventUnlink
@@ -61,6 +62,8 @@ func (kind EventKind) String() string {
 		return "chdir"
 	case EventRead:
 		return "read"
+	case EventReadMiss:
+		return "read-miss"
 	case EventWrite:
 		return "write"
 	case EventRename:
@@ -359,9 +362,6 @@ func parseStraceOutputDetailed(content string, opts parseOptions) parseResult {
 				Argv:      slices.Clone(argv),
 			})
 		case "open", "openat", "openat2", "creat":
-			if !callSucceeded(call) {
-				continue
-			}
 			path := parseResolvedOpenPath(state.cwd, call)
 			if path == "" {
 				continue
@@ -370,6 +370,19 @@ func parseStraceOutputDetailed(content string, opts parseOptions) parseResult {
 				continue
 			}
 			write := isWriteOpen(call)
+			if !callSucceeded(call) {
+				if write {
+					continue
+				}
+				events = appendEvent(events, &nextSeq, Event{
+					PID:       pid,
+					ParentPID: state.parentPID,
+					Cwd:       state.cwd,
+					Kind:      EventReadMiss,
+					Path:      path,
+				})
+				continue
+			}
 			if write {
 				events = appendEvent(events, &nextSeq, Event{
 					PID:       pid,

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,8 +171,7 @@ func mergeManifestEntries(baseDir string, base OutputManifest, leftDir string, l
 	mergedEntries := make(map[string]OutputEntry, len(allPaths))
 	content := make(map[string]outputContent, len(allPaths))
 	issues := make([]OutputMergeIssue, 0)
-	paths := mapsKeys(allPaths)
-	slices.Sort(paths)
+	paths := slices.Sorted(maps.Keys(allPaths))
 	for _, path := range paths {
 		baseState := manifestStateForPath(base.Entries, path)
 		leftState := manifestStateForPath(left.Entries, path)
@@ -872,12 +872,4 @@ func summarizeManifestState(state manifestState) string {
 		parts = append(parts, "executable=true")
 	}
 	return strings.Join(parts, ", ")
-}
-
-func mapsKeys(m map[string]struct{}) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	return keys
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/internal/trace"
+	tracessa "github.com/goplus/llar/internal/trace/ssa"
 )
 
 type DebugSummaryOptions struct {
@@ -45,11 +46,8 @@ func debugSummaryProbe(probe ProbeResult, opts DebugSummaryOptions) string {
 	return formatGraphSummary(graph, merged)
 }
 
-func (graph actionGraph) String() string {
-	return formatGraphSummary(graph, DebugSummaryOptions{})
-}
-
-func formatGraphSummary(graph actionGraph, opts DebugSummaryOptions) string {
+func formatGraphSummary(graph tracessa.Graph, opts DebugSummaryOptions) string {
+	roles := tracessa.ProjectRoles(graph)
 	roleLimit := opts.RoleSampleLimit
 	if roleLimit <= 0 {
 		roleLimit = 12
@@ -61,35 +59,49 @@ func formatGraphSummary(graph actionGraph, opts DebugSummaryOptions) string {
 
 	var b strings.Builder
 	b.WriteString("observations: source=")
-	b.WriteString(graph.source.String())
+	b.WriteString(graph.Source.String())
 	b.WriteString(", records=")
-	b.WriteString(strconv.Itoa(graph.records))
+	b.WriteString(strconv.Itoa(graph.Records))
 	b.WriteString(", events=")
-	b.WriteString(strconv.Itoa(graph.events))
+	b.WriteString(strconv.Itoa(graph.Events))
 	b.WriteString(" actions=")
-	b.WriteString(strconv.Itoa(len(graph.actions)))
+	b.WriteString(strconv.Itoa(len(graph.Actions)))
 	b.WriteByte('\n')
 	b.WriteString("action counts: ")
-	b.WriteString(formatActionSummary(graph))
+	b.WriteString(formatActionSummary(graph, roles))
 	b.WriteByte('\n')
 	b.WriteString("path role counts: ")
-	b.WriteString(formatPathRoleSummary(graph))
+	b.WriteString(formatPathRoleSummary(graph, roles))
 	b.WriteByte('\n')
 
-	writeRoleSection(&b, graph, roleTooling, roleLimit)
-	writeRoleSection(&b, graph, rolePropagating, roleLimit)
-	writeRoleSection(&b, graph, roleDelivery, roleLimit)
+	writeRoleSection(&b, graph, roles, tracessa.RoleTooling, roleLimit)
+	writeRoleSection(&b, graph, roles, tracessa.RolePropagating, roleLimit)
+	writeRoleSection(&b, graph, roles, tracessa.RoleDelivery, roleLimit)
 
 	for _, token := range opts.InterestingTokens {
-		writeInterestingSection(&b, graph, token, interestingLimit)
+		writeInterestingSection(&b, graph, roles, token, interestingLimit)
 	}
 	return b.String()
 }
 
 func DebugDiffSummary(base ProbeResult, probe ProbeResult, opts DebugDiffSummaryOptions) string {
-	baseGraph := buildGraphForProbe(base)
-	probeGraph := buildGraphForProbe(probe)
-	impact := analyzeImpactWithEvidence(baseGraph, probeGraph, buildImpactEvidence(base, probe))
+	analysis := tracessa.AnalyzeWithEvidence(tracessa.AnalysisInput{
+		Base: tracessa.AnalysisSideInput{
+			Records:      base.Records,
+			Events:       base.Events,
+			Scope:        base.Scope,
+			InputDigests: base.InputDigests,
+		},
+		Probe: tracessa.AnalysisSideInput{
+			Records:      probe.Records,
+			Events:       probe.Events,
+			Scope:        probe.Scope,
+			InputDigests: probe.InputDigests,
+		},
+	}, buildImpactEvidence(base, probe))
+	baseGraph := analysis.Debug.BaseGraph
+	probeGraph := analysis.Debug.ProbeGraph
+	profile := analysis.Profile
 
 	sampleLimit := opts.ActionSampleLimit
 	if sampleLimit <= 0 {
@@ -111,68 +123,96 @@ func DebugDiffSummary(base ProbeResult, probe ProbeResult, opts DebugDiffSummary
 	}
 	b.WriteString(":\n")
 	b.WriteString("  actions: base=")
-	b.WriteString(strconv.Itoa(len(baseGraph.actions)))
+	b.WriteString(strconv.Itoa(len(baseGraph.Actions)))
 	b.WriteString(", probe=")
-	b.WriteString(strconv.Itoa(len(probeGraph.actions)))
+	b.WriteString(strconv.Itoa(len(probeGraph.Actions)))
 	b.WriteString(", matched=")
-	b.WriteString(strconv.Itoa(impact.matched))
+	b.WriteString(strconv.Itoa(analysis.Debug.Wavefront.Matched))
 	b.WriteString(", base-only=")
-	b.WriteString(strconv.Itoa(len(impact.baseOnly)))
+	b.WriteString(strconv.Itoa(len(analysis.Debug.Wavefront.BaseOnly)))
 	b.WriteString(", probe-only=")
-	b.WriteString(strconv.Itoa(len(impact.probeOnly)))
+	b.WriteString(strconv.Itoa(len(analysis.Debug.Wavefront.ProbeOnly)))
 	b.WriteByte('\n')
 	b.WriteString("  impact: affected-pairs=")
-	b.WriteString(strconv.Itoa(len(impact.affectedPairs)))
+	b.WriteString(strconv.Itoa(len(analysis.Debug.AffectedPairs)))
 	b.WriteString(", mutation-roots=")
-	b.WriteString(strconv.Itoa(len(impact.rootProbe)))
+	b.WriteString(strconv.Itoa(len(analysis.Debug.RootProbe)))
 	b.WriteString(", flow-actions=")
-	b.WriteString(strconv.Itoa(len(impact.flowProbe)))
+	b.WriteString(strconv.Itoa(len(analysis.Debug.FlowProbe)))
+	b.WriteString(", diverged-actions=")
+	b.WriteString(strconv.Itoa(len(analysis.Debug.DivergedProbe)))
 	b.WriteString(", frontier-actions=")
-	b.WriteString(strconv.Itoa(len(impact.frontierProbe)))
+	b.WriteString(strconv.Itoa(len(analysis.Debug.FrontierProbe)))
 	b.WriteString(", seed-writes=")
-	b.WriteString(strconv.Itoa(len(impact.profile.seedWrites)))
+	b.WriteString(strconv.Itoa(len(profile.SeedWrites)))
 	b.WriteString(", seed-states=")
-	b.WriteString(strconv.Itoa(len(impact.profile.seedStates)))
+	b.WriteString(strconv.Itoa(len(profile.SeedStates)))
 	b.WriteString(", need-paths=")
-	b.WriteString(strconv.Itoa(len(impact.profile.needPaths)))
+	b.WriteString(strconv.Itoa(len(profile.NeedPaths)))
 	b.WriteString(", need-states=")
-	b.WriteString(strconv.Itoa(len(impact.profile.needStates)))
+	b.WriteString(strconv.Itoa(len(profile.NeedStates)))
 	b.WriteString(", slice-paths=")
-	b.WriteString(strconv.Itoa(len(impact.profile.slicePaths)))
+	b.WriteString(strconv.Itoa(len(profile.SlicePaths)))
 	b.WriteString(", flow-states=")
-	b.WriteString(strconv.Itoa(len(impact.profile.flowStates)))
+	b.WriteString(strconv.Itoa(len(profile.FlowStates)))
 	b.WriteString(", ambiguous=")
-	b.WriteString(strconv.FormatBool(impact.profile.ambiguous))
+	b.WriteString(strconv.FormatBool(profile.Ambiguous))
 	b.WriteByte('\n')
 
-	writeActionPairSamples(&b, "affected-pairs", baseGraph, probeGraph, impact.affectedPairs, sampleLimit)
-	writeActionSamples(&b, "mutation-roots", probeGraph, impact.rootProbe, sampleLimit)
-	writeActionSamples(&b, "flow-actions", probeGraph, impact.flowProbe, sampleLimit)
-	writeActionSamples(&b, "frontier-actions", probeGraph, impact.frontierProbe, sampleLimit)
-	writeActionSamples(&b, "base-only", baseGraph, impact.baseOnly, sampleLimit)
-	writeActionSamples(&b, "probe-only", probeGraph, impact.probeOnly, sampleLimit)
-	writePathSamples(&b, "seed-writes", sampleMapKeys(impact.profile.seedWrites, sampleLimit))
-	writePathSamples(&b, "seed-states", sampleStateKeys(impact.profile.seedStates, sampleLimit))
-	writePathSamples(&b, "need-paths", sampleMapKeys(impact.profile.needPaths, sampleLimit))
-	writePathSamples(&b, "need-states", sampleStateKeys(impact.profile.needStates, sampleLimit))
-	writePathSamples(&b, "slice-paths", sampleMapKeys(impact.profile.slicePaths, sampleLimit))
-	writePathSamples(&b, "flow-states", sampleStateKeys(impact.profile.flowStates, sampleLimit))
+	writeActionPairSamples(&b, "affected-pairs", baseGraph, probeGraph, analysis.Debug.AffectedPairs, sampleLimit)
+	writeActionSamples(&b, "mutation-roots", probeGraph, analysis.Debug.RootProbe, sampleLimit)
+	writeActionSamples(&b, "flow-actions", probeGraph, analysis.Debug.FlowProbe, sampleLimit)
+	writeActionSamples(&b, "diverged-actions", probeGraph, analysis.Debug.DivergedProbe, sampleLimit)
+	writeActionSamples(&b, "frontier-actions", probeGraph, analysis.Debug.FrontierProbe, sampleLimit)
+	writeActionSamples(&b, "base-only", baseGraph, analysis.Debug.Wavefront.BaseOnly, sampleLimit)
+	writeActionSamples(&b, "probe-only", probeGraph, analysis.Debug.Wavefront.ProbeOnly, sampleLimit)
+	writePathSamples(&b, "seed-writes", sampleMapKeys(profile.SeedWrites, sampleLimit))
+	writePathSamples(&b, "seed-states", sampleStateKeys(profile.SeedStates, sampleLimit))
+	writePathSamples(&b, "need-paths", sampleMapKeys(profile.NeedPaths, sampleLimit))
+	writePathSamples(&b, "need-states", sampleStateKeys(profile.NeedStates, sampleLimit))
+	writePathSamples(&b, "slice-paths", sampleMapKeys(profile.SlicePaths, sampleLimit))
+	writePathSamples(&b, "flow-states", sampleStateKeys(profile.FlowStates, sampleLimit))
 	return b.String()
 }
 
 func DebugCollisionSummary(base ProbeResult, left ProbeResult, right ProbeResult, opts DebugCollisionSummaryOptions) string {
-	baseGraph := buildGraphForProbe(base)
-	leftGraph := buildGraphForProbe(left)
-	rightGraph := buildGraphForProbe(right)
-	leftImpact := analyzeImpactWithEvidence(baseGraph, leftGraph, buildImpactEvidence(base, left))
-	rightImpact := analyzeImpactWithEvidence(baseGraph, rightGraph, buildImpactEvidence(base, right))
+	leftAnalysis := tracessa.AnalyzeWithEvidence(tracessa.AnalysisInput{
+		Base: tracessa.AnalysisSideInput{
+			Records:      base.Records,
+			Events:       base.Events,
+			Scope:        base.Scope,
+			InputDigests: base.InputDigests,
+		},
+		Probe: tracessa.AnalysisSideInput{
+			Records:      left.Records,
+			Events:       left.Events,
+			Scope:        left.Scope,
+			InputDigests: left.InputDigests,
+		},
+	}, buildImpactEvidence(base, left))
+	rightAnalysis := tracessa.AnalyzeWithEvidence(tracessa.AnalysisInput{
+		Base: tracessa.AnalysisSideInput{
+			Records:      base.Records,
+			Events:       base.Events,
+			Scope:        base.Scope,
+			InputDigests: base.InputDigests,
+		},
+		Probe: tracessa.AnalysisSideInput{
+			Records:      right.Records,
+			Events:       right.Events,
+			Scope:        right.Scope,
+			InputDigests: right.InputDigests,
+		},
+	}, buildImpactEvidence(base, right))
+	leftProfile := leftAnalysis.Profile
+	rightProfile := rightAnalysis.Profile
 	leftVariant := optionVariant{
-		profile:           leftImpact.profile,
+		profile:           leftProfile,
 		outputDiff:        diffOutputManifest(base.OutputManifest, left.OutputManifest),
 		mergeSurfacePaths: mergeSurfacePaths(left.Scope, base.OutputManifest, left.OutputManifest),
 	}
 	rightVariant := optionVariant{
-		profile:           rightImpact.profile,
+		profile:           rightProfile,
 		outputDiff:        diffOutputManifest(base.OutputManifest, right.OutputManifest),
 		mergeSurfacePaths: mergeSurfacePaths(right.Scope, base.OutputManifest, right.OutputManifest),
 	}
@@ -182,13 +222,13 @@ func DebugCollisionSummary(base ProbeResult, left ProbeResult, right ProbeResult
 		limit = 8
 	}
 
-	seed := sampleMapOverlap(leftImpact.profile.seedWrites, rightImpact.profile.seedWrites, limit)
-	seedStates := sampleStateOverlap(leftImpact.profile.seedStates, rightImpact.profile.seedStates, limit)
-	leftNeed := sampleMapOverlap(leftImpact.profile.slicePaths, rightImpact.profile.needPaths, limit)
-	leftNeedStates := sampleStateOverlap(leftImpact.profile.flowStates, rightImpact.profile.needStates, limit)
-	rightNeed := sampleMapOverlap(rightImpact.profile.slicePaths, leftImpact.profile.needPaths, limit)
-	rightNeedStates := sampleStateOverlap(rightImpact.profile.flowStates, leftImpact.profile.needStates, limit)
-	shared := sampleMapOverlap(leftImpact.profile.slicePaths, rightImpact.profile.slicePaths, limit*4)
+	seed := sampleMapOverlap(leftProfile.SeedWrites, rightProfile.SeedWrites, limit)
+	seedStates := sampleStateOverlap(leftProfile.SeedStates, rightProfile.SeedStates, limit)
+	leftNeed := sampleMapOverlap(leftProfile.SlicePaths, rightProfile.NeedPaths, limit)
+	leftNeedStates := sampleStateOverlap(leftProfile.FlowStates, rightProfile.NeedStates, limit)
+	rightNeed := sampleMapOverlap(rightProfile.SlicePaths, leftProfile.NeedPaths, limit)
+	rightNeedStates := sampleStateOverlap(rightProfile.FlowStates, leftProfile.NeedStates, limit)
+	shared := sampleMapOverlap(leftProfile.SlicePaths, rightProfile.SlicePaths, limit*4)
 	onMerge, offMerge := partitionSharedPaths(shared, leftVariant.mergeSurfacePaths, rightVariant.mergeSurfacePaths, limit)
 	strictAssessment := assessOptionVariantCollision(leftVariant, rightVariant, false)
 	mergeAwareAssessment := assessOptionVariantCollision(leftVariant, rightVariant, true)
@@ -229,9 +269,9 @@ func DebugCollisionSummary(base ProbeResult, left ProbeResult, right ProbeResult
 	writePathSamples(&b, "merge-aware-hazards", formatHazards(mergeAwareAssessment.hazards))
 	writePathSamples(&b, "selected-hazards", formatHazards(selectedAssessment.hazards))
 	b.WriteString("  ambiguous: left=")
-	b.WriteString(strconv.FormatBool(leftImpact.profile.ambiguous))
+	b.WriteString(strconv.FormatBool(leftProfile.Ambiguous))
 	b.WriteString(", right=")
-	b.WriteString(strconv.FormatBool(rightImpact.profile.ambiguous))
+	b.WriteString(strconv.FormatBool(rightProfile.Ambiguous))
 	b.WriteByte('\n')
 	writePathSamples(&b, "seed-overlap", seed)
 	writePathSamples(&b, "seed-state-overlap", seedStates)
@@ -437,12 +477,12 @@ func DebugMergedPairSummary(observation MergedPairObservation) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func formatActionSummary(graph actionGraph) string {
+func formatActionSummary(graph tracessa.Graph, roles tracessa.RoleProjection) string {
 	counts := map[string]int{}
 	tooling := 0
-	for i, action := range graph.actions {
-		counts[action.kind.String()]++
-		if i < len(graph.tooling) && graph.tooling[i] {
+	for i, action := range graph.Actions {
+		counts[action.Kind.String()]++
+		if tracessa.RoleActionClass(roles, i) == tracessa.ActionRoleTooling {
 			tooling++
 		}
 	}
@@ -461,10 +501,10 @@ func formatActionSummary(graph actionGraph) string {
 	return strings.Join(parts, ", ")
 }
 
-func formatPathRoleSummary(graph actionGraph) string {
+func formatPathRoleSummary(graph tracessa.Graph, roles tracessa.RoleProjection) string {
 	counts := map[string]int{}
-	for _, facts := range graph.paths {
-		counts[facts.role.String()]++
+	for path := range graph.Paths {
+		counts[debugPathRole(graph, roles, path).String()]++
 	}
 	keys := []string{"tooling", "propagating", "delivery"}
 	parts := make([]string, 0, len(keys))
@@ -474,8 +514,8 @@ func formatPathRoleSummary(graph actionGraph) string {
 	return strings.Join(parts, ", ")
 }
 
-func writeRoleSection(b *strings.Builder, graph actionGraph, role pathRole, limit int) {
-	paths := samplePathsByRole(graph, role, limit)
+func writeRoleSection(b *strings.Builder, graph tracessa.Graph, roles tracessa.RoleProjection, role tracessa.PathRole, limit int) {
+	paths := samplePathsByRole(graph, roles, role, limit)
 	b.WriteString(role.String())
 	b.WriteString(" sample (")
 	b.WriteString(strconv.Itoa(len(paths)))
@@ -487,8 +527,8 @@ func writeRoleSection(b *strings.Builder, graph actionGraph, role pathRole, limi
 	}
 }
 
-func writeInterestingSection(b *strings.Builder, graph actionGraph, token string, limit int) {
-	paths := sampleInterestingPaths(graph, token, limit)
+func writeInterestingSection(b *strings.Builder, graph tracessa.Graph, roles tracessa.RoleProjection, token string, limit int) {
+	paths := sampleInterestingPaths(graph, roles, token, limit)
 	b.WriteString("match ")
 	b.WriteString(token)
 	b.WriteString(":\n")
@@ -503,7 +543,7 @@ func writeInterestingSection(b *strings.Builder, graph actionGraph, token string
 	}
 }
 
-func writeActionSamples(b *strings.Builder, label string, graph actionGraph, indexes []int, limit int) {
+func writeActionSamples(b *strings.Builder, label string, graph tracessa.Graph, indexes []int, limit int) {
 	b.WriteString("  ")
 	b.WriteString(label)
 	b.WriteString(" sample (")
@@ -514,16 +554,24 @@ func writeActionSamples(b *strings.Builder, label string, graph actionGraph, ind
 	}
 	b.WriteString("):\n")
 	for _, idx := range sampleActionIndexes(graph, indexes, limit) {
-		action := graph.actions[idx]
+		action := graph.Actions[idx]
+		argv := action.Argv
+		if len(argv) > 4 {
+			argv = argv[:4]
+		}
+		skeleton := make([]string, 0, len(argv))
+		for _, arg := range argv {
+			skeleton = append(skeleton, normalizeScopeToken(arg, trace.Scope{}))
+		}
 		b.WriteString("    ")
-		b.WriteString(action.actionKey)
+		b.WriteString(action.ActionKey)
 		b.WriteString(" :: ")
-		b.WriteString(argvSkeleton(action.argv))
+		b.WriteString(strings.Join(skeleton, " "))
 		b.WriteByte('\n')
 	}
 }
 
-func writeActionPairSamples(b *strings.Builder, label string, base, probe actionGraph, pairs []actionPair, limit int) {
+func writeActionPairSamples(b *strings.Builder, label string, base, probe tracessa.Graph, pairs []tracessa.ActionPair, limit int) {
 	if limit <= 0 {
 		limit = 8
 	}
@@ -537,12 +585,12 @@ func writeActionPairSamples(b *strings.Builder, label string, base, probe action
 	}
 	b.WriteString("):\n")
 	for _, pair := range sampleActionPairs(base, probe, pairs, limit) {
-		baseAction := base.actions[pair.baseIdx]
-		probeAction := probe.actions[pair.probeIdx]
+		baseAction := base.Actions[pair.BaseIdx]
+		probeAction := probe.Actions[pair.ProbeIdx]
 		b.WriteString("    ")
-		b.WriteString(baseAction.actionKey)
+		b.WriteString(baseAction.ActionKey)
 		b.WriteString(" => ")
-		b.WriteString(probeAction.actionKey)
+		b.WriteString(probeAction.ActionKey)
 		b.WriteByte('\n')
 	}
 }
@@ -560,10 +608,10 @@ func writePathSamples(b *strings.Builder, label string, paths []string) {
 	}
 }
 
-func samplePathsByRole(graph actionGraph, role pathRole, limit int) []string {
-	paths := make([]string, 0, len(graph.paths))
-	for path, facts := range graph.paths {
-		if facts.role == role {
+func samplePathsByRole(graph tracessa.Graph, roles tracessa.RoleProjection, role tracessa.PathRole, limit int) []string {
+	paths := make([]string, 0, len(graph.Paths))
+	for path := range graph.Paths {
+		if debugPathRole(graph, roles, path) == role {
 			paths = append(paths, path)
 		}
 	}
@@ -574,13 +622,13 @@ func samplePathsByRole(graph actionGraph, role pathRole, limit int) []string {
 	return paths
 }
 
-func sampleInterestingPaths(graph actionGraph, token string, limit int) []string {
-	paths := make([]string, 0, len(graph.paths))
-	for path, facts := range graph.paths {
+func sampleInterestingPaths(graph tracessa.Graph, roles tracessa.RoleProjection, token string, limit int) []string {
+	paths := make([]string, 0, len(graph.Paths))
+	for path := range graph.Paths {
 		if !strings.Contains(path, token) {
 			continue
 		}
-		paths = append(paths, path+" => "+facts.role.String())
+		paths = append(paths, path+" => "+debugPathRole(graph, roles, path).String())
 	}
 	slices.Sort(paths)
 	if len(paths) > limit {
@@ -589,47 +637,32 @@ func sampleInterestingPaths(graph actionGraph, token string, limit int) []string
 	return paths
 }
 
-func matchActionFingerprints(base, probe actionGraph) (matched int, baseOnly []int, probeOnly []int) {
-	baseRemaining := make(map[string]int, len(base.actions))
-	for _, action := range base.actions {
-		baseRemaining[action.fingerprint]++
+func debugPathRole(graph tracessa.Graph, roles tracessa.RoleProjection, path string) tracessa.PathRole {
+	if tracessa.PathLooksDelivery(graph, path) {
+		return tracessa.RoleDelivery
 	}
-
-	for i, action := range probe.actions {
-		if baseRemaining[action.fingerprint] > 0 {
-			baseRemaining[action.fingerprint]--
-			matched++
-			continue
-		}
-		probeOnly = append(probeOnly, i)
+	if !tracessa.ImpactPathAllowed(graph, roles, path) {
+		return tracessa.RoleTooling
 	}
-
-	for i, action := range base.actions {
-		if baseRemaining[action.fingerprint] == 0 {
-			continue
-		}
-		baseRemaining[action.fingerprint]--
-		baseOnly = append(baseOnly, i)
-	}
-	return matched, baseOnly, probeOnly
+	return tracessa.RolePropagating
 }
 
-func sampleActionIndexes(graph actionGraph, indexes []int, limit int) []int {
+func sampleActionIndexes(graph tracessa.Graph, indexes []int, limit int) []int {
 	if len(indexes) == 0 {
 		return nil
 	}
 	sorted := slices.Clone(indexes)
 	slices.SortFunc(sorted, func(leftIdx, rightIdx int) int {
-		left := graph.actions[leftIdx]
-		right := graph.actions[rightIdx]
-		if left.actionKey != right.actionKey {
-			if left.actionKey < right.actionKey {
+		left := graph.Actions[leftIdx]
+		right := graph.Actions[rightIdx]
+		if left.ActionKey != right.ActionKey {
+			if left.ActionKey < right.ActionKey {
 				return -1
 			}
 			return 1
 		}
-		leftArgv := strings.Join(left.argv, "\x1f")
-		rightArgv := strings.Join(right.argv, "\x1f")
+		leftArgv := strings.Join(left.Argv, "\x1f")
+		rightArgv := strings.Join(right.Argv, "\x1f")
 		switch {
 		case leftArgv < rightArgv:
 			return -1
@@ -645,22 +678,22 @@ func sampleActionIndexes(graph actionGraph, indexes []int, limit int) []int {
 	return sorted
 }
 
-func sampleActionPairs(base, probe actionGraph, pairs []actionPair, limit int) []actionPair {
+func sampleActionPairs(base, probe tracessa.Graph, pairs []tracessa.ActionPair, limit int) []tracessa.ActionPair {
 	if len(pairs) == 0 {
 		return nil
 	}
 	sorted := slices.Clone(pairs)
-	slices.SortFunc(sorted, func(left, right actionPair) int {
-		leftBase := base.actions[left.baseIdx].actionKey
-		rightBase := base.actions[right.baseIdx].actionKey
+	slices.SortFunc(sorted, func(left, right tracessa.ActionPair) int {
+		leftBase := base.Actions[left.BaseIdx].ActionKey
+		rightBase := base.Actions[right.BaseIdx].ActionKey
 		if leftBase != rightBase {
 			if leftBase < rightBase {
 				return -1
 			}
 			return 1
 		}
-		leftProbe := probe.actions[left.probeIdx].actionKey
-		rightProbe := probe.actions[right.probeIdx].actionKey
+		leftProbe := probe.Actions[left.ProbeIdx].ActionKey
+		rightProbe := probe.Actions[right.ProbeIdx].ActionKey
 		switch {
 		case leftProbe < rightProbe:
 			return -1
@@ -699,7 +732,7 @@ func sampleMapOverlap(left, right map[string]struct{}, limit int) []string {
 	return paths
 }
 
-func sampleStateKeys(values map[pathStateKey]struct{}, limit int) []string {
+func sampleStateKeys(values map[tracessa.ImpactStateKey]struct{}, limit int) []string {
 	out := make([]string, 0, len(values))
 	for state := range values {
 		out = append(out, formatStateKey(state))
@@ -711,7 +744,7 @@ func sampleStateKeys(values map[pathStateKey]struct{}, limit int) []string {
 	return out
 }
 
-func sampleStateOverlap(left, right map[pathStateKey]struct{}, limit int) []string {
+func sampleStateOverlap(left, right map[tracessa.ImpactStateKey]struct{}, limit int) []string {
 	out := make([]string, 0)
 	for state := range left {
 		if _, ok := right[state]; ok {
@@ -725,11 +758,11 @@ func sampleStateOverlap(left, right map[pathStateKey]struct{}, limit int) []stri
 	return out
 }
 
-func formatStateKey(state pathStateKey) string {
-	if state.tombstone {
-		return state.path + " [tombstone]"
+func formatStateKey(state tracessa.ImpactStateKey) string {
+	if state.Tombstone {
+		return state.Path + " [tombstone]"
 	}
-	return state.path + " [live]"
+	return state.Path + " [live]"
 }
 
 func formatHazards(hazards []collisionHazardKind) []string {

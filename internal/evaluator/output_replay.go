@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/internal/trace"
+	tracessa "github.com/goplus/llar/internal/trace/ssa"
 )
 
 var replayEnvKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -27,6 +29,7 @@ const (
 type replayRoot struct {
 	identity string
 	siteKey  string
+	pid      int64
 	cwd      string
 	argv     []string
 	env      []string
@@ -37,6 +40,7 @@ type replayRoot struct {
 type replayRootScan struct {
 	candidates int
 	roots      []replayRoot
+	graph      tracessa.Graph
 }
 
 type replayParsedArgv struct {
@@ -136,6 +140,15 @@ func planRootReplay(base, left, right ProbeResult) (replayPlan, string) {
 		summary.Unavailable = unavailable
 		return replayPlan{summary: summary}, unavailable
 	}
+	leftJoinRoots := replayJoinRootIndexes(base, left, leftScan)
+	rightJoinRoots := replayJoinRootIndexes(base, right, rightScan)
+	joinIndexes := make(map[int]struct{}, len(leftJoinRoots)+len(rightJoinRoots))
+	for idx := range leftJoinRoots {
+		joinIndexes[idx] = struct{}{}
+	}
+	for idx := range rightJoinRoots {
+		joinIndexes[idx] = struct{}{}
+	}
 
 	steps := make([]replayRoot, 0, len(aligned.base))
 	changedIndexes := make(map[int]struct{})
@@ -167,6 +180,9 @@ func planRootReplay(base, left, right ProbeResult) (replayPlan, string) {
 		return replayPlan{summary: summary}, summary.Unavailable
 	}
 	selected := selectReplayFrontier(steps, changedIndexes)
+	if len(joinIndexes) != 0 {
+		selected = selectReplayJoinFrontier(steps, changedIndexes, joinIndexes)
+	}
 	if len(selected) == 0 {
 		summary.Unavailable = "no replay roots selected after frontier planning"
 		return replayPlan{summary: summary}, summary.Unavailable
@@ -263,6 +279,7 @@ func replayRoots(probe ProbeResult) replayRootScan {
 		return replayRootScan{}
 	}
 	graph := buildGraphForProbe(probe)
+	roles := tracessa.ProjectRoles(graph)
 	pids := make(map[int64]struct{}, len(probe.Records))
 	for _, rec := range probe.Records {
 		if rec.PID != 0 {
@@ -284,14 +301,15 @@ func replayRoots(probe ProbeResult) replayRootScan {
 		argv := normalizeReplayTokens(rec.Argv, probe.Scope)
 		env := normalizeReplayEnv(rec.Env, probe.Scope)
 		cwd := normalizeScopeToken(rec.Cwd, probe.Scope)
-		reads := filterReplayRelevantPaths(normalizeReplayTokens(rec.Inputs, probe.Scope), graph)
-		writes := filterReplayRelevantPaths(normalizeReplayTokens(rec.Changes, probe.Scope), graph)
+		reads := filterReplayRelevantPaths(rec.Inputs, probe.Scope, graph, roles)
+		writes := filterReplayRelevantPaths(rec.Changes, probe.Scope, graph, roles)
 		if !replayRootRelevant(reads, writes) {
 			continue
 		}
 		roots = append(roots, replayRoot{
 			identity: replayRootIdentity(argv, cwd),
 			siteKey:  replaySiteKey(argv, cwd),
+			pid:      rec.PID,
 			cwd:      cwd,
 			argv:     argv,
 			env:      env,
@@ -299,7 +317,7 @@ func replayRoots(probe ProbeResult) replayRootScan {
 			writes:   writes,
 		})
 	}
-	return replayRootScan{candidates: candidates, roots: roots}
+	return replayRootScan{candidates: candidates, roots: roots, graph: graph}
 }
 
 func selectReplayFrontier(steps []replayRoot, changed map[int]struct{}) []int {
@@ -333,6 +351,70 @@ func selectReplayFrontier(steps []replayRoot, changed map[int]struct{}) []int {
 		}
 	}
 
+	order := make([]int, 0, len(selected))
+	for idx := range selected {
+		order = append(order, idx)
+	}
+	slices.Sort(order)
+	return order
+}
+
+func selectReplayJoinFrontier(steps []replayRoot, changed, join map[int]struct{}) []int {
+	if len(join) == 0 {
+		return selectReplayFrontier(steps, changed)
+	}
+	selected := make(map[int]struct{}, len(join)+len(changed))
+	for idx := range join {
+		selected[idx] = struct{}{}
+	}
+	for {
+		changedAdded := false
+		for target := range selected {
+			if target < 0 || target >= len(steps) {
+				continue
+			}
+			for prev := 0; prev < target; prev++ {
+				if _, ok := changed[prev]; !ok {
+					continue
+				}
+				if _, ok := selected[prev]; ok {
+					continue
+				}
+				if !pathsOverlap(pathSet(steps[prev].writes), steps[target].reads) {
+					continue
+				}
+				selected[prev] = struct{}{}
+				changedAdded = true
+			}
+		}
+		if !changedAdded {
+			break
+		}
+	}
+
+	queue := make([]int, 0, len(join))
+	for idx := range join {
+		queue = append(queue, idx)
+	}
+	slices.Sort(queue)
+	for len(queue) > 0 {
+		idx := queue[0]
+		queue = queue[1:]
+		writes := pathSet(steps[idx].writes)
+		if len(writes) == 0 {
+			continue
+		}
+		for next := idx + 1; next < len(steps); next++ {
+			if _, ok := selected[next]; ok {
+				continue
+			}
+			if !pathsOverlap(writes, steps[next].reads) {
+				continue
+			}
+			selected[next] = struct{}{}
+			queue = append(queue, next)
+		}
+	}
 	order := make([]int, 0, len(selected))
 	for idx := range selected {
 		order = append(order, idx)
@@ -389,38 +471,58 @@ func pathsOverlap(left map[string]struct{}, right []string) bool {
 	return false
 }
 
-func filterReplayRelevantPaths(paths []string, graph actionGraph) []string {
+func filterReplayRelevantPaths(paths []string, scope trace.Scope, graph tracessa.Graph, roles tracessa.RoleProjection) []string {
 	if len(paths) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(paths))
 	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
-		if !replayPathRelevant(path, graph) {
+		if !replayPathRelevant(path, graph, roles) {
 			continue
 		}
-		if _, ok := seen[path]; ok {
+		token := normalizeScopeToken(path, scope)
+		if token == "" {
 			continue
 		}
-		seen[path] = struct{}{}
-		out = append(out, path)
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
 	}
 	return out
 }
 
-func replayPathRelevant(path string, graph actionGraph) bool {
+func replayPathRelevant(path string, graph tracessa.Graph, roles tracessa.RoleProjection) bool {
 	if path == "" {
 		return false
 	}
+	token := normalizeScopeToken(path, graph.Scope)
+	if !strings.Contains(token, "$SRC") && !strings.Contains(token, "$BUILD") && !strings.Contains(token, "$INSTALL") {
+		return false
+	}
 	path = normalizePath(path)
-	if !strings.Contains(path, "$SRC") && !strings.Contains(path, "$BUILD") && !strings.Contains(path, "$INSTALL") {
+	if _, ok := graph.Paths[path]; !ok {
 		return false
 	}
-	if isProbeOnlyNoisePath(graph, path) {
+	if isExplicitDeliveryPath(path, graph.Scope) {
+		return true
+	}
+	if len(graph.DefsByPath[path]) != 0 {
+		for _, def := range graph.DefsByPath[path] {
+			class := tracessa.RoleDefClass(roles, def)
+			if class != tracessa.DefRoleProbe && class != tracessa.DefRoleTooling {
+				return true
+			}
+		}
 		return false
 	}
-	if facts, ok := graph.paths[path]; ok {
-		return facts.role != roleTooling || isExplicitDeliveryPath(path, graph.scope)
+	if tracessa.IsProbeOnlyNoisePathProjected(graph, roles, path) {
+		return false
+	}
+	if tracessa.PathLooksToolingProjected(graph, roles, path) {
+		return false
 	}
 	return true
 }
@@ -438,7 +540,164 @@ func normalizeReplayTokens(tokens []string, scope trace.Scope) []string {
 }
 
 func normalizeReplayEnv(env []string, scope trace.Scope) []string {
-	return normalizeReplayTokens(env, scope)
+	return tracessa.NormalizeExecEnv(env, scope)
+}
+
+func replayJoinRootIndexes(base, probe ProbeResult, scan replayRootScan) map[int]struct{} {
+	if len(scan.roots) == 0 {
+		return nil
+	}
+	analysis := tracessa.AnalyzeWithEvidence(tracessa.AnalysisInput{
+		Base: tracessa.AnalysisSideInput{
+			Records:      base.Records,
+			Events:       base.Events,
+			Scope:        base.Scope,
+			InputDigests: base.InputDigests,
+		},
+		Probe: tracessa.AnalysisSideInput{
+			Records:      probe.Records,
+			Events:       probe.Events,
+			Scope:        probe.Scope,
+			InputDigests: probe.InputDigests,
+		},
+	}, buildImpactEvidence(base, probe))
+	joinActions := replayMinJoinActionIndexes(scan.graph, analysis.Profile.JoinSet)
+	if len(joinActions) == 0 {
+		return nil
+	}
+	rootByPID, ambiguousRootPID := replayRootIndexesByPID(scan.roots)
+	recordPIDs, parentByPID := replayProcessTree(probe.Records)
+	out := make(map[int]struct{}, len(joinActions))
+	for _, actionIdx := range joinActions {
+		if actionIdx < 0 || actionIdx >= len(scan.graph.Actions) {
+			continue
+		}
+		action := scan.graph.Actions[actionIdx]
+		rootPID, ok := replayTopLevelPID(action.PID, recordPIDs, parentByPID)
+		if !ok {
+			continue
+		}
+		if _, ambiguous := ambiguousRootPID[rootPID]; ambiguous {
+			continue
+		}
+		rootIdx, ok := rootByPID[rootPID]
+		if !ok {
+			continue
+		}
+		out[rootIdx] = struct{}{}
+	}
+	return out
+}
+
+func replayMinJoinActionIndexes(graph tracessa.Graph, joinSet []int) []int {
+	if len(joinSet) == 0 || len(graph.Actions) == 0 {
+		return nil
+	}
+	join := make(map[int]struct{}, len(joinSet))
+	for _, idx := range joinSet {
+		if idx < 0 || idx >= len(graph.Actions) {
+			continue
+		}
+		join[idx] = struct{}{}
+	}
+	if len(join) == 0 {
+		return nil
+	}
+	order := make([]int, 0, len(join))
+	for idx := range join {
+		order = append(order, idx)
+	}
+	slices.Sort(order)
+	minimal := make([]int, 0, len(order))
+	for _, idx := range order {
+		if replayHasJoinAncestor(graph, idx, join) {
+			continue
+		}
+		minimal = append(minimal, idx)
+	}
+	return minimal
+}
+
+func replayHasJoinAncestor(graph tracessa.Graph, idx int, join map[int]struct{}) bool {
+	if idx < 0 || idx >= len(graph.In) {
+		return false
+	}
+	visited := map[int]struct{}{idx: {}}
+	stack := []int{idx}
+	for len(stack) > 0 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, edge := range graph.In[cur] {
+			pred := edge.From
+			if pred < 0 || pred >= len(graph.Actions) {
+				continue
+			}
+			if _, seen := visited[pred]; seen {
+				continue
+			}
+			if _, ok := join[pred]; ok {
+				return true
+			}
+			visited[pred] = struct{}{}
+			stack = append(stack, pred)
+		}
+	}
+	return false
+}
+
+func replayRootIndexesByPID(roots []replayRoot) (map[int64]int, map[int64]struct{}) {
+	indexes := make(map[int64]int, len(roots))
+	ambiguous := make(map[int64]struct{})
+	for idx, root := range roots {
+		if root.pid == 0 {
+			continue
+		}
+		if prev, ok := indexes[root.pid]; ok && prev != idx {
+			ambiguous[root.pid] = struct{}{}
+			delete(indexes, root.pid)
+			continue
+		}
+		if _, ok := ambiguous[root.pid]; ok {
+			continue
+		}
+		indexes[root.pid] = idx
+	}
+	return indexes, ambiguous
+}
+
+func replayProcessTree(records []trace.Record) (map[int64]struct{}, map[int64]int64) {
+	pids := make(map[int64]struct{}, len(records))
+	parentByPID := make(map[int64]int64, len(records))
+	for _, rec := range records {
+		if rec.PID == 0 {
+			continue
+		}
+		pids[rec.PID] = struct{}{}
+		if _, ok := parentByPID[rec.PID]; !ok {
+			parentByPID[rec.PID] = rec.ParentPID
+		}
+	}
+	return pids, parentByPID
+}
+
+func replayTopLevelPID(pid int64, pids map[int64]struct{}, parentByPID map[int64]int64) (int64, bool) {
+	if pid == 0 {
+		return 0, false
+	}
+	if _, ok := pids[pid]; !ok {
+		return 0, false
+	}
+	cur := pid
+	for {
+		parent, ok := parentByPID[cur]
+		if !ok || parent == 0 {
+			return cur, true
+		}
+		if _, ok := pids[parent]; !ok {
+			return cur, true
+		}
+		cur = parent
+	}
 }
 
 func replaySiteKey(argv []string, cwd string) string {
@@ -775,7 +1034,7 @@ func mergeReplayAssignments(base, left, right map[string]string) (map[string]str
 	}
 	merged := make(map[string]string, len(keys))
 	changed := false
-	for _, key := range mapsKeys(keys) {
+	for _, key := range slices.Collect(maps.Keys(keys)) {
 		baseValue, baseOK := base[key]
 		leftValue, leftOK := left[key]
 		rightValue, rightOK := right[key]

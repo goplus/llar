@@ -85,6 +85,27 @@ func TestParseStraceEvents_TracksCloneAndPidFallback(t *testing.T) {
 	}
 }
 
+func TestParseStraceEvents_CapturesReadMiss(t *testing.T) {
+	content := `
+1234 1741260000.000001 chdir("/tmp/work") = 0
+1234 1741260000.000002 execve("/usr/bin/cc", ["cc", "-c", "core.c", "-o", "core.o"], 0x0) = 0
+1234 1741260000.000003 openat(AT_FDCWD, "missing.h", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+1234 1741260000.000004 openat(AT_FDCWD, "core.c", O_RDONLY|O_CLOEXEC) = 3
+`
+
+	got := parseStraceEvents(content, parseOptions{rootCwd: "/repo"})
+	want := []Event{
+		{Seq: 1, PID: 1234, Cwd: "/tmp/work", Kind: EventChdir, Path: "/tmp/work"},
+		{Seq: 2, PID: 1234, Cwd: "/tmp/work", Kind: EventExec, Path: "/usr/bin/cc", Argv: []string{"cc", "-c", "core.c", "-o", "core.o"}},
+		{Seq: 3, PID: 1234, Cwd: "/tmp/work", Kind: EventReadMiss, Path: "/tmp/work/missing.h"},
+		{Seq: 4, PID: 1234, Cwd: "/tmp/work", Kind: EventRead, Path: "/tmp/work/core.c"},
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseStraceEvents() = %#v, want %#v", got, want)
+	}
+}
+
 func TestParseStraceRecords_IgnoresFailedSyscalls(t *testing.T) {
 	content := `
 1234 1741260000.000001 chdir("/tmp/work") = 0

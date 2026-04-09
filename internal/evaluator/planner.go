@@ -11,6 +11,7 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/trace"
+	tracessa "github.com/goplus/llar/internal/trace/ssa"
 )
 
 type ProbeResult struct {
@@ -56,27 +57,17 @@ type WatchOptions struct {
 	ObserveMergedPair       MergedPairObserver
 }
 
-func buildGraphForProbe(probe ProbeResult) actionGraph {
-	return buildGraphFromObservation(buildObservationFromProbe(probe), probe.Scope)
-}
-
-type optionProfile struct {
-	seedWrites map[string]struct{}
-	needPaths  map[string]struct{}
-	slicePaths map[string]struct{}
-	seedStates map[pathStateKey]struct{}
-	needStates map[pathStateKey]struct{}
-	flowStates map[pathStateKey]struct{}
-	ambiguous  bool
-}
-
-type pathStateKey struct {
-	path      string
-	tombstone bool
+func buildGraphForProbe(probe ProbeResult) tracessa.Graph {
+	return tracessa.BuildGraph(tracessa.BuildInput{
+		Records:      probe.Records,
+		Events:       probe.Events,
+		Scope:        probe.Scope,
+		InputDigests: probe.InputDigests,
+	})
 }
 
 type optionVariant struct {
-	profile           optionProfile
+	profile           tracessa.ImpactProfile
 	outputDiff        outputManifestDiff
 	mergeSurfacePaths map[string]struct{}
 }
@@ -130,7 +121,6 @@ func WatchWithOptions(ctx context.Context, matrix formula.Matrix, probe ProbeFun
 		if err != nil {
 			return nil, false, err
 		}
-		baseGraph := buildGraphForProbe(baseResult)
 		trusted = trusted && baseResult.TraceDiagnostics.Trusted()
 		if len(optionKeys) == 0 {
 			execute[baselineCombo] = struct{}{}
@@ -152,10 +142,9 @@ func WatchWithOptions(ctx context.Context, matrix formula.Matrix, probe ProbeFun
 				if err != nil {
 					return nil, false, err
 				}
-				probeGraph := buildGraphForProbe(result)
 				trusted = trusted && result.TraceDiagnostics.Trusted()
 				profiles[key] = append(profiles[key], optionVariant{
-					profile:           diffProfileForProbes(baseResult, result, baseGraph, probeGraph),
+					profile:           diffProfileForProbes(baseResult, result),
 					outputDiff:        diffOutputManifest(baseResult.OutputManifest, result.OutputManifest),
 					mergeSurfacePaths: mergeSurfacePaths(result.Scope, baseResult.OutputManifest, result.OutputManifest),
 				})
@@ -213,29 +202,24 @@ func WatchWithOptions(ctx context.Context, matrix formula.Matrix, probe ProbeFun
 	return slices.Sorted(maps.Keys(execute)), trusted, nil
 }
 
-func pathTouchesMainline(mainline []bool, facts pathFacts) bool {
-	for _, writer := range facts.writers {
-		if mainline[writer] {
-			return true
-		}
-	}
-	for _, reader := range facts.readers {
-		if mainline[reader] {
-			return true
-		}
-	}
-	return false
+func diffProfileForProbes(baseProbe, probeProbe ProbeResult) tracessa.ImpactProfile {
+	return tracessa.AnalyzeWithEvidence(tracessa.AnalysisInput{
+		Base: tracessa.AnalysisSideInput{
+			Records:      baseProbe.Records,
+			Events:       baseProbe.Events,
+			Scope:        baseProbe.Scope,
+			InputDigests: baseProbe.InputDigests,
+		},
+		Probe: tracessa.AnalysisSideInput{
+			Records:      probeProbe.Records,
+			Events:       probeProbe.Events,
+			Scope:        probeProbe.Scope,
+			InputDigests: probeProbe.InputDigests,
+		},
+	}, buildImpactEvidence(baseProbe, probeProbe)).Profile
 }
 
-func diffProfile(base, probe actionGraph) optionProfile {
-	return analyzeImpact(base, probe).profile
-}
-
-func diffProfileForProbes(baseProbe, probeProbe ProbeResult, baseGraph, probeGraph actionGraph) optionProfile {
-	return analyzeImpactWithEvidence(baseGraph, probeGraph, buildImpactEvidence(baseProbe, probeProbe)).profile
-}
-
-func buildImpactEvidence(baseProbe, probeProbe ProbeResult) *impactEvidence {
+func buildImpactEvidence(baseProbe, probeProbe ProbeResult) *tracessa.ImpactEvidence {
 	changed := make(map[string]bool)
 	addDigestEvidence := func(scope trace.Scope, digests map[string]string) map[string]string {
 		out := make(map[string]string, len(digests))
@@ -286,7 +270,7 @@ func buildImpactEvidence(baseProbe, probeProbe ProbeResult) *impactEvidence {
 	if len(changed) == 0 {
 		return nil
 	}
-	return &impactEvidence{changed: changed}
+	return &tracessa.ImpactEvidence{Changed: changed}
 }
 
 func outputManifestKey(scope trace.Scope, path string) string {
@@ -299,21 +283,21 @@ func outputManifestKey(scope trace.Scope, path string) string {
 	return normalizeScopeToken(filepath.Join(scope.InstallRoot, filepath.FromSlash(path)), scope)
 }
 
-func isDeliveryOnlyAction(graph actionGraph, idx int) bool {
-	action := graph.actions[idx]
-	if len(action.writes) == 0 {
+func isDeliveryOnlyAction(graph tracessa.Graph, idx int) bool {
+	action := graph.Actions[idx]
+	if len(action.Writes) == 0 {
 		return false
 	}
 	explicitDeliveryOnly := true
-	for _, changed := range action.writes {
-		if graph.paths[changed].role != roleDelivery {
+	for _, changed := range action.Writes {
+		if !tracessa.PathLooksDelivery(graph, changed) {
 			return false
 		}
-		if !isExplicitDeliveryPath(changed, graph.scope) {
+		if !isExplicitDeliveryPath(changed, graph.Scope) {
 			explicitDeliveryOnly = false
 		}
 	}
-	if action.kind == kindCopy || action.kind == kindInstall {
+	if action.Kind == tracessa.KindCopy || action.Kind == tracessa.KindInstall {
 		return true
 	}
 	return explicitDeliveryOnly
@@ -442,22 +426,22 @@ func optionVariantsCollide(left, right optionVariant, allowMergeSurface bool) bo
 
 func assessOptionVariantCollision(left, right optionVariant, allowMergeSurface bool) collisionAssessment {
 	var hazards []collisionHazardKind
-	if left.profile.ambiguous || right.profile.ambiguous {
+	if left.profile.Ambiguous || right.profile.Ambiguous {
 		hazards = append(hazards, collisionHazardAmbiguous)
 	}
-	if conservativeStateOrPathOverlap(left.profile.seedStates, right.profile.seedStates, left.profile.seedWrites, right.profile.seedWrites) {
+	if conservativeStateOrPathOverlap(left.profile.SeedStates, right.profile.SeedStates, left.profile.SeedWrites, right.profile.SeedWrites) {
 		hazards = append(hazards, collisionHazardSeedWAW)
 	}
-	if conservativeStateOrPathOverlap(left.profile.flowStates, right.profile.needStates, left.profile.slicePaths, right.profile.needPaths) ||
-		conservativeStateOrPathOverlap(right.profile.flowStates, left.profile.needStates, right.profile.slicePaths, left.profile.needPaths) {
-		if conservativeStateOrPathOverlap(left.profile.flowStates, right.profile.needStates, left.profile.slicePaths, right.profile.needPaths) {
+	if conservativeStateOrPathOverlap(left.profile.FlowStates, right.profile.NeedStates, left.profile.SlicePaths, right.profile.NeedPaths) ||
+		conservativeStateOrPathOverlap(right.profile.FlowStates, left.profile.NeedStates, right.profile.SlicePaths, left.profile.NeedPaths) {
+		if conservativeStateOrPathOverlap(left.profile.FlowStates, right.profile.NeedStates, left.profile.SlicePaths, right.profile.NeedPaths) {
 			hazards = append(hazards, collisionHazardLeftFlowRightNeedRAW)
 		}
-		if conservativeStateOrPathOverlap(right.profile.flowStates, left.profile.needStates, right.profile.slicePaths, left.profile.needPaths) {
+		if conservativeStateOrPathOverlap(right.profile.FlowStates, left.profile.NeedStates, right.profile.SlicePaths, left.profile.NeedPaths) {
 			hazards = append(hazards, collisionHazardRightFlowLeftNeedRAW)
 		}
 	}
-	shared := compatibleAwareSharedPaths(left.profile.flowStates, right.profile.flowStates, left.profile.slicePaths, right.profile.slicePaths)
+	shared := compatibleAwareSharedPaths(left.profile.FlowStates, right.profile.FlowStates, left.profile.SlicePaths, right.profile.SlicePaths)
 	if len(shared) == 0 {
 		return collisionAssessment{hazards: uniqueHazards(hazards)}
 	}
@@ -494,17 +478,17 @@ func uniqueHazards(hazards []collisionHazardKind) []collisionHazardKind {
 	return out
 }
 
-func statesConflict(left, right pathStateKey) bool {
-	if left.path != right.path {
+func statesConflict(left, right tracessa.ImpactStateKey) bool {
+	if left.Path != right.Path {
 		return false
 	}
-	if left.tombstone && right.tombstone {
+	if left.Tombstone && right.Tombstone {
 		return false
 	}
 	return true
 }
 
-func conservativeStateOrPathOverlap(leftStates, rightStates map[pathStateKey]struct{}, leftPaths, rightPaths map[string]struct{}) bool {
+func conservativeStateOrPathOverlap(leftStates, rightStates map[tracessa.ImpactStateKey]struct{}, leftPaths, rightPaths map[string]struct{}) bool {
 	for path := range sharedPaths(leftPaths, rightPaths) {
 		if statePathConflicts(leftStates, rightStates, path) {
 			return true
@@ -513,7 +497,7 @@ func conservativeStateOrPathOverlap(leftStates, rightStates map[pathStateKey]str
 	return false
 }
 
-func compatibleAwareSharedPaths(leftStates, rightStates map[pathStateKey]struct{}, leftPaths, rightPaths map[string]struct{}) map[string]struct{} {
+func compatibleAwareSharedPaths(leftStates, rightStates map[tracessa.ImpactStateKey]struct{}, leftPaths, rightPaths map[string]struct{}) map[string]struct{} {
 	out := make(map[string]struct{})
 	for path := range sharedPaths(leftPaths, rightPaths) {
 		if statePathConflicts(leftStates, rightStates, path) {
@@ -523,7 +507,7 @@ func compatibleAwareSharedPaths(leftStates, rightStates map[pathStateKey]struct{
 	return out
 }
 
-func statePathConflicts(leftStates, rightStates map[pathStateKey]struct{}, path string) bool {
+func statePathConflicts(leftStates, rightStates map[tracessa.ImpactStateKey]struct{}, path string) bool {
 	left := statesForPath(leftStates, path)
 	right := statesForPath(rightStates, path)
 	if len(left) == 0 || len(right) == 0 {
@@ -539,28 +523,25 @@ func statePathConflicts(leftStates, rightStates map[pathStateKey]struct{}, path 
 	return false
 }
 
-func statesForPath(states map[pathStateKey]struct{}, path string) []pathStateKey {
-	out := make([]pathStateKey, 0, 1)
+func statesForPath(states map[tracessa.ImpactStateKey]struct{}, path string) []tracessa.ImpactStateKey {
+	out := make([]tracessa.ImpactStateKey, 0, 1)
 	for state := range states {
-		if state.path == path {
+		if state.Path == path {
 			out = append(out, state)
 		}
 	}
 	return out
 }
 
-func (profile optionProfile) empty() bool {
-	return !profile.ambiguous &&
-		len(profile.seedWrites) == 0 &&
-		len(profile.needPaths) == 0 &&
-		len(profile.slicePaths) == 0 &&
-		len(profile.seedStates) == 0 &&
-		len(profile.needStates) == 0 &&
-		len(profile.flowStates) == 0
-}
-
 func (variant optionVariant) empty() bool {
-	return variant.profile.empty() && variant.outputDiff.empty()
+	return !variant.profile.Ambiguous &&
+		len(variant.profile.SeedWrites) == 0 &&
+		len(variant.profile.NeedPaths) == 0 &&
+		len(variant.profile.SlicePaths) == 0 &&
+		len(variant.profile.SeedStates) == 0 &&
+		len(variant.profile.NeedStates) == 0 &&
+		len(variant.profile.FlowStates) == 0 &&
+		variant.outputDiff.empty()
 }
 
 func overlap(left, right map[string]struct{}) bool {
@@ -600,47 +581,6 @@ func componentCombos(
 			}
 			seen[composeCombo(requireCombo, merged, optionKeys)] = struct{}{}
 		}
-	}
-	for _, key := range orthogonalKeys {
-		for _, value := range options[key] {
-			merged := maps.Clone(defaults)
-			merged[key] = value
-			seen[composeCombo(requireCombo, merged, optionKeys)] = struct{}{}
-		}
-	}
-	return slices.Sorted(maps.Keys(seen))
-}
-
-func fullComponentCombos(
-	requireCombo string,
-	options map[string][]string,
-	defaults map[string]string,
-	optionKeys []string,
-	components [][]string,
-	orthogonalKeys []string,
-) []string {
-	seen := make(map[string]struct{})
-	selections := []map[string]string{{}}
-	for _, component := range components {
-		componentSelections := expandComponentSelections(component, options)
-		next := make([]map[string]string, 0, len(selections)*len(componentSelections))
-		for _, existing := range selections {
-			for _, selection := range componentSelections {
-				merged := maps.Clone(existing)
-				for key, value := range selection {
-					merged[key] = value
-				}
-				next = append(next, merged)
-			}
-		}
-		selections = next
-	}
-	for _, selection := range selections {
-		merged := maps.Clone(defaults)
-		for key, value := range selection {
-			merged[key] = value
-		}
-		seen[composeCombo(requireCombo, merged, optionKeys)] = struct{}{}
 	}
 	for _, key := range orthogonalKeys {
 		for _, value := range options[key] {
@@ -882,23 +822,6 @@ func sampleUnitsCollide(left, right sampleUnit, profiles map[string][]optionVari
 	return false
 }
 
-func singletonCombos(requireCombo string, options map[string][]string, defaults map[string]string, optionKeys []string) []string {
-	seen := map[string]struct{}{
-		composeCombo(requireCombo, defaults, optionKeys): {},
-	}
-	for _, key := range optionKeys {
-		for _, value := range options[key] {
-			if value == "" || value == defaults[key] {
-				continue
-			}
-			selection := maps.Clone(defaults)
-			selection[key] = value
-			seen[composeCombo(requireCombo, selection, optionKeys)] = struct{}{}
-		}
-	}
-	return slices.Sorted(maps.Keys(seen))
-}
-
 func singletonSampleUnits(optionKeys []string, options map[string][]string, defaults map[string]string) []sampleUnit {
 	units := make([]sampleUnit, 0, len(optionKeys))
 	for _, key := range optionKeys {
@@ -1093,6 +1016,9 @@ func normalizePath(path string) string {
 		return ""
 	}
 	path = filepath.ToSlash(path)
+	if strings.HasPrefix(path, "/tmp/$$TMP") || strings.HasPrefix(path, "/var/folders/$$TMP") {
+		return path
+	}
 	path = reTmpUnix.ReplaceAllString(path, "/tmp/$$$$TMP")
 	path = reTmpMac.ReplaceAllString(path, "/var/folders/$$$$TMP")
 	return path
