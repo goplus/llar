@@ -1,4 +1,0 @@
-interface:
-  display_name: "Publish Registry Skill"
-  short_description: "Publish or update skills in skills-registry"
-  default_prompt: "Publish a new skill or a new skill version into github.com/MeteorsLiu/skills-registry through a pull request. If an already published skill artifact needs any correction, do not rewrite the old version directory: publish a new version instead, normalize malformed SKILL.md frontmatter when needed, and validate the published skill with skill-creator before finishing."

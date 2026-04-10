@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage Skills"
-  short_description: "Route skill installs through Nexus"
-  default_prompt: "Use this skill as a compatibility wrapper around Nexus. When a task needs a missing skill, first verify whether Nexus is already installed locally. If not, bootstrap Nexus from a verified source. Once Nexus is available, route discovery and installation through Nexus instead of independently searching for or choosing another installer."
