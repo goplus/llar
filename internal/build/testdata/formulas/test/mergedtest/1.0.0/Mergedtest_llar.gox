@@ -1,0 +1,49 @@
+import "strings"
+
+id "test/mergedtest"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "mkdir -p \"$1/include\" && printf '#define BASE 1\\n' > \"$1/include/base.h\""
+	if strings.contains(combo, "a-on") {
+		script += " && printf '#define A 1\\n' > \"$1/include/a.h\""
+	}
+	if strings.contains(combo, "b-on") {
+		script += " && printf '#define B 1\\n' > \"$1/include/b.h\""
+	}
+
+	exec "sh", "-c", script, "sh", installDir
+	if lastErr != nil {
+		out.addErr lastErr
+	}
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "test -f \"$1/include/base.h\""
+	if strings.contains(combo, "a-on") {
+		script += " && test -f \"$1/include/a.h\""
+	}
+	if strings.contains(combo, "b-on") {
+		script += " && test -f \"$1/include/b.h\""
+	}
+
+	exec "sh", "-c", script, "sh", installDir
+	if lastErr != nil {
+		out.addErr lastErr
+	}
+}

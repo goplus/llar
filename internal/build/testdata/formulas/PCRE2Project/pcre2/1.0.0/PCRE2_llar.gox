@@ -1,0 +1,89 @@
+import "strings"
+
+id "PCRE2Project/pcre2"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	grepOn := strings.contains(combo, "grep-on")
+	width16On := strings.contains(combo, "width16-on")
+	width32On := strings.contains(combo, "width32-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "BUILD_STATIC_LIBS", true
+	c.defineBool "PCRE2_BUILD_PCRE2_8", true
+	c.defineBool "PCRE2_BUILD_PCRE2_16", width16On
+	c.defineBool "PCRE2_BUILD_PCRE2_32", width32On
+	c.defineBool "PCRE2_BUILD_PCRE2GREP", grepOn
+	c.defineBool "PCRE2_BUILD_TESTS", false
+	c.defineBool "PCRE2_SUPPORT_LIBZ", false
+	c.defineBool "PCRE2_SUPPORT_LIBBZ2", false
+	c.defineBool "PCRE2_SUPPORT_JIT", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := "-lpcre2-8 -lpcre2-posix"
+	if width16On {
+		meta += " -lpcre2-16"
+	}
+	if width32On {
+		meta += " -lpcre2-32"
+	}
+	out.setMetadata meta
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libpcre2-8.a\"\n" +
+		"test -f \"$1/lib/libpcre2-posix.a\"\n" +
+		"if echo \"$2\" | grep -q 'width16-on'; then\n" +
+		"  test -f \"$1/lib/libpcre2-16.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libpcre2-16.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'width32-on'; then\n" +
+		"  test -f \"$1/lib/libpcre2-32.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libpcre2-32.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'grep-on'; then\n" +
+		"  test -f \"$1/bin/pcre2grep\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/pcre2grep\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

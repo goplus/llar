@@ -1,0 +1,112 @@
+import "strings"
+
+id "sqlite/sqlite"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	buildDir := ctx.SourceDir + "/_build"
+	err = exec("mkdir", "-p", buildDir, installDir+"/include", installDir+"/lib")
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	cflags := "-O2 -DSQLITE_THREADSAFE=1"
+	if strings.contains(combo, "dbstat-on") {
+		cflags += " -DSQLITE_ENABLE_DBSTAT_VTAB"
+	}
+	if strings.contains(combo, "json1-on") {
+		cflags += " -DSQLITE_ENABLE_JSON1"
+	}
+	if strings.contains(combo, "rtree-on") {
+		cflags += " -DSQLITE_ENABLE_RTREE"
+	}
+	if strings.contains(combo, "soundex-on") {
+		cflags += " -DSQLITE_SOUNDEX"
+	}
+
+	err = exec("sh", "-c", "cc "+cflags+" -c "+ctx.SourceDir+"/sqlite3.c -o "+buildDir+"/sqlite3.o")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("ar", "rcs", buildDir+"/libsqlite3.a", buildDir+"/sqlite3.o")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", ctx.SourceDir+"/sqlite3.h", installDir+"/include/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", ctx.SourceDir+"/sqlite3ext.h", installDir+"/include/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", buildDir+"/libsqlite3.a", installDir+"/lib/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lsqlite3"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libsqlite3.a\"\n" +
+		"test -f \"$1/include/sqlite3.h\"\n" +
+		"cat > \"$3/sqlite_feature_test.c\" <<'EOF'\n" +
+		"#include <sqlite3.h>\n" +
+		"#include <stdio.h>\n" +
+		"#include <string.h>\n" +
+		"static int ok(sqlite3 *db, const char *sql) {\n" +
+		"  char *errmsg = 0;\n" +
+		"  int rc = sqlite3_exec(db, sql, 0, 0, &errmsg);\n" +
+		"  if (errmsg != 0) sqlite3_free(errmsg);\n" +
+		"  return rc == SQLITE_OK;\n" +
+		"}\n" +
+		"int main(int argc, char **argv) {\n" +
+		"  const char *combo = argv[1];\n" +
+		"  sqlite3 *db = 0;\n" +
+		"  if (sqlite3_open(\":memory:\", &db) != SQLITE_OK) return 10;\n" +
+		"  if (ok(db, \"SELECT json('{\\\"a\\\":1}');\") != (strstr(combo, \"json1-on\") != 0)) return 11;\n" +
+		"  if (ok(db, \"CREATE VIRTUAL TABLE temp.rt USING rtree(id, minX, maxX, minY, maxY);\") != (strstr(combo, \"rtree-on\") != 0)) return 12;\n" +
+		"  if (ok(db, \"SELECT soundex('test');\") != (strstr(combo, \"soundex-on\") != 0)) return 13;\n" +
+		"  if (ok(db, \"CREATE VIRTUAL TABLE temp.stat USING dbstat(main);\") != (strstr(combo, \"dbstat-on\") != 0)) return 14;\n" +
+		"  sqlite3_close(db);\n" +
+		"  return 0;\n" +
+		"}\n" +
+		"EOF\n" +
+		"cc -I\"$1/include\" \"$3/sqlite_feature_test.c\" -L\"$1/lib\" -lsqlite3 -o \"$3/sqlite_feature_test\"\n" +
+		"\"$3/sqlite_feature_test\" \"$2\"\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

@@ -1,0 +1,91 @@
+import "strings"
+
+id "fmtlib/fmt"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	osAPIOn := strings.contains(combo, "osapi-on")
+	unicodeOn := strings.contains(combo, "unicode-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "FMT_DOC", false
+	c.defineBool "FMT_TEST", false
+	c.defineBool "FMT_OS", osAPIOn
+	c.defineBool "FMT_UNICODE", unicodeOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lfmt"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libfmt.a\"\n" +
+		"test -f \"$1/include/fmt/format.h\"\n" +
+		"if echo \"$2\" | grep -q 'osapi-on'; then\n" +
+		"  cat > \"$3/fmt_os_test.cpp\" <<'EOF'\n" +
+		"  #include <fmt/os.h>\n" +
+		"  int main() {\n" +
+		"    auto out = fmt::output_file(\"fmt-os-smoke.txt\");\n" +
+		"    out.print(\"ok\");\n" +
+		"    return 0;\n" +
+		"  }\n" +
+		"EOF\n" +
+		"  c++ -std=c++17 -I\"$1/include\" \"$3/fmt_os_test.cpp\" -L\"$1/lib\" -lfmt -o \"$3/fmt_os_test\"\n" +
+		"  \"$3/fmt_os_test\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'unicode-on'; then\n" +
+		"  cat > \"$3/fmt_unicode_test.cpp\" <<'EOF'\n" +
+		"  #include <fmt/xchar.h>\n" +
+		"  int main() {\n" +
+		"    auto s = fmt::format(L\"{}\", 42);\n" +
+		"    return s.empty() ? 1 : 0;\n" +
+		"  }\n" +
+		"EOF\n" +
+		"  c++ -std=c++17 -I\"$1/include\" \"$3/fmt_unicode_test.cpp\" -L\"$1/lib\" -lfmt -o \"$3/fmt_unicode_test\"\n" +
+		"  \"$3/fmt_unicode_test\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

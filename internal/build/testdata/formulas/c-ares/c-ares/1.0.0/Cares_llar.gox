@@ -1,0 +1,86 @@
+import "strings"
+
+id "c-ares/c-ares"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	threadsOn := strings.contains(combo, "threads-on")
+	toolsOn := strings.contains(combo, "tools-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "CARES_STATIC", true
+	c.defineBool "CARES_SHARED", false
+	c.defineBool "CARES_BUILD_TESTS", false
+	c.defineBool "CARES_BUILD_TOOLS", toolsOn
+	c.defineBool "CARES_THREADS", threadsOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lcares"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libcares.a\"\n" +
+		"test -f \"$1/include/ares.h\"\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  test -f \"$1/bin/adig\"\n" +
+		"  test -f \"$1/bin/ahost\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/adig\"\n" +
+		"  test ! -e \"$1/bin/ahost\"\n" +
+		"fi\n" +
+		"cat > \"$3/cares_threads_test.c\" <<'EOF'\n" +
+		"#include <ares.h>\n" +
+		"int main(void) { return ares_threadsafety() ? 0 : 1; }\n" +
+		"EOF\n" +
+		"cc -I\"$1/include\" \"$3/cares_threads_test.c\" -L\"$1/lib\" -lcares -o \"$3/cares_threads_test\"\n" +
+		"if echo \"$2\" | grep -q 'threads-on'; then\n" +
+		"  \"$3/cares_threads_test\"\n" +
+		"else\n" +
+		"  if \"$3/cares_threads_test\"; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

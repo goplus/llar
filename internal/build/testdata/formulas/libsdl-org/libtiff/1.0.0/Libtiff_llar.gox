@@ -1,0 +1,90 @@
+import "strings"
+
+id "libsdl-org/libtiff"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	cxxOn := strings.contains(combo, "cxx-on")
+	toolsOn := strings.contains(combo, "tools-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "tiff-static", true
+	c.defineBool "tiff-tools", toolsOn
+	c.defineBool "tiff-tests", false
+	c.defineBool "tiff-contrib", false
+	c.defineBool "tiff-docs", false
+	c.defineBool "tiff-install", true
+	c.defineBool "tiff-cxx", cxxOn
+	c.defineBool "zlib", false
+	c.defineBool "libdeflate", false
+	c.defineBool "jpeg", false
+	c.defineBool "jpeg12", false
+	c.defineBool "old-jpeg", false
+	c.defineBool "jbig", false
+	c.defineBool "lerc", false
+	c.defineBool "lzma", false
+	c.defineBool "pixarlog", false
+	c.defineBool "webp", false
+	c.defineBool "zstd", false
+	c.defineBool "tiff-opengl", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := "-ltiff"
+	if cxxOn {
+		meta = "-ltiffxx " + meta
+	}
+	out.setMetadata meta
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libtiff.a\"\n" +
+		"test -f \"$1/include/tiffio.h\"\n" +
+		"if echo \"$2\" | grep -q 'cxx-on'; then\n" +
+		"  test -f \"$1/lib/libtiffxx.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libtiffxx.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  find \"$1/bin\" -maxdepth 1 -type f -name 'tiff*' | grep -q .\n" +
+		"else\n" +
+		"  if test -d \"$1/bin\" && find \"$1/bin\" -maxdepth 1 -type f -name 'tiff*' | grep -q .; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

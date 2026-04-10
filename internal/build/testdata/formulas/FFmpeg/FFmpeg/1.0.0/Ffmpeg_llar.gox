@@ -1,0 +1,107 @@
+import "fmt"
+import "strings"
+
+id "FFmpeg/FFmpeg"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	networkOn := strings.contains(combo, "network-on")
+	zlibOn := strings.contains(combo, "zlib-on")
+
+	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	if zlibOn {
+		depDir := ""
+		for _, dep := range proj.Deps {
+			if dep.Path != "madler/zlib" {
+				continue
+			}
+			depDir, err = ctx.outputDir(dep)
+			if err != nil {
+				out.addErr err
+				return
+			}
+			break
+		}
+		if depDir == "" {
+			out.addErr fmt.errorf("zlib-on requires madler/zlib dependency")
+			return
+		}
+		a.use depDir
+	}
+
+	args := [
+		"--disable-autodetect",
+		"--disable-shared",
+		"--enable-static",
+		"--disable-programs",
+		"--disable-doc",
+		"--disable-debug",
+		"--disable-everything",
+		"--enable-avutil",
+		"--enable-avcodec",
+		"--enable-avformat",
+		"--disable-x86asm",
+	]
+	if !networkOn {
+		args <- "--disable-network"
+	}
+	if !zlibOn {
+		args <- "--disable-zlib"
+	}
+
+	err = a.configure(args...)
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = a.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = a.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lavformat -lavcodec -lavutil"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libavformat.a\"\n" +
+		"test -f \"$1/lib/libavcodec.a\"\n" +
+		"test -f \"$1/lib/libavutil.a\"\n" +
+		"if echo \"$2\" | grep -q 'network-on'; then\n" +
+		"  grep -R -q '^#define CONFIG_NETWORK 1' \"$1/include\"\n" +
+		"else\n" +
+		"  grep -R -q '^#define CONFIG_NETWORK 0' \"$1/include\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'zlib-on'; then\n" +
+		"  grep -R -q '^#define CONFIG_ZLIB 1' \"$1/include\"\n" +
+		"  grep -R -q -- ' -lz' \"$1/lib/pkgconfig\"\n" +
+		"else\n" +
+		"  grep -R -q '^#define CONFIG_ZLIB 0' \"$1/include\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

@@ -1,0 +1,43 @@
+import "strings"
+
+id "test/traceoptions"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	apiOn := strings.contains(combo, "api-on")
+	cliOn := strings.contains(combo, "cli-on")
+	shipOn := strings.contains(combo, "ship-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
+	c.defineBool "TRACE_FEATURE_API", apiOn
+	c.defineBool "TRACE_BUILD_CLI", cliOn
+	c.defineBool "TRACE_INSTALL_ALIAS", shipOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-ltracecore"
+}

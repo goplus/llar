@@ -1,0 +1,87 @@
+import "strings"
+
+id "webmproject/libwebp"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	cwebpOn := strings.contains(combo, "cwebp-on")
+	muxOn := strings.contains(combo, "mux-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "WEBP_BUILD_CWEBP", cwebpOn
+	c.defineBool "WEBP_BUILD_DWEBP", false
+	c.defineBool "WEBP_BUILD_IMG2WEBP", false
+	c.defineBool "WEBP_BUILD_GIF2WEBP", false
+	c.defineBool "WEBP_BUILD_VWEBP", false
+	c.defineBool "WEBP_BUILD_EXTRAS", false
+	c.defineBool "WEBP_BUILD_WEBPINFO", false
+	c.defineBool "WEBP_BUILD_LIBWEBPMUX", muxOn
+	c.defineBool "WEBP_BUILD_WEBPMUX", false
+	c.defineBool "WEBP_ENABLE_SIMD", false
+	c.defineBool "WEBP_NEAR_LOSSLESS", false
+	c.defineBool "WEBP_ENABLE_SWAP_16BIT_CSP", false
+	c.defineBool "CMAKE_DISABLE_FIND_PACKAGE_GIF", true
+	c.defineBool "CMAKE_DISABLE_FIND_PACKAGE_JPEG", true
+	c.defineBool "CMAKE_DISABLE_FIND_PACKAGE_PNG", true
+	c.defineBool "CMAKE_DISABLE_FIND_PACKAGE_TIFF", true
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := "-lwebp"
+	if muxOn {
+		meta += " -lwebpmux"
+	}
+	out.setMetadata meta
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libwebp.a\"\n" +
+		"test -f \"$1/include/webp/decode.h\"\n" +
+		"if echo \"$2\" | grep -q 'cwebp-on'; then\n" +
+		"  test -f \"$1/bin/cwebp\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/cwebp\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'mux-on'; then\n" +
+		"  test -f \"$1/lib/libwebpmux.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libwebpmux.a\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

@@ -1,0 +1,103 @@
+import "strings"
+
+id "zeux/pugixml"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	compactOn := strings.contains(combo, "compact-on")
+	noExceptionsOn := strings.contains(combo, "noexceptions-on")
+	noXPathOn := strings.contains(combo, "noxpath-on")
+	wcharOn := strings.contains(combo, "wchar-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "BUILD_SHARED_LIBS", false
+	c.defineBool "PUGIXML_BUILD_SHARED_AND_STATIC_LIBS", false
+	c.defineBool "PUGIXML_BUILD_TESTS", false
+	c.defineBool "PUGIXML_INSTALL", true
+	c.defineBool "PUGIXML_COMPACT", compactOn
+	c.defineBool "PUGIXML_NO_EXCEPTIONS", noExceptionsOn
+	c.defineBool "PUGIXML_NO_XPATH", noXPathOn
+	c.defineBool "PUGIXML_WCHAR_MODE", wcharOn
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lpugixml"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libpugixml.a\"\n" +
+		"test -f \"$1/include/pugixml.hpp\"\n" +
+		"test -f \"$1/include/pugiconfig.hpp\"\n" +
+		"if echo \"$2\" | grep -q 'compact-on'; then\n" +
+		"  grep -q '^#define PUGIXML_COMPACT' \"$1/include/pugiconfig.hpp\"\n" +
+		"else\n" +
+		"  if grep -q '^#define PUGIXML_COMPACT' \"$1/include/pugiconfig.hpp\"; then exit 1; fi\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'noexceptions-on'; then\n" +
+		"  grep -q '^#define PUGIXML_NO_EXCEPTIONS' \"$1/include/pugiconfig.hpp\"\n" +
+		"else\n" +
+		"  if grep -q '^#define PUGIXML_NO_EXCEPTIONS' \"$1/include/pugiconfig.hpp\"; then exit 1; fi\n" +
+		"fi\n" +
+		"cat > \"$3/pugixml_xpath_test.cpp\" <<'EOF'\n" +
+		"#include <pugixml.hpp>\n" +
+		"int main() { pugi::xml_document doc; doc.load_string(\"<x/>\"); pugi::xpath_query q(\"/x\"); return q.return_type() == pugi::xpath_type_boolean; }\n" +
+		"EOF\n" +
+		"if echo \"$2\" | grep -q 'noxpath-on'; then\n" +
+		"  if c++ -std=c++17 -I\"$1/include\" \"$3/pugixml_xpath_test.cpp\" -L\"$1/lib\" -lpugixml -o \"$3/pugixml_xpath_test\"; then exit 1; fi\n" +
+		"else\n" +
+		"  c++ -std=c++17 -I\"$1/include\" \"$3/pugixml_xpath_test.cpp\" -L\"$1/lib\" -lpugixml -o \"$3/pugixml_xpath_test\"\n" +
+		"fi\n" +
+		"cat > \"$3/pugixml_wchar_test.cpp\" <<'EOF'\n" +
+		"#include <pugixml.hpp>\n" +
+		"int main() { pugi::xml_document doc; return doc.load_string(L\"<x/>\") ? 0 : 1; }\n" +
+		"EOF\n" +
+		"if echo \"$2\" | grep -q 'wchar-on'; then\n" +
+		"  c++ -std=c++17 -I\"$1/include\" \"$3/pugixml_wchar_test.cpp\" -L\"$1/lib\" -lpugixml -o \"$3/pugixml_wchar_test\"\n" +
+		"  \"$3/pugixml_wchar_test\"\n" +
+		"else\n" +
+		"  if c++ -std=c++17 -I\"$1/include\" \"$3/pugixml_wchar_test.cpp\" -L\"$1/lib\" -lpugixml -o \"$3/pugixml_wchar_test\"; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

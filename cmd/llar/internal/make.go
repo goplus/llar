@@ -23,6 +23,7 @@ import (
 
 var makeVerbose bool
 var makeOutput string
+var makeMatrix string
 
 // newRemoteStore creates the remote formula store. Overridable for testing.
 var newRemoteStore = func() (repo.Store, error) {
@@ -48,6 +49,8 @@ var makeCmd = &cobra.Command{
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
 	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory or .zip file)")
+	makeCmd.Flags().StringVar(&makeMatrix, "matrix", "", "Override matrix combination (internal)")
+	_ = makeCmd.Flags().MarkHidden("matrix")
 	rootCmd.AddCommand(makeCmd)
 }
 
@@ -68,13 +71,16 @@ func runMake(cmd *cobra.Command, args []string) error {
 		makeOutput = abs
 	}
 
-	matrix := formula.Matrix{
-		Require: map[string][]string{
-			"os":   {runtime.GOOS},
-			"arch": {runtime.GOARCH},
-		},
+	matrixStr := makeMatrix
+	if matrixStr == "" {
+		matrix := formula.Matrix{
+			Require: map[string][]string{
+				"os":   {runtime.GOOS},
+				"arch": {runtime.GOARCH},
+			},
+		}
+		matrixStr = matrix.Combinations()[0]
 	}
-	matrixStr := matrix.Combinations()[0]
 
 	// Set up remote formula store (always needed for deps)
 	remoteStore, err := newRemoteStore()
@@ -83,7 +89,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 	}
 
 	if !isLocal {
-		return buildModule(ctx, remoteStore, pattern, version, matrixStr)
+		return buildModuleWithRunTest(ctx, remoteStore, pattern, version, matrixStr, false)
 	}
 
 	// Resolve local pattern
@@ -109,7 +115,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		if ver == "" {
 			ver = version // global @version from arg
 		}
-		if err := buildModule(ctx, store, m.Path, ver, matrixStr); err != nil {
+		if err := buildModuleWithRunTest(ctx, store, m.Path, ver, matrixStr, false); err != nil {
 			return err
 		}
 	}
@@ -118,6 +124,11 @@ func runMake(cmd *cobra.Command, args []string) error {
 
 // buildModule loads and builds a single module.
 func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string) error {
+	return buildModuleWithRunTest(ctx, store, modPath, version, matrixStr, false)
+}
+
+// buildModuleWithRunTest loads and builds a single module.
+func buildModuleWithRunTest(ctx context.Context, store repo.Store, modPath, version, matrixStr string, runTest bool) error {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
 	})
@@ -151,6 +162,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 	buildOpts := build.Options{
 		Store:     store,
 		MatrixStr: matrixStr,
+		RunTest:   runTest,
 	}
 	if makeOutput != "" {
 		tmpDir, err := os.MkdirTemp("", "llar-make-*")

@@ -28,8 +28,10 @@ type Formula struct {
 	// 	the method declaration of ModuleF in formula/classfile.go
 	ModPath   string
 	FromVer   string
+	Matrix    formula.Matrix
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
+	OnTest    func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
 }
 
 // loadFS is the internal implementation for loading a formula from a filesystem.
@@ -134,7 +136,9 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		structElem: class,
 		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
+		Matrix:     valueOf(class, "matrix").(formula.Matrix),
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
+		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 	}, nil
 }

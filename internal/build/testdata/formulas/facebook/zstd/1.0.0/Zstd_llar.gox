@@ -1,0 +1,91 @@
+import "strings"
+
+id "facebook/zstd"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	programsOn := strings.contains(combo, "programs-on")
+	threadingOn := strings.contains(combo, "threading-on")
+
+	c := cmake.new(ctx.SourceDir+"/build/cmake", ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "ZSTD_BUILD_SHARED", false
+	c.defineBool "ZSTD_BUILD_STATIC", true
+	c.defineBool "ZSTD_BUILD_PROGRAMS", programsOn
+	c.defineBool "ZSTD_PROGRAMS_LINK_SHARED", false
+	c.defineBool "ZSTD_MULTITHREAD_SUPPORT", threadingOn
+	c.defineBool "ZSTD_BUILD_TESTS", false
+	c.defineBool "ZSTD_BUILD_CONTRIB", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lzstd"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	testDir := ctx.SourceDir + "/_ontest"
+	err = exec("mkdir", "-p", testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libzstd.a\"\n" +
+		"test -f \"$1/include/zstd.h\"\n" +
+		"if echo \"$2\" | grep -q 'programs-on'; then\n" +
+		"  test -f \"$1/bin/zstd\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/zstd\"\n" +
+		"fi\n" +
+		"cat > \"$3/zstd_threads_test.c\" <<'EOF'\n" +
+		"#include <zstd.h>\n" +
+		"int main(void) {\n" +
+		"  ZSTD_CCtx *cctx = ZSTD_createCCtx();\n" +
+		"  if (cctx == 0) return 2;\n" +
+		"  size_t rc = ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 1);\n" +
+		"  ZSTD_freeCCtx(cctx);\n" +
+		"  return ZSTD_isError(rc) ? 1 : 0;\n" +
+		"}\n" +
+		"EOF\n" +
+		"cc -I\"$1/include\" \"$3/zstd_threads_test.c\" -L\"$1/lib\" -lzstd -o \"$3/zstd_threads_test\"\n" +
+		"if echo \"$2\" | grep -q 'threading-on'; then\n" +
+		"  \"$3/zstd_threads_test\"\n" +
+		"else\n" +
+		"  if \"$3/zstd_threads_test\"; then exit 1; fi\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo, testDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

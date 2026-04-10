@@ -8,12 +8,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/internal/trace"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 )
@@ -270,6 +272,42 @@ func TestResolveModTransitiveDeps(t *testing.T) {
 	})
 }
 
+func TestRealOptionFormulasLoad(t *testing.T) {
+	store := setupTestStore(t)
+	cases := []module.Version{
+		{Path: "openssl/openssl", Version: "openssl-3.6.1"},
+		{Path: "FFmpeg/FFmpeg", Version: "n8.0.1"},
+		{Path: "opencv/opencv", Version: "4.9.0"},
+		{Path: "boostorg/boost", Version: "boost-1.90.0"},
+		{Path: "pocoproject/poco", Version: "poco-1.14.2-release"},
+		{Path: "PCRE2Project/pcre2", Version: "pcre2-10.45"},
+		{Path: "fmtlib/fmt", Version: "11.1.4"},
+		{Path: "libjpeg-turbo/libjpeg-turbo", Version: "3.1.3"},
+		{Path: "sqlite/sqlite", Version: "3.45.3"},
+		{Path: "zeux/pugixml", Version: "1.15"},
+		{Path: "libexpat/libexpat", Version: "2.6.4"},
+		{Path: "DaveGamble/cJSON", Version: "1.7.19"},
+		{Path: "c-ares/c-ares", Version: "1.34.5"},
+		{Path: "webmproject/libwebp", Version: "1.5.0"},
+		{Path: "libsdl-org/libtiff", Version: "4.7.1"},
+		{Path: "facebook/zstd", Version: "1.5.7"},
+		{Path: "uriparser/uriparser", Version: "0.9.8"},
+		{Path: "jbeder/yaml-cpp", Version: "0.9.0"},
+		{Path: "gabime/spdlog", Version: "1.17.0"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.Path+"@"+tc.Version, func(t *testing.T) {
+			t.Parallel()
+			_, err := modules.Load(context.Background(), tc, modules.Options{FormulaStore: store})
+			if err != nil {
+				t.Fatalf("modules.Load(%s@%s) failed: %v", tc.Path, tc.Version, err)
+			}
+		})
+	}
+}
+
 // testFormulaDir and testSourceDir are resolved once at init to avoid
 // issues with os.Chdir in Build() changing the working directory.
 var (
@@ -324,6 +362,83 @@ func loadAndBuild(t *testing.T, b *Builder, store repo.Store, main module.Versio
 		t.Fatalf("Build(%s) failed: %v", main.Path, err)
 	}
 	return results, mods
+}
+
+func TestBuilderRunOnTest_UsesProvidedOutputDir(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux|a-on-b-on")
+
+	mods, err := modules.Load(context.Background(), module.Version{Path: "test/mergedtest", Version: "1.0.0"}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	mergedDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mergedDir, "include"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() failed: %v", err)
+	}
+	for _, name := range []string{"base.h", "a.h", "b.h"} {
+		if err := os.WriteFile(filepath.Join(mergedDir, "include", name), []byte(name), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) failed: %v", name, err)
+		}
+	}
+
+	if err := b.RunOnTest(context.Background(), mods, mergedDir); err != nil {
+		t.Fatalf("RunOnTest() unexpected error: %v", err)
+	}
+}
+
+func TestBuilderRunOnTest_FailsWhenMergedOutputMissingExpectedFile(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux|a-on-b-on")
+
+	mods, err := modules.Load(context.Background(), module.Version{Path: "test/mergedtest", Version: "1.0.0"}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	mergedDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mergedDir, "include"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() failed: %v", err)
+	}
+	for _, name := range []string{"base.h", "a.h"} {
+		if err := os.WriteFile(filepath.Join(mergedDir, "include", name), []byte(name), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) failed: %v", name, err)
+		}
+	}
+
+	err = b.RunOnTest(context.Background(), mods, mergedDir)
+	if err == nil {
+		t.Fatal("RunOnTest() expected error, got nil")
+	}
+	var onTestErr *OnTestFailureError
+	if !errors.As(err, &onTestErr) {
+		t.Fatalf("RunOnTest() error = %T, want *OnTestFailureError", err)
+	}
+}
+
+func TestBuild_RestoresWorkingDirectory(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() failed: %v", err)
+	}
+
+	_, _ = loadAndBuild(t, b, store, module.Version{Path: "test/liba", Version: "1.0.0"})
+
+	gotDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() after Build failed: %v", err)
+	}
+	if gotDir != origDir {
+		t.Fatalf("cwd after Build = %q, want %q", gotDir, origDir)
+	}
 }
 
 // findResult returns the Result for a given module path.
@@ -386,6 +501,165 @@ func TestNewBuilder(t *testing.T) {
 			t.Errorf("workspace dir %q doesn't contain .llar", b.workspaceDir)
 		}
 	})
+}
+
+func TestBuild_TraceCapturesOnlyMainModule(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.trace = true
+
+	oldCapture := captureOnBuildTrace
+	defer func() {
+		captureOnBuildTrace = oldCapture
+	}()
+
+	var calls int
+	var gotOpts trace.CaptureOptions
+	wantTrace := []trace.Record{{Argv: []string{"trace", "main"}}}
+	wantEvents := []trace.Event{{Seq: 1, Kind: trace.EventExec, Argv: []string{"trace", "main"}}}
+	captureOnBuildTrace = func(ctx context.Context, opts trace.CaptureOptions, run func() error) (trace.CaptureResult, error) {
+		calls++
+		gotOpts = opts
+		if err := run(); err != nil {
+			return trace.CaptureResult{}, err
+		}
+		return trace.CaptureResult{Records: wantTrace, Events: wantEvents}, nil
+	}
+
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	results, mods := loadAndBuild(t, b, store, main)
+
+	if calls != 1 {
+		t.Fatalf("captureOnBuildTrace call count = %d, want 1", calls)
+	}
+
+	root, ok := findResult(results, b, mods, "test/depresult")
+	if !ok {
+		t.Fatal("missing result for test/depresult")
+	}
+	if !reflect.DeepEqual(root.Trace, wantTrace) {
+		t.Fatalf("root trace = %#v, want %#v", root.Trace, wantTrace)
+	}
+	if !reflect.DeepEqual(root.TraceEvents, wantEvents) {
+		t.Fatalf("root trace events = %#v, want %#v", root.TraceEvents, wantEvents)
+	}
+	if !root.TraceDiagnostics.Trusted() {
+		t.Fatalf("root trace diagnostics = %#v, want trusted", root.TraceDiagnostics)
+	}
+	if !root.ReplayReady {
+		t.Fatal("root ReplayReady = false, want true")
+	}
+	if gotOpts.RootCwd == "" {
+		t.Fatal("RootCwd should not be empty")
+	}
+	if len(gotOpts.KeepRoots) < 2 {
+		t.Fatalf("KeepRoots = %#v, want source root plus install roots", gotOpts.KeepRoots)
+	}
+	if !strings.Contains(root.TraceScope.SourceRoot, filepath.Join(b.workspaceDir, ".trace-src")) {
+		t.Fatalf("trace source root = %q, want under %q", root.TraceScope.SourceRoot, filepath.Join(b.workspaceDir, ".trace-src"))
+	}
+	if _, err := os.Stat(root.TraceScope.SourceRoot); err != nil {
+		t.Fatalf("trace source root %q should exist: %v", root.TraceScope.SourceRoot, err)
+	}
+
+	dep, ok := findResult(results, b, mods, "test/liba")
+	if !ok {
+		t.Fatal("missing result for test/liba")
+	}
+	if len(dep.Trace) != 0 {
+		t.Fatalf("dependency trace = %#v, want empty", dep.Trace)
+	}
+	if len(dep.TraceEvents) != 0 {
+		t.Fatalf("dependency trace events = %#v, want empty", dep.TraceEvents)
+	}
+	if dep.ReplayReady {
+		t.Fatal("dependency ReplayReady = true, want false")
+	}
+}
+
+func TestBuild_TraceBypassesMainModuleCache(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.trace = true
+
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-lPRECACHED",
+		BuildTime: time.Now(),
+	})
+	if err := b.saveCache("test/liba", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	oldCapture := captureOnBuildTrace
+	defer func() {
+		captureOnBuildTrace = oldCapture
+	}()
+	captureOnBuildTrace = func(ctx context.Context, opts trace.CaptureOptions, run func() error) (trace.CaptureResult, error) {
+		if err := run(); err != nil {
+			return trace.CaptureResult{}, err
+		}
+		return trace.CaptureResult{
+			Records: []trace.Record{{Argv: []string{"trace", "cache-bypass"}}},
+			Events:  []trace.Event{{Seq: 1, Kind: trace.EventExec, Argv: []string{"trace", "cache-bypass"}}},
+		}, nil
+	}
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if results[0].Metadata != "-lA" {
+		t.Fatalf("metadata = %q, want %q", results[0].Metadata, "-lA")
+	}
+	if len(results[0].Trace) != 1 {
+		t.Fatalf("trace len = %d, want 1", len(results[0].Trace))
+	}
+	if len(results[0].TraceEvents) != 1 {
+		t.Fatalf("trace events len = %d, want 1", len(results[0].TraceEvents))
+	}
+}
+
+func TestBuild_TraceInfersNestedBuildRootFromTrace(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.trace = true
+
+	oldCapture := captureOnBuildTrace
+	defer func() {
+		captureOnBuildTrace = oldCapture
+	}()
+	var gotOpts trace.CaptureOptions
+	captureOnBuildTrace = func(ctx context.Context, opts trace.CaptureOptions, run func() error) (trace.CaptureResult, error) {
+		gotOpts = opts
+		if err := run(); err != nil {
+			return trace.CaptureResult{}, err
+		}
+		nestedBuild := filepath.Join(opts.RootCwd, "expat", "_build")
+		return trace.CaptureResult{
+			Records: []trace.Record{{
+				PID:       1,
+				ParentPID: 0,
+				Argv:      []string{"cmake", "-S", filepath.Join(opts.RootCwd, "expat"), "-B", nestedBuild},
+				Cwd:       filepath.Join(opts.RootCwd, "expat"),
+				Changes: []string{
+					filepath.Join(nestedBuild, "CMakeCache.txt"),
+					filepath.Join(nestedBuild, "libexpat.a"),
+				},
+			}},
+		}, nil
+	}
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	results, mods := loadAndBuild(t, b, store, main)
+
+	root, ok := findResult(results, b, mods, "test/liba")
+	if !ok {
+		t.Fatal("missing result for test/liba")
+	}
+	wantBuildRoot := filepath.Join(gotOpts.RootCwd, "expat", "_build")
+	if root.TraceScope.BuildRoot != wantBuildRoot {
+		t.Fatalf("trace build root = %q, want %q", root.TraceScope.BuildRoot, wantBuildRoot)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +946,48 @@ func TestResolveModTransitiveDeps_ModNotInTargets(t *testing.T) {
 	// C is reachable, D is not in targets so skipped
 	if want := "C@1.0.0"; versions(got) != want {
 		t.Errorf("got %q, want %q", versions(got), want)
+	}
+}
+
+func TestCollectTraceInputDigestsIncludesBuildOutputs(t *testing.T) {
+	buildRoot := t.TempDir()
+	generatedHeader := filepath.Join(buildRoot, "generated.h")
+	objectFile := filepath.Join(buildRoot, "core.o")
+	sourceFile := filepath.Join(buildRoot, "core.c")
+
+	if err := os.WriteFile(sourceFile, []byte("int core(void) { return 0; }\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source): %v", err)
+	}
+	if err := os.WriteFile(generatedHeader, []byte("#define FLAG 1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(generatedHeader): %v", err)
+	}
+	if err := os.WriteFile(objectFile, []byte("object-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(objectFile): %v", err)
+	}
+
+	records := []trace.Record{
+		{
+			Cwd:     buildRoot,
+			Argv:    []string{"generator"},
+			Inputs:  []string{sourceFile},
+			Changes: []string{generatedHeader},
+		},
+		{
+			Cwd:     buildRoot,
+			Argv:    []string{"cc", "-c", sourceFile, "-o", objectFile},
+			Inputs:  []string{sourceFile, generatedHeader},
+			Changes: []string{objectFile},
+		},
+	}
+
+	got := collectTraceInputDigests(records, trace.Scope{BuildRoot: buildRoot})
+	if got == nil {
+		t.Fatal("collectTraceInputDigests() = nil, want digests")
+	}
+	for _, path := range []string{generatedHeader, objectFile} {
+		if got[path] == "" {
+			t.Fatalf("collectTraceInputDigests() missing digest for %q: %#v", path, got)
+		}
 	}
 }
 

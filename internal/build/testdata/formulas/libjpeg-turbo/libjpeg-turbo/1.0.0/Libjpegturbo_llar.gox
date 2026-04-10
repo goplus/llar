@@ -1,0 +1,82 @@
+import "strings"
+
+id "libjpeg-turbo/libjpeg-turbo"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	arithDecOn := strings.contains(combo, "arithdec-on")
+	arithEncOn := strings.contains(combo, "arithenc-on")
+	toolsOn := strings.contains(combo, "tools-on")
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.defineBool "ENABLE_SHARED", false
+	c.defineBool "ENABLE_STATIC", true
+	c.defineBool "WITH_SIMD", false
+	c.defineBool "WITH_ARITH_DEC", arithDecOn
+	c.defineBool "WITH_ARITH_ENC", arithEncOn
+	c.defineBool "WITH_TURBOJPEG", false
+	c.defineBool "WITH_JAVA", false
+	c.defineBool "WITH_TOOLS", toolsOn
+	c.defineBool "WITH_JPEG7", false
+	c.defineBool "WITH_JPEG8", false
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-ljpeg"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/lib/libjpeg.a\"\n" +
+		"test -f \"$1/include/jconfig.h\"\n" +
+		"if echo \"$2\" | grep -q 'arithdec-on'; then\n" +
+		"  grep -q '^#define D_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"\n" +
+		"else\n" +
+		"  if grep -q '^#define D_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"; then exit 1; fi\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'arithenc-on'; then\n" +
+		"  grep -q '^#define C_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"\n" +
+		"else\n" +
+		"  if grep -q '^#define C_ARITH_CODING_SUPPORTED' \"$1/include/jconfig.h\"; then exit 1; fi\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'tools-on'; then\n" +
+		"  test -f \"$1/bin/cjpeg\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/bin/cjpeg\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}

@@ -1,0 +1,84 @@
+import "strings"
+
+id "boostorg/boost"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	timerOn := strings.contains(combo, "timer-on")
+	programOptionsOn := strings.contains(combo, "program_options-on")
+
+	err = exec("sh", "./bootstrap.sh", "--with-libraries=timer,program_options", "--prefix="+installDir)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	err = exec("mkdir", "-p", installDir+"/include")
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = exec("cp", "-R", ctx.SourceDir+"/boost", installDir+"/include/")
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	buildDir := "--build-dir=" + ctx.SourceDir + "/_build"
+	prefix := "--prefix=" + installDir
+	if timerOn && programOptionsOn {
+		err = exec("./b2", buildDir, prefix, "variant=release", "link=static", "threading=multi", "install", "--with-timer", "--with-program_options")
+	} else if timerOn {
+		err = exec("./b2", buildDir, prefix, "variant=release", "link=static", "threading=multi", "install", "--with-timer")
+	} else if programOptionsOn {
+		err = exec("./b2", buildDir, prefix, "variant=release", "link=static", "threading=multi", "install", "--with-program_options")
+	}
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	meta := ""
+	if programOptionsOn {
+		meta += " -lboost_program_options"
+	}
+	if timerOn {
+		meta += " -lboost_timer"
+	}
+	out.setMetadata strings.trimSpace(meta)
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	combo := ctx.currentMatrix()
+	script := "set -eu\n" +
+		"test -f \"$1/include/boost/config.hpp\"\n" +
+		"if echo \"$2\" | grep -q 'program_options-on'; then\n" +
+		"  test -f \"$1/lib/libboost_program_options.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libboost_program_options.a\"\n" +
+		"fi\n" +
+		"if echo \"$2\" | grep -q 'timer-on'; then\n" +
+		"  test -f \"$1/lib/libboost_timer.a\"\n" +
+		"else\n" +
+		"  test ! -e \"$1/lib/libboost_timer.a\"\n" +
+		"fi\n"
+	err = exec("sh", "-c", script, "sh", installDir, combo)
+	if err != nil {
+		out.addErr err
+		return
+	}
+}
