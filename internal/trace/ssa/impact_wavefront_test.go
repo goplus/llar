@@ -1,6 +1,7 @@
 package ssa
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/goplus/llar/internal/trace"
@@ -169,6 +170,49 @@ func TestAnalyzeWithEventsIgnoresArchiveTempSidecarsInImpact(t *testing.T) {
 		}
 		if _, ok := result.Profile.SlicePaths[key]; ok {
 			t.Fatalf("SlicePaths unexpectedly contains %q: %v", key, result.Profile.SlicePaths)
+		}
+	}
+}
+
+func TestAnalyzeWithEventsIgnoresTryCompileProbeArtifactsInImpact(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot:  "/tmp/work",
+		BuildRoot:   "/tmp/work/_build",
+		InstallRoot: "/tmp/work/install",
+	}
+	result := Analyze(AnalysisInput{
+		Base: AnalysisSideInput{
+			Events: traceoptionsTryCompileProbeEventTrace(false, "8L498d", "cmTC_10eef"),
+			Scope:  scope,
+		},
+		Probe: AnalysisSideInput{
+			Events: traceoptionsTryCompileProbeEventTrace(true, "T24hDi", "cmTC_42d75"),
+			Scope:  scope,
+		},
+	})
+
+	if _, ok := result.Profile.SeedWrites[normalizeScopeToken("/tmp/work/_build/trace_options.h", scope)]; !ok {
+		t.Fatalf("SeedWrites missing trace_options.h: %v", result.Profile.SeedWrites)
+	}
+	if _, ok := result.Profile.SlicePaths[normalizeScopeToken("/tmp/work/_build/libtracecore.a", scope)]; !ok {
+		t.Fatalf("SlicePaths missing libtracecore.a propagation: %v", result.Profile.SlicePaths)
+	}
+	hasProbeKey := func(key string) bool {
+		return strings.Contains(key, "TryCompile-") || strings.Contains(key, "cmTC_") || strings.Contains(key, ".cmake/api/v1/reply")
+	}
+	for key := range result.Profile.SeedWrites {
+		if hasProbeKey(key) {
+			t.Fatalf("SeedWrites unexpectedly contains try-compile probe artifact %q: %v", key, result.Profile.SeedWrites)
+		}
+	}
+	for key := range result.Profile.SlicePaths {
+		if hasProbeKey(key) {
+			t.Fatalf("SlicePaths unexpectedly contains try-compile probe artifact %q: %v", key, result.Profile.SlicePaths)
+		}
+	}
+	for key := range result.Profile.NeedPaths {
+		if hasProbeKey(key) {
+			t.Fatalf("NeedPaths unexpectedly contains try-compile probe artifact %q: %v", key, result.Profile.NeedPaths)
 		}
 	}
 }

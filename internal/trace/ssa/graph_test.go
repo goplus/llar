@@ -26,6 +26,91 @@ func traceoptionsEventTrace(apiOn bool) []trace.Event {
 	return traceoptionsMatrixEventTrace(apiOn, false, false)
 }
 
+func traceoptionsTryCompileProbeEventTrace(apiOn bool, trySuffix, cmTC string) []trace.Event {
+	configureArgv := []string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}
+	if apiOn {
+		configureArgv = append(configureArgv, "-DTRACE_FEATURE_API=ON")
+	}
+	compileArgv := []string{
+		"/usr/bin/cc",
+		"-I/tmp/work",
+		"-I/tmp/work/_build",
+		"-o", "/tmp/work/_build/CMakeFiles/tracecore.dir/core.c.o",
+		"-c", "/tmp/work/core.c",
+	}
+	if apiOn {
+		compileArgv = []string{
+			"/usr/bin/cc",
+			"-DTRACE_FEATURE_API",
+			"-I/tmp/work",
+			"-I/tmp/work/_build",
+			"-o", "/tmp/work/_build/CMakeFiles/tracecore.dir/core.c.o",
+			"-c", "/tmp/work/core.c",
+		}
+	}
+	tryDir := "/tmp/work/_build/CMakeFiles/CMakeScratch/TryCompile-" + trySuffix
+	objectPath := tryDir + "/CMakeFiles/" + cmTC + ".dir/CheckIncludeFile.c.o"
+	execPath := tryDir + "/" + cmTC
+	replyPath := tryDir + "/.cmake/api/v1/reply"
+
+	events := make([]trace.Event, 0, 32)
+	seq := int64(1)
+	addExec := func(pid, parent int64, cwd string, argv ...string) {
+		events = append(events, trace.Event{Seq: seq, PID: pid, ParentPID: parent, Cwd: cwd, Kind: trace.EventExec, Argv: argv})
+		seq++
+	}
+	addRead := func(pid int64, cwd, path string) {
+		events = append(events, trace.Event{Seq: seq, PID: pid, Cwd: cwd, Kind: trace.EventRead, Path: path})
+		seq++
+	}
+	addWrite := func(pid int64, cwd, path string) {
+		events = append(events, trace.Event{Seq: seq, PID: pid, Cwd: cwd, Kind: trace.EventWrite, Path: path})
+		seq++
+	}
+
+	addExec(100, 1, "/tmp/work", configureArgv...)
+	addRead(100, "/tmp/work", "/tmp/work/CMakeLists.txt")
+	addWrite(100, "/tmp/work", tryDir+"/CheckIncludeFile.c")
+
+	addExec(110, 100, tryDir, "/usr/bin/cc", "-o", "CMakeFiles/"+cmTC+".dir/CheckIncludeFile.c.o", "-c", tryDir+"/CheckIncludeFile.c")
+	addRead(110, tryDir, tryDir+"/CheckIncludeFile.c")
+	addWrite(110, tryDir, objectPath)
+
+	addExec(111, 110, tryDir, "/usr/bin/ld", "-o", cmTC, "CMakeFiles/"+cmTC+".dir/CheckIncludeFile.c.o")
+	addRead(111, tryDir, objectPath)
+	addWrite(111, tryDir, execPath)
+
+	addExec(112, 110, tryDir, "/usr/bin/cmake", "-E", "echo", "reply")
+	addRead(112, tryDir, execPath)
+	addWrite(112, tryDir, replyPath)
+
+	addRead(100, "/tmp/work", execPath)
+	addRead(100, "/tmp/work", replyPath)
+	addRead(100, "/tmp/work", "/tmp/work/trace_options.h.in")
+	addWrite(100, "/tmp/work", "/tmp/work/_build/trace_options.h")
+	addWrite(100, "/tmp/work", "/tmp/work/_build/cmake_install.cmake")
+
+	addExec(200, 1, "/tmp/work", "cmake", "--build", "/tmp/work/_build", "--config", "Release")
+	addExec(201, 200, "/tmp/work/_build", compileArgv...)
+	addRead(201, "/tmp/work/_build", "/tmp/work/core.c")
+	addRead(201, "/tmp/work/_build", "/tmp/work/trace.h")
+	addRead(201, "/tmp/work/_build", "/tmp/work/_build/trace_options.h")
+	addWrite(201, "/tmp/work/_build", "/tmp/work/_build/CMakeFiles/tracecore.dir/core.c.o")
+
+	addExec(202, 200, "/tmp/work/_build", "/usr/bin/ar", "qc", "/tmp/work/_build/libtracecore.a", "/tmp/work/_build/CMakeFiles/tracecore.dir/core.c.o")
+	addRead(202, "/tmp/work/_build", "/tmp/work/_build/CMakeFiles/tracecore.dir/core.c.o")
+	addWrite(202, "/tmp/work/_build", "/tmp/work/_build/libtracecore.a")
+
+	addExec(300, 1, "/tmp/work", "cmake", "--install", "/tmp/work/_build")
+	addRead(300, "/tmp/work", "/tmp/work/_build/cmake_install.cmake")
+	addRead(300, "/tmp/work", "/tmp/work/_build/libtracecore.a")
+	addRead(300, "/tmp/work", "/tmp/work/_build/trace_options.h")
+	addWrite(300, "/tmp/work", "/tmp/work/install/lib/libtracecore.a")
+	addWrite(300, "/tmp/work", "/tmp/work/install/include/trace_options.h")
+
+	return events
+}
+
 func traceoptionsMatrixEventTrace(apiOn, cliOn, shipOn bool) []trace.Event {
 	configureArgv := []string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}
 	if apiOn {
@@ -625,6 +710,20 @@ func TestProjectRolesClassifiesLeafCopyAsDelivery(t *testing.T) {
 	}
 }
 
+func TestProjectRolesClassifiesLeafHeaderCopyAsDelivery(t *testing.T) {
+	records := []trace.Record{
+		record([]string{"cp", "_build/generated_config.h", "stage/generated_config.h"}, "/tmp/work",
+			[]string{"/tmp/work/_build/generated_config.h"},
+			[]string{"/tmp/work/stage/generated_config.h"}),
+	}
+
+	graph := BuildGraph(BuildInput{Records: records})
+	roles := ProjectRoles(graph)
+	if got := projectedPathRole(graph, roles, "/tmp/work/stage/generated_config.h"); got != RoleDelivery {
+		t.Fatalf("role(stage generated_config.h) = %v, want %v", got, RoleDelivery)
+	}
+}
+
 func TestProjectRolesTreatsConfigureSidecarsAsTooling(t *testing.T) {
 	scope := trace.Scope{
 		SourceRoot:  "/tmp/work",
@@ -703,6 +802,34 @@ func TestProjectRolesTreatsEventConfigureSidecarsAsTooling(t *testing.T) {
 	}
 }
 
+func TestProjectRolesTreatsTryCompileProbeArtifactsAsTooling(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot:  "/tmp/work",
+		BuildRoot:   "/tmp/work/_build",
+		InstallRoot: "/tmp/work/install",
+	}
+	tryDir := "/tmp/work/_build/CMakeFiles/CMakeScratch/TryCompile-ProbeKeep"
+	graph := BuildGraph(BuildInput{
+		Events: traceoptionsTryCompileProbeEventTrace(false, "ProbeKeep", "cmTC_probe"),
+		Scope:  scope,
+	})
+	roles := ProjectRoles(graph)
+
+	for _, path := range []string{
+		tryDir + "/CheckIncludeFile.c",
+		tryDir + "/CMakeFiles/cmTC_probe.dir/CheckIncludeFile.c.o",
+		tryDir + "/cmTC_probe",
+		tryDir + "/.cmake/api/v1/reply",
+	} {
+		if got := projectedPathRole(graph, roles, path); got != RoleTooling {
+			t.Fatalf("role(%s) = %v, want %v", normalizePath(path), got, RoleTooling)
+		}
+	}
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/trace_options.h"); got != RolePropagating {
+		t.Fatalf("role(trace_options.h) = %v, want %v", got, RolePropagating)
+	}
+}
+
 func TestProjectRolesTreatsInstallManifestAsDelivery(t *testing.T) {
 	scope := trace.Scope{
 		BuildRoot:   "/tmp/work/_build",
@@ -761,6 +888,173 @@ func TestProjectRolesTreatsArchiveTempSidecarsAsTooling(t *testing.T) {
 	}
 	if got := projectedPathRole(graph, roles, "/tmp/work/_build/libtracecore.a"); got != RolePropagating {
 		t.Fatalf("role(libtracecore.a) = %v, want %v", got, RolePropagating)
+	}
+}
+
+func TestProjectRolesKeepsMainlineVisibleAcrossConfigureChildFrontier(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot: "/tmp/work",
+		BuildRoot:  "/tmp/work/_build",
+	}
+	records := []trace.Record{
+		recordWithProc(100, 1, []string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
+			[]string{"/tmp/work/CMakeLists.txt"},
+			[]string{
+				"/tmp/work/_build/config.cache",
+				"/tmp/work/_build/config.h",
+			}),
+		recordWithProc(200, 100, []string{"cc", "/tmp/work/main.c", "/tmp/work/_build/config.h", "-o", "/tmp/work/_build/app"}, "/tmp/work/_build",
+			[]string{
+				"/tmp/work/main.c",
+				"/tmp/work/_build/config.h",
+			},
+			[]string{"/tmp/work/_build/app"}),
+	}
+
+	graph := BuildGraph(BuildInput{Records: records, Scope: scope})
+	roles := ProjectRoles(graph)
+
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/config.cache"); got != RoleTooling {
+		t.Fatalf("role(config.cache) = %v, want %v", got, RoleTooling)
+	}
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/config.h"); got != RolePropagating {
+		t.Fatalf("role(config.h) = %v, want %v", got, RolePropagating)
+	}
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/app"); got != RolePropagating {
+		t.Fatalf("role(app) = %v, want %v", got, RolePropagating)
+	}
+	if got := RoleActionClass(roles, 1); got != ActionRoleMainline {
+		t.Fatalf("action role(cc) = %v, want %v", got, ActionRoleMainline)
+	}
+}
+
+func TestInferMainlineVisibleDefsUsesDerivedSinkWithoutInstall(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot: "/tmp/work",
+		BuildRoot:  "/tmp/work/_build",
+	}
+	records := []trace.Record{
+		recordWithProc(100, 1, []string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
+			[]string{"/tmp/work/CMakeLists.txt"},
+			[]string{
+				"/tmp/work/_build/config.cache",
+				"/tmp/work/_build/config.h",
+			}),
+		recordWithProc(200, 100, []string{"cc", "/tmp/work/main.c", "/tmp/work/_build/config.h", "-o", "/tmp/work/_build/app"}, "/tmp/work/_build",
+			[]string{
+				"/tmp/work/main.c",
+				"/tmp/work/_build/config.h",
+			},
+			[]string{"/tmp/work/_build/app"}),
+	}
+
+	graph := BuildGraph(BuildInput{Records: records, Scope: scope})
+	tooling := classifyToolingFamily(graph)
+	deliveryOnly := make([]bool, len(graph.Actions))
+	for idx := range graph.Actions {
+		deliveryOnly[idx] = isDeliveryOnlyAction(graph, idx)
+	}
+	toolingWorkspaceRoots := inferToolingWorkspaceRoots(graph, tooling, deliveryOnly)
+	nonEscaping := classifyNonEscapingToolingDefs(graph, tooling, deliveryOnly, toolingWorkspaceRoots)
+	visible := inferMainlineVisibleDefs(graph, tooling, toolingWorkspaceRoots, nonEscaping)
+
+	for _, def := range []PathState{
+		graph.ActionWrites[0][1], // config.h
+		graph.ActionWrites[1][0], // app
+	} {
+		if _, ok := visible[def]; !ok {
+			t.Fatalf("fallback closure missing %v", def)
+		}
+	}
+	if _, ok := visible[graph.ActionWrites[0][0]]; ok { // config.cache
+		t.Fatalf("fallback closure unexpectedly retained %v", graph.ActionWrites[0][0])
+	}
+}
+
+func TestInferMainlineVisibleDefsUsesHardSinksWithInstall(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot:  "/tmp/work",
+		BuildRoot:   "/tmp/work/_build",
+		InstallRoot: "/tmp/work/install",
+	}
+	records := []trace.Record{
+		recordWithProc(100, 1, []string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
+			[]string{"/tmp/work/CMakeLists.txt"},
+			[]string{
+				"/tmp/work/_build/config.cache",
+				"/tmp/work/_build/config.h",
+			}),
+		recordWithProc(200, 100, []string{"cc", "/tmp/work/main.c", "/tmp/work/_build/config.h", "-o", "/tmp/work/_build/app"}, "/tmp/work/_build",
+			[]string{
+				"/tmp/work/main.c",
+				"/tmp/work/_build/config.h",
+			},
+			[]string{"/tmp/work/_build/app"}),
+		recordWithProc(300, 1, []string{"cmake", "--install", "/tmp/work/_build"}, "/tmp/work",
+			[]string{"/tmp/work/_build/app"},
+			[]string{"/tmp/work/install/bin/app"}),
+	}
+
+	graph := BuildGraph(BuildInput{Records: records, Scope: scope})
+	tooling := classifyToolingFamily(graph)
+	deliveryOnly := make([]bool, len(graph.Actions))
+	for idx := range graph.Actions {
+		deliveryOnly[idx] = isDeliveryOnlyAction(graph, idx)
+	}
+	toolingWorkspaceRoots := inferToolingWorkspaceRoots(graph, tooling, deliveryOnly)
+	nonEscaping := classifyNonEscapingToolingDefs(graph, tooling, deliveryOnly, toolingWorkspaceRoots)
+	visible := inferMainlineVisibleDefs(graph, tooling, toolingWorkspaceRoots, nonEscaping)
+
+	for _, def := range []PathState{
+		graph.ActionWrites[0][1], // config.h
+		graph.ActionWrites[1][0], // app
+		graph.ActionWrites[2][0], // install/bin/app
+	} {
+		if _, ok := visible[def]; !ok {
+			t.Fatalf("hard-sink closure missing %v", def)
+		}
+	}
+	if _, ok := visible[graph.ActionWrites[0][0]]; ok { // config.cache
+		t.Fatalf("hard-sink closure unexpectedly retained %v", graph.ActionWrites[0][0])
+	}
+}
+
+func TestProjectRolesDoNotPromoteUnusedHeaderWhenHardSinkClosureExists(t *testing.T) {
+	scope := trace.Scope{
+		SourceRoot:  "/tmp/work",
+		BuildRoot:   "/tmp/work/_build",
+		InstallRoot: "/tmp/work/install",
+	}
+	records := []trace.Record{
+		recordWithProc(100, 1, []string{"cmake", "-S", "/tmp/work", "-B", "/tmp/work/_build"}, "/tmp/work",
+			[]string{"/tmp/work/CMakeLists.txt"},
+			[]string{
+				"/tmp/work/_build/config.cache",
+				"/tmp/work/_build/config.h",
+				"/tmp/work/_build/unused.h",
+			}),
+		recordWithProc(200, 100, []string{"cc", "/tmp/work/main.c", "/tmp/work/_build/config.h", "-o", "/tmp/work/_build/app"}, "/tmp/work/_build",
+			[]string{
+				"/tmp/work/main.c",
+				"/tmp/work/_build/config.h",
+			},
+			[]string{"/tmp/work/_build/app"}),
+		recordWithProc(300, 1, []string{"cmake", "--install", "/tmp/work/_build"}, "/tmp/work",
+			[]string{"/tmp/work/_build/app"},
+			[]string{"/tmp/work/install/bin/app"}),
+	}
+
+	graph := BuildGraph(BuildInput{Records: records, Scope: scope})
+	roles := ProjectRoles(graph)
+
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/config.h"); got != RolePropagating {
+		t.Fatalf("role(config.h) = %v, want %v", got, RolePropagating)
+	}
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/unused.h"); got != RoleTooling {
+		t.Fatalf("role(unused.h) = %v, want %v", got, RoleTooling)
+	}
+	if got := projectedPathRole(graph, roles, "/tmp/work/_build/config.cache"); got != RoleTooling {
+		t.Fatalf("role(config.cache) = %v, want %v", got, RoleTooling)
 	}
 }
 

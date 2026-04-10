@@ -140,13 +140,12 @@ func AnalyzeWithEvidence(input AnalysisInput, evidence *ImpactEvidence) Analysis
 		Scope:        input.Probe.Scope,
 		InputDigests: input.Probe.InputDigests,
 	})
-	baseRoles := exportRoleProjection(projectRoles(base))
-	probeRoles := exportRoleProjection(projectRoles(probe))
-	diff := WavefrontDiffWithEvidence(base, probe, baseRoles, probeRoles, evidence)
-	profile, flow := ExtractWavefrontImpact(base, baseRoles, probe, probeRoles, diff, evidence)
-	internalBaseRoles := importRoleProjection(baseRoles)
-	internalProbeRoles := importRoleProjection(probeRoles)
-	internalDiff := importWavefrontStageResult(diff)
+	pipeline := runTraceSSAImpactPipeline(base, probe, importImpactEvidence(evidence))
+	baseRoles := exportRoleProjection(pipeline.baseRoles)
+	probeRoles := exportRoleProjection(pipeline.probeRoles)
+	diff := exportWavefrontStageResult(pipeline.diff)
+	profile := exportImpactProfile(pipeline.profile)
+	flow := exportPathSSAFlow(pipeline.flow)
 	return AnalysisResult{
 		Profile: profile,
 		Debug: AnalysisDebug{
@@ -156,12 +155,12 @@ func AnalyzeWithEvidence(input AnalysisInput, evidence *ImpactEvidence) Analysis
 			ProbeRoles:     probeRoles,
 			Wavefront:      diff,
 			Flow:           flow,
-			AffectedPairs:  exportActionPairs(collectAffectedPairs(base, internalBaseRoles, probe, internalProbeRoles, internalDiff)),
-			UnchangedProbe: wavefrontProbeIndexes(internalDiff, wavefrontProbeUnchanged),
-			RootProbe:      wavefrontVisibleMutationRoots(internalDiff, internalProbeRoles),
-			FlowProbe:      wavefrontProbeIndexes(internalDiff, wavefrontProbeFlow),
-			DivergedProbe:  wavefrontDivergedProbe(internalDiff),
-			FrontierProbe:  append([]int(nil), flow.FrontierActions...),
+			AffectedPairs:  exportActionPairs(collectAffectedPairs(base, pipeline.baseRoles, probe, pipeline.probeRoles, pipeline.diff)),
+			UnchangedProbe: wavefrontProbeIndexes(pipeline.diff, wavefrontProbeUnchanged),
+			RootProbe:      wavefrontVisibleMutationRoots(pipeline.diff, pipeline.probeRoles),
+			FlowProbe:      wavefrontProbeIndexes(pipeline.diff, wavefrontProbeFlow),
+			DivergedProbe:  wavefrontDivergedProbe(pipeline.diff),
+			FrontierProbe:  append([]int(nil), pipeline.flow.frontierActions...),
 		},
 	}
 }

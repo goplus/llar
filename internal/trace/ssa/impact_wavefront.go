@@ -27,8 +27,8 @@ type wavefrontStageResult struct {
 	readAmbiguous  bool
 }
 
-// traceSSAImpactPipeline keeps the five stages strictly one-way:
-// normalized observation -> Path SSA -> role projection -> wavefront diff -> impact profile.
+// traceSSAImpactPipeline keeps the post-build impact stages strictly one-way:
+// graph -> role projection -> wavefront diff -> impact profile.
 type traceSSAImpactPipeline struct {
 	base       Graph
 	probe      Graph

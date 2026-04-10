@@ -10,9 +10,12 @@ import (
 )
 
 var (
-	reBuildTryCompileNoise = regexp.MustCompile(`(^|/)TryCompile-[^/]+(/|$)`)
-	reBuildCmTCNoise       = regexp.MustCompile(`(^|/)cmTC_[^/]+(/|$)`)
-	reBuildTmpPIDNoise     = regexp.MustCompile(`\.tmp\.[0-9]+($|/)`)
+	reBuildTmpPIDNoise = regexp.MustCompile(`\.tmp\.[0-9]+$`)
+)
+
+const (
+	buildTransientDirToken = "$TMPDIR"
+	buildGeneratedIDToken  = "$ID"
 )
 
 type BuildInput struct {
@@ -405,24 +408,140 @@ func normalizeScopeToken(token string, scope trace.Scope) string {
 }
 
 func replaceScopeRootToken(token, root, placeholder string) string {
-	token = strings.ReplaceAll(token, root, placeholder)
 	if !strings.Contains(root, "$$TMP") {
-		return token
+		idx := strings.Index(token, root)
+		if !validScopedRootMatch(token, idx, len(root)) {
+			return token
+		}
+		return token[:idx] + placeholder + token[idx+len(root):]
 	}
 	pattern := regexp.QuoteMeta(root)
 	pattern = strings.ReplaceAll(pattern, `\$\$TMP`, `[^/]+`)
 	re := regexp.MustCompile(pattern)
-	return re.ReplaceAllString(token, strings.ReplaceAll(placeholder, "$", "$$"))
+	loc := re.FindStringIndex(token)
+	if loc == nil || !validScopedRootMatch(token, loc[0], loc[1]-loc[0]) {
+		return token
+	}
+	return token[:loc[0]] + placeholder + token[loc[1]:]
 }
 
 func normalizeScopedBuildNoise(token string) string {
 	if !strings.Contains(token, "$BUILD") {
 		return token
 	}
-	token = reBuildTryCompileNoise.ReplaceAllString(token, `${1}TryCompile-$$$$ID$2`)
-	token = reBuildCmTCNoise.ReplaceAllString(token, `${1}cmTC_$$$$ID$2`)
-	token = reBuildTmpPIDNoise.ReplaceAllString(token, `.tmp.$$$$ID$1`)
-	return token
+	parts := strings.Split(token, "/")
+	transientDepth := -1
+	for idx, part := range parts {
+		if part == "" || part == "$BUILD" {
+			continue
+		}
+		part = normalizeBuildTempPIDPart(part)
+		if looksTransientBuildDir(part) {
+			parts[idx] = buildTransientDirToken
+			transientDepth = 0
+			continue
+		}
+		if transientDepth >= 0 {
+			parts[idx] = normalizeTransientBuildPart(part, transientDepth == 0)
+			transientDepth++
+			continue
+		}
+		parts[idx] = part
+	}
+	return strings.Join(parts, "/")
+}
+
+func validScopedRootMatch(token string, start, length int) bool {
+	if start < 0 {
+		return false
+	}
+	if start != 0 {
+		firstSlash := strings.IndexByte(token, '/')
+		if firstSlash != start {
+			return false
+		}
+	}
+	end := start + length
+	return end == len(token) || token[end] == '/'
+}
+
+func normalizeBuildTempPIDPart(part string) string {
+	if !reBuildTmpPIDNoise.MatchString(part) {
+		return part
+	}
+	loc := strings.LastIndex(part, ".tmp.")
+	if loc < 0 {
+		return part
+	}
+	return part[:loc] + ".tmp." + buildGeneratedIDToken
+}
+
+func looksTransientBuildDir(part string) bool {
+	if part == "" || strings.Contains(part, ".") {
+		return false
+	}
+	part = strings.ToLower(part)
+	switch {
+	case part == "tmp", part == "temp":
+		return true
+	case strings.Contains(part, "scratch"):
+		return true
+	case strings.HasSuffix(part, "tmp"), strings.HasSuffix(part, "temp"):
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeTransientBuildPart(part string, firstChild bool) string {
+	if part == "" || strings.HasPrefix(part, "$") {
+		return part
+	}
+	base := part
+	ext := ""
+	if suffix := filepath.Ext(part); suffix == ".dir" {
+		base = strings.TrimSuffix(part, suffix)
+		ext = suffix
+	}
+	prefix, sep, suffix, ok := splitGeneratedSuffix(base)
+	if ok && (firstChild || looksGeneratedBuildID(suffix)) {
+		return prefix + sep + buildGeneratedIDToken + ext
+	}
+	if !firstChild && looksGeneratedBuildID(base) {
+		return buildGeneratedIDToken + ext
+	}
+	return part
+}
+
+func splitGeneratedSuffix(part string) (prefix, sep, suffix string, ok bool) {
+	idx := strings.LastIndexAny(part, "-_")
+	if idx <= 0 || idx >= len(part)-1 {
+		return "", "", "", false
+	}
+	return part[:idx], part[idx : idx+1], part[idx+1:], true
+}
+
+func looksGeneratedBuildID(part string) bool {
+	if len(part) < 6 {
+		return false
+	}
+	hasLetter := false
+	hasDigit := false
+	hexOnly := true
+	for _, r := range part {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+			hasLetter = true
+			if !(r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+				hexOnly = false
+			}
+		default:
+			return false
+		}
+	}
+	return (hasDigit && hasLetter) || (hexOnly && len(part) >= 8)
 }
 
 const envNamespacePrefix = "$ENV/"
