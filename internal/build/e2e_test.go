@@ -223,6 +223,66 @@ func TestE2E_RebuildAfterCacheClear(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// E2E tests: onTest DSL path (full classfile interpretation → OnTest)
+// ---------------------------------------------------------------------------
+
+// TestE2E_OnTest_SucceedsAndRuns verifies the full DSL path for onTest:
+// the formula's `onTest` block is parsed via the xgo classfile mechanism,
+// Formula.OnTest is populated by the loader, and Builder.Build invokes it
+// when RunTest is true. The formula's onTest body writes a marker file into
+// ctx.outputDir() whose content is ctx.currentMatrix() — so a passing test
+// proves both that onTest actually ran and that the build Context is wired
+// correctly into the interpreted callback.
+func TestE2E_OnTest_SucceedsAndRuns(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	main := module.Version{Path: "test/testhook", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Metadata != "-lHOOK" {
+		t.Errorf("metadata = %q, want %q", results[0].Metadata, "-lHOOK")
+	}
+
+	stamp := filepath.Join(results[0].OutputDir, "ontest.stamp")
+	data, err := os.ReadFile(stamp)
+	if err != nil {
+		t.Fatalf("onTest stamp missing; OnTest did not run: %v", err)
+	}
+	if string(data) != "amd64-linux" {
+		t.Errorf("stamp content = %q, want %q (ctx.currentMatrix not wired)", data, "amd64-linux")
+	}
+}
+
+// TestE2E_OnTest_FailureSurfaces verifies that errors added to out inside
+// a formula's onTest block flow through Build() and arrive with the
+// expected "onTest failed for <path>@<version>" wrapping.
+func TestE2E_OnTest_FailureSurfaces(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	main := module.Version{Path: "test/testfail", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	_, err = b.Build(ctx, mods)
+	if err == nil {
+		t.Fatal("Build() error = nil, want onTest failure")
+	}
+	if !strings.Contains(err.Error(), "onTest failed for test/testfail@1.0.0") {
+		t.Errorf("error = %v, want it to mention the failing module", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Real build tests: actual source download + compilation
 // ---------------------------------------------------------------------------
 

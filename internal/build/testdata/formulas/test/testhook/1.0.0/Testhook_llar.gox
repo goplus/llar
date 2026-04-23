@@ -1,0 +1,21 @@
+import "os"
+
+id "test/testhook"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "-lHOOK"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = os.writeFile(installDir+"/ontest.stamp", []byte(ctx.currentMatrix()), 0o644)
+	if err != nil {
+		out.addErr err
+	}
+}
