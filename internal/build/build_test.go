@@ -679,6 +679,92 @@ func TestBuild_RunTest_BypassesCache(t *testing.T) {
 	}
 }
 
+// TestBuild_RunTest_DepOnTestNotInvoked verifies that when runTest is
+// enabled, OnTest is invoked only on the root target. A dependency that
+// happens to define OnTest must NOT see it triggered by a test run whose
+// target is a downstream consumer. This matches the product design
+// (issues/106 §9): "onTest runs only after the main module build".
+func TestBuild_RunTest_DepOnTestNotInvoked(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// test/depresult depends on test/liba.
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	var rootCalled, depCalled bool
+	for _, m := range mods {
+		m := m
+		switch m.Path {
+		case "test/depresult":
+			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, _ *classfile.BuildResult) {
+				rootCalled = true
+			}
+		case "test/liba":
+			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, out *classfile.BuildResult) {
+				depCalled = true
+				out.AddErr(errors.New("dep OnTest should not have been invoked"))
+			}
+		}
+	}
+
+	if _, err := b.Build(ctx, mods); err != nil {
+		t.Fatalf("Build() error = %v, want nil (dep OnTest must not run)", err)
+	}
+	if !rootCalled {
+		t.Error("root OnTest was not invoked")
+	}
+	if depCalled {
+		t.Error("dep OnTest was invoked; runTest must only test the root target")
+	}
+}
+
+// TestBuild_RunTest_DepCacheStillUsed verifies that when runTest is enabled,
+// only the root target bypasses the build cache. Dependencies whose entries
+// exist in the cache must still short-circuit through cache lookup so test
+// runs do not pay the cost of rebuilding the full dependency tree.
+func TestBuild_RunTest_DepCacheStillUsed(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// Pre-populate liba's cache with a sentinel metadata; if liba is rebuilt
+	// it would produce "-lA" instead, so the sentinel is a unique cache signal.
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-lA-CACHED",
+		BuildTime: time.Now(),
+	})
+	if err := b.saveCache("test/liba", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	libaResult, ok := findResult(results, b, mods, "test/liba")
+	if !ok {
+		t.Fatal("missing result for test/liba")
+	}
+	if libaResult.Metadata != "-lA-CACHED" {
+		t.Errorf("liba metadata = %q, want %q (dep cache should be consulted under runTest)", libaResult.Metadata, "-lA-CACHED")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Environment and workspace tests (not covered by e2e)
 // ---------------------------------------------------------------------------

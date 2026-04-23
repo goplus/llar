@@ -31,8 +31,12 @@ type Result struct {
 }
 
 type Options struct {
-	Store        repo.Store
-	MatrixStr    string
+	Store     repo.Store
+	MatrixStr string
+	// RunTest, when true, causes Build to invoke OnTest on the root target
+	// after its OnBuild succeeds. Cache read and cache write are bypassed
+	// for the root only so the test always runs against fresh artifacts;
+	// transitive dependencies still honor the build cache normally.
 	RunTest      bool
 	WorkspaceDir string
 }
@@ -183,17 +187,29 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
+	// Identify the root target. By MVS convention (see constructBuildList),
+	// targets[0] is the main module requested by the caller; runTest
+	// semantics (fresh build + OnTest invocation) only apply to it.
+	var root *modules.Module
+	if len(targets) > 0 {
+		root = targets[0]
+	}
+
 	build := func(mod *modules.Module) (Result, error) {
+		isRoot := mod == root
+
 		unlock, err := b.store.LockModule(mod.Path)
 		if err != nil {
 			return Result{}, err
 		}
 		defer unlock()
 
-		// When runTest is requested, bypass the build cache so onTest
-		// cannot be skipped by a cached build hit.
+		// When runTest is requested, bypass the build cache for the root
+		// only so OnTest runs against a fresh build; dependencies still
+		// use the cache for speed.
+		bypassCache := b.runTest && isRoot
 		var cache *buildCache
-		if !b.runTest {
+		if !bypassCache {
 			cache, err = b.loadCache(mod.Path)
 			if err == nil {
 				if entry, ok := cache.get(mod.Version, b.matrix); ok {
@@ -255,7 +271,9 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		// Run onTest inline right after onBuild succeeds, reusing the
 		// same build context so tests see the just-built artifacts.
-		if b.runTest && mod.OnTest != nil {
+		// Only the root target is tested; transitive dependencies are
+		// verified by their own `llar test <dep>` invocations.
+		if b.runTest && isRoot && mod.OnTest != nil {
 			var testOut classfile.BuildResult
 			mod.OnTest(buildContext, project, &testOut)
 			if len(testOut.Errs()) > 0 {
@@ -263,9 +281,10 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			}
 		}
 
-		// Save to cache (skipped when runTest to keep the cache stable
-		// for normal, non-test builds).
-		if !b.runTest {
+		// Save to cache. Skipped for the root when runTest is on because
+		// OnTest may have written side-effects into installDir that
+		// normal `llar make` invocations should not inherit.
+		if !bypassCache {
 			if cache == nil {
 				cache = &buildCache{}
 			}
