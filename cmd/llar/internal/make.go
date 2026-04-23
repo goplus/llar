@@ -68,13 +68,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		makeOutput = abs
 	}
 
-	matrix := formula.Matrix{
-		Require: map[string][]string{
-			"os":   {runtime.GOOS},
-			"arch": {runtime.GOARCH},
-		},
-	}
-	matrixStr := matrix.Combinations()[0]
+	matrixStr := hostMatrixCombo()
 
 	// Set up remote formula store (always needed for deps)
 	remoteStore, err := newRemoteStore()
@@ -83,7 +77,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 	}
 
 	if !isLocal {
-		return buildModule(ctx, remoteStore, pattern, version, matrixStr)
+		return buildModule(ctx, remoteStore, pattern, version, matrixStr, false)
 	}
 
 	// Resolve local pattern
@@ -109,15 +103,30 @@ func runMake(cmd *cobra.Command, args []string) error {
 		if ver == "" {
 			ver = version // global @version from arg
 		}
-		if err := buildModule(ctx, store, m.Path, ver, matrixStr); err != nil {
+		if err := buildModule(ctx, store, m.Path, ver, matrixStr, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// buildModule loads and builds a single module.
-func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string) error {
+// hostMatrixCombo returns the matrix combination for the current host
+// (os+arch). It is used by both `llar make` and `llar test` to select
+// the default build variant when the user does not specify one.
+func hostMatrixCombo() string {
+	matrix := formula.Matrix{
+		Require: map[string][]string{
+			"os":   {runtime.GOOS},
+			"arch": {runtime.GOARCH},
+		},
+	}
+	return matrix.Combinations()[0]
+}
+
+// buildModule loads and builds a single module. When runTest is true, the
+// builder also runs each module's onTest hook after onBuild succeeds and
+// bypasses the build cache.
+func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string, runTest bool) error {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
 	})
@@ -151,6 +160,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 	buildOpts := build.Options{
 		Store:     store,
 		MatrixStr: matrixStr,
+		RunTest:   runTest,
 	}
 	if makeOutput != "" {
 		tmpDir, err := os.MkdirTemp("", "llar-make-*")

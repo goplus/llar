@@ -20,8 +20,9 @@ import (
 type Builder struct {
 	store        repo.Store
 	matrix       string
+	runTest      bool
 	workspaceDir string
-	newRepo func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
+	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
 type Result struct {
@@ -32,6 +33,7 @@ type Result struct {
 type Options struct {
 	Store        repo.Store
 	MatrixStr    string
+	RunTest      bool
 	WorkspaceDir string
 }
 
@@ -61,6 +63,7 @@ func NewBuilder(opts Options) (*Builder, error) {
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
+		runTest:      opts.RunTest,
 		workspaceDir: workspaceDir,
 		newRepo:      vcs.NewRepo,
 	}, nil
@@ -187,12 +190,16 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer unlock()
 
-		// Check cache
-		cache, err := b.loadCache(mod.Path)
-		if err == nil {
-			if entry, ok := cache.get(mod.Version, b.matrix); ok {
-				dir, _ := b.installDir(mod.Path, mod.Version)
-				return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
+		// When runTest is requested, bypass the build cache so onTest
+		// cannot be skipped by a cached build hit.
+		var cache *buildCache
+		if !b.runTest {
+			cache, err = b.loadCache(mod.Path)
+			if err == nil {
+				if entry, ok := cache.get(mod.Version, b.matrix); ok {
+					dir, _ := b.installDir(mod.Path, mod.Version)
+					return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
+				}
 			}
 		}
 
@@ -246,16 +253,29 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, errors.Join(out.Errs()...)
 		}
 
-		// Save to cache
-		if cache == nil {
-			cache = &buildCache{}
+		// Run onTest inline right after onBuild succeeds, reusing the
+		// same build context so tests see the just-built artifacts.
+		if b.runTest && mod.OnTest != nil {
+			var testOut classfile.BuildResult
+			mod.OnTest(buildContext, project, &testOut)
+			if len(testOut.Errs()) > 0 {
+				return Result{}, fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))
+			}
 		}
-		cache.set(mod.Version, b.matrix, &buildEntry{
-			Metadata:  out.Metadata(),
-			BuildTime: time.Now(),
-		})
-		if err := b.saveCache(mod.Path, cache); err != nil {
-			return Result{}, err
+
+		// Save to cache (skipped when runTest to keep the cache stable
+		// for normal, non-test builds).
+		if !b.runTest {
+			if cache == nil {
+				cache = &buildCache{}
+			}
+			cache.set(mod.Version, b.matrix, &buildEntry{
+				Metadata:  out.Metadata(),
+				BuildTime: time.Now(),
+			})
+			if err := b.saveCache(mod.Path, cache); err != nil {
+				return Result{}, err
+			}
 		}
 
 		return Result{Metadata: out.Metadata(), OutputDir: installDir}, nil

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -543,6 +544,138 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	}
 	if _, ok := cache.get("2.0.0", "amd64-linux"); !ok {
 		t.Error("cache miss for 2.0.0")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OnTest (RunTest) behaviour tests
+// ---------------------------------------------------------------------------
+
+// TestBuild_RunTest_DisabledSkipsOnTest verifies that OnTest callbacks are not
+// invoked when Builder.runTest is false, even if the formula defines one.
+func TestBuild_RunTest_DisabledSkipsOnTest(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	// runTest is false by default.
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	// Inject an OnTest callback that would fail the build if invoked.
+	var called bool
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
+			called = true
+			out.AddErr(errors.New("onTest should not have been invoked"))
+		}
+	}
+
+	if _, err := b.Build(ctx, mods); err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+	if called {
+		t.Error("OnTest was invoked despite runTest=false")
+	}
+}
+
+// TestBuild_RunTest_EnabledSurfacesOnTestError verifies that when runTest is
+// enabled, OnTest runs after OnBuild and its errors are wrapped with context
+// identifying the failing module.
+func TestBuild_RunTest_EnabledSurfacesOnTestError(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	wantErr := errors.New("boom from onTest")
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
+			out.AddErr(wantErr)
+		}
+	}
+
+	_, err = b.Build(ctx, mods)
+	if err == nil {
+		t.Fatal("Build() error = nil, want onTest failure")
+	}
+	if !strings.Contains(err.Error(), "onTest failed for test/liba@1.0.0") {
+		t.Errorf("error = %v, want it to describe the failing module", err)
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("error chain does not wrap injected cause: %v", err)
+	}
+}
+
+// TestBuild_RunTest_BypassesCache verifies that runTest=true bypasses both the
+// cache read (so OnTest always runs) and the cache write (so the cache is not
+// disturbed by a test run).
+func TestBuild_RunTest_BypassesCache(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// Pre-populate cache with a stale metadata value. If cache were consulted,
+	// Build() would short-circuit and return this value without rebuilding.
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-lSTALE",
+		BuildTime: time.Now(),
+	})
+	if err := b.saveCache("test/liba", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	var called bool
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
+			called = true
+		}
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// OnTest must have run; i.e. the cache read was bypassed.
+	if !called {
+		t.Error("OnTest was not invoked despite runTest=true")
+	}
+	// Result metadata should reflect the freshly-computed formula output,
+	// not the stale cached metadata.
+	if len(results) == 0 || results[len(results)-1].Metadata != "-lA" {
+		t.Errorf("metadata = %+v, want last entry %q (cache should be bypassed)", results, "-lA")
+	}
+
+	// Cache must remain untouched (write was skipped); pre-populated entry
+	// should still be present and unchanged.
+	cacheAfter, err := b.loadCache("test/liba")
+	if err != nil {
+		t.Fatalf("loadCache() failed: %v", err)
+	}
+	entry, ok := cacheAfter.get("1.0.0", "amd64-linux")
+	if !ok {
+		t.Fatal("cache entry removed; expected pre-populated entry to remain")
+	}
+	if entry.Metadata != "-lSTALE" {
+		t.Errorf("cache metadata = %q after runTest build, want %q (cache write should be skipped)", entry.Metadata, "-lSTALE")
 	}
 }
 
