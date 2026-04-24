@@ -16,11 +16,12 @@ var testCmd = &cobra.Command{
 	Use:   "test [module@version]",
 	Short: "Build a module and run its onTest hook",
 	Long: `Test builds a module the same way as 'llar make', then executes
-the module's onTest callback on the freshly-built artifacts.
+the module's onTest callback on the resulting artifacts.
 
-The build cache is bypassed for test runs so onTest always executes against
-a fresh build. Test runs do not update the cache either, so normal builds
-remain cacheable.`,
+The build cache is consulted as usual: if the module has already been built
+with the same matrix, onBuild is skipped and onTest runs against the cached
+artifacts. On a cache miss, onBuild runs and its result is cached for later
+invocations before onTest executes.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runTest,
 }

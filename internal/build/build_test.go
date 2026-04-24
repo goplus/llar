@@ -616,19 +616,21 @@ func TestBuild_RunTest_EnabledSurfacesOnTestError(t *testing.T) {
 	}
 }
 
-// TestBuild_RunTest_BypassesCache verifies that runTest=true bypasses both the
-// cache read (so OnTest always runs) and the cache write (so the cache is not
-// disturbed by a test run).
-func TestBuild_RunTest_BypassesCache(t *testing.T) {
+// TestBuild_RunTest_ReusesCacheWhenHit verifies that runTest=true reuses the
+// build cache: on a cache hit, OnBuild is skipped (cached metadata is returned
+// as-is) and OnTest still runs against the cached artifacts. The cache entry
+// must not be rewritten since nothing was rebuilt.
+func TestBuild_RunTest_ReusesCacheWhenHit(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
 	b.runTest = true
 
-	// Pre-populate cache with a stale metadata value. If cache were consulted,
-	// Build() would short-circuit and return this value without rebuilding.
+	// Pre-populate cache with a sentinel metadata value. If the cache is
+	// consulted and reused (as the new behavior requires), Build() will
+	// return this value without re-running OnBuild.
 	cache := &buildCache{}
 	cache.set("1.0.0", "amd64-linux", &buildEntry{
-		Metadata:  "-lSTALE",
+		Metadata:  "-lCACHED",
 		BuildTime: time.Now(),
 	})
 	if err := b.saveCache("test/liba", cache); err != nil {
@@ -642,10 +644,10 @@ func TestBuild_RunTest_BypassesCache(t *testing.T) {
 		t.Fatalf("modules.Load() failed: %v", err)
 	}
 
-	var called bool
+	var testCalled bool
 	for _, m := range mods {
 		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
-			called = true
+			testCalled = true
 		}
 	}
 
@@ -654,18 +656,17 @@ func TestBuild_RunTest_BypassesCache(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	// OnTest must have run; i.e. the cache read was bypassed.
-	if !called {
-		t.Error("OnTest was not invoked despite runTest=true")
+	// OnTest must have run even though OnBuild was skipped via cache hit.
+	if !testCalled {
+		t.Error("OnTest was not invoked despite runTest=true on cache hit")
 	}
-	// Result metadata should reflect the freshly-computed formula output,
-	// not the stale cached metadata.
-	if len(results) == 0 || results[len(results)-1].Metadata != "-lA" {
-		t.Errorf("metadata = %+v, want last entry %q (cache should be bypassed)", results, "-lA")
+	// Result metadata should be the cached sentinel value, not the fresh
+	// "-lA" that OnBuild would have produced.
+	if len(results) == 0 || results[len(results)-1].Metadata != "-lCACHED" {
+		t.Errorf("metadata = %+v, want last entry %q (cache should be reused)", results, "-lCACHED")
 	}
 
-	// Cache must remain untouched (write was skipped); pre-populated entry
-	// should still be present and unchanged.
+	// Cache entry must remain the same sentinel (nothing new to save).
 	cacheAfter, err := b.loadCache("test/liba")
 	if err != nil {
 		t.Fatalf("loadCache() failed: %v", err)
@@ -674,8 +675,60 @@ func TestBuild_RunTest_BypassesCache(t *testing.T) {
 	if !ok {
 		t.Fatal("cache entry removed; expected pre-populated entry to remain")
 	}
-	if entry.Metadata != "-lSTALE" {
-		t.Errorf("cache metadata = %q after runTest build, want %q (cache write should be skipped)", entry.Metadata, "-lSTALE")
+	if entry.Metadata != "-lCACHED" {
+		t.Errorf("cache metadata = %q after cache-hit test run, want %q (no rewrite expected)", entry.Metadata, "-lCACHED")
+	}
+}
+
+// TestBuild_RunTest_SavesCacheOnMiss verifies that runTest=true writes the
+// build cache on a cache miss: OnBuild runs, fresh metadata is produced,
+// and the result is persisted for later invocations to reuse.
+func TestBuild_RunTest_SavesCacheOnMiss(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// No pre-populated cache: this is a cache miss.
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	var testCalled bool
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
+			testCalled = true
+		}
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if !testCalled {
+		t.Error("OnTest was not invoked despite runTest=true")
+	}
+	// OnBuild ran; result metadata should reflect the formula output.
+	if len(results) == 0 || results[len(results)-1].Metadata != "-lA" {
+		t.Errorf("metadata = %+v, want last entry %q (OnBuild should run on cache miss)", results, "-lA")
+	}
+
+	// Cache must have been written with the freshly-built metadata so the
+	// next invocation can reuse it.
+	cacheAfter, err := b.loadCache("test/liba")
+	if err != nil {
+		t.Fatalf("loadCache() failed: %v", err)
+	}
+	entry, ok := cacheAfter.get("1.0.0", "amd64-linux")
+	if !ok {
+		t.Fatal("cache entry missing; expected cache write after cache-miss test run")
+	}
+	if entry.Metadata != "-lA" {
+		t.Errorf("cache metadata = %q, want %q (cache should be written)", entry.Metadata, "-lA")
 	}
 }
 

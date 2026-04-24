@@ -34,9 +34,12 @@ type Options struct {
 	Store     repo.Store
 	MatrixStr string
 	// RunTest, when true, causes Build to invoke OnTest on the root target
-	// after its OnBuild succeeds. Cache read and cache write are bypassed
-	// for the root only so the test always runs against fresh artifacts;
-	// transitive dependencies still honor the build cache normally.
+	// after OnBuild (or after reusing cached build metadata). The build
+	// cache is consulted as usual: on a cache hit the root's OnBuild is
+	// skipped and OnTest runs against the cached artifacts; on a cache
+	// miss OnBuild runs and the fresh metadata is cached before OnTest.
+	// Transitive dependencies honor the cache normally and do not have
+	// their OnTest hooks triggered.
 	RunTest      bool
 	WorkspaceDir string
 }
@@ -204,6 +207,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 	build := func(mod *modules.Module) (Result, error) {
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
+		testThisMod := b.runTest && isRoot && mod.OnTest != nil
 
 		unlock, err := b.store.LockModule(mod.Path)
 		if err != nil {
@@ -211,22 +215,32 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer unlock()
 
-		// When runTest is requested, bypass the build cache for the root
-		// only so OnTest runs against a fresh build; dependencies still
-		// use the cache for speed.
-		bypassCache := b.runTest && isRoot
-		var cache *buildCache
-		if !bypassCache {
-			cache, err = b.loadCache(mod.Path)
-			if err == nil {
-				if entry, ok := cache.get(mod.Version, b.matrix); ok {
-					dir, _ := b.installDir(mod.Path, mod.Version)
-					return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
-				}
+		// Consult the build cache. A hit means we already have the
+		// module's build metadata and its installDir is populated from a
+		// previous successful build.
+		cache, err := b.loadCache(mod.Path)
+		if err != nil {
+			cache = nil
+		}
+		var cachedEntry *buildEntry
+		if cache != nil {
+			if entry, ok := cache.get(mod.Version, b.matrix); ok {
+				cachedEntry = entry
 			}
 		}
 
-		// TODO(MeteorsLiu): Source cache dir
+		// Fast path: cache hit and no OnTest to run. Skip source clone
+		// and OnBuild entirely.
+		if cachedEntry != nil && !testThisMod {
+			dir, _ := b.installDir(mod.Path, mod.Version)
+			return Result{Metadata: cachedEntry.Metadata, OutputDir: dir}, nil
+		}
+
+		// At this point we need to run OnBuild, OnTest, or both. All of
+		// them expect a source checkout and a prepared build context, so
+		// set those up uniformly regardless of cache state.
+
+		// TODO(MeteorsLiu): Source cache dir (belongs in the vcs layer)
 		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
 		if err != nil {
 			return Result{}, err
@@ -269,18 +283,23 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, err
 		}
 
-		var out classfile.BuildResult
-		mod.OnBuild(buildContext, project, &out)
-
-		if len(out.Errs()) > 0 {
-			return Result{}, errors.Join(out.Errs()...)
+		// Run OnBuild only on cache miss; reuse cached metadata otherwise.
+		var metadata string
+		if cachedEntry != nil {
+			metadata = cachedEntry.Metadata
+		} else {
+			var out classfile.BuildResult
+			mod.OnBuild(buildContext, project, &out)
+			if len(out.Errs()) > 0 {
+				return Result{}, errors.Join(out.Errs()...)
+			}
+			metadata = out.Metadata()
 		}
 
-		// Run onTest inline right after onBuild succeeds, reusing the
-		// same build context so tests see the just-built artifacts.
-		// Only the root target is tested; transitive dependencies are
-		// verified by their own `llar test <dep>` invocations.
-		if b.runTest && isRoot && mod.OnTest != nil {
+		// Run OnTest (root only) against the just-built or cached
+		// artifacts, reusing the same build context so tests see a
+		// consistent environment either way.
+		if testThisMod {
 			var testOut classfile.TestResult
 			mod.OnTest(buildContext, project, &testOut)
 			if len(testOut.Errs()) > 0 {
@@ -288,15 +307,14 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			}
 		}
 
-		// Save to cache. Skipped for the root when runTest is on because
-		// OnTest may have written side-effects into installDir that
-		// normal `llar make` invocations should not inherit.
-		if !bypassCache {
+		// Save cache only on cache miss. A cache hit means the entry is
+		// already present and current; OnTest does not modify metadata.
+		if cachedEntry == nil {
 			if cache == nil {
 				cache = &buildCache{}
 			}
 			cache.set(mod.Version, b.matrix, &buildEntry{
-				Metadata:  out.Metadata(),
+				Metadata:  metadata,
 				BuildTime: time.Now(),
 			})
 			if err := b.saveCache(mod.Path, cache); err != nil {
@@ -304,7 +322,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			}
 		}
 
-		return Result{Metadata: out.Metadata(), OutputDir: installDir}, nil
+		return Result{Metadata: metadata, OutputDir: installDir}, nil
 	}
 
 	var results []Result

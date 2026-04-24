@@ -124,11 +124,11 @@ func hostMatrixCombo() string {
 }
 
 // buildModule loads and builds a single module. When runTest is true, the
-// builder additionally runs the root target's onTest hook after its onBuild
-// succeeds, and bypasses the build cache for the root only so onTest runs
-// against fresh artifacts. Transitive dependencies still honor the cache
-// and do not have their onTest hooks triggered — each dependency is
-// verified by its own `llar test <dep>` invocation.
+// builder additionally runs the root target's onTest hook against the
+// module's artifacts (freshly built or reused from cache). Transitive
+// dependencies still honor the build cache and do not have their onTest
+// hooks triggered — each dependency is verified by its own
+// `llar test <dep>` invocation.
 func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string, runTest bool) error {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
