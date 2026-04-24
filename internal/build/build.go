@@ -187,16 +187,23 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
-	// Identify the root target. By MVS convention (see constructBuildList),
-	// targets[0] is the main module requested by the caller; runTest
-	// semantics (fresh build + OnTest invocation) only apply to it.
-	var root *modules.Module
+	// Identify the root target. By MVS convention (see constructBuildList
+	// and modules.Load), targets[0] is the main module requested by the
+	// caller; runTest semantics (fresh build + OnTest invocation) only
+	// apply to it.
+	//
+	// Root identity is tracked by (Path, Version) rather than pointer
+	// equality so the comparison survives any future refactor of
+	// constructBuildList that stops reusing *modules.Module pointers
+	// (e.g. parallel builds that clone module structs). The pair is
+	// unique in an MVS build list, so it is a safe identity key.
+	var rootID module.Version
 	if len(targets) > 0 {
-		root = targets[0]
+		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
 	}
 
 	build := func(mod *modules.Module) (Result, error) {
-		isRoot := mod == root
+		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 
 		unlock, err := b.store.LockModule(mod.Path)
 		if err != nil {
