@@ -281,7 +281,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Only the root target is tested; transitive dependencies are
 		// verified by their own `llar test <dep>` invocations.
 		if b.runTest && isRoot && mod.OnTest != nil {
-			var testOut classfile.BuildResult
+			var testOut classfile.TestResult
 			mod.OnTest(buildContext, project, &testOut)
 			if len(testOut.Errs()) > 0 {
 				return Result{}, fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))

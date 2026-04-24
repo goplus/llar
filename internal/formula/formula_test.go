@@ -39,7 +39,7 @@ func TestLoadFS(t *testing.T) {
 		// Functional test: verify callbacks can be invoked without panic
 		f.OnRequire(&formulapkg.Project{}, &formulapkg.ModuleDeps{})
 		f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
-		f.OnTest(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+		f.OnTest(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.TestResult{})
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {

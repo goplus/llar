@@ -24,7 +24,7 @@ func (f *testFormula) MainEntry() {
 	f.Matrix(Matrix{Require: map[string][]string{"os": {"linux"}}})
 	f.OnRequire(func(*Project, *ModuleDeps) {})
 	f.OnBuild(func(*Context, *Project, *BuildResult) {})
-	f.OnTest(func(*Context, *Project, *BuildResult) {})
+	f.OnTest(func(*Context, *Project, *TestResult) {})
 }
 
 // TestGopt_ModuleF_Main exercises the classfile entry point together with

@@ -30,6 +30,7 @@ func init() {
 			"ModuleDeps":  reflect.TypeOf((*q.ModuleDeps)(nil)).Elem(),
 			"ModuleF":     reflect.TypeOf((*q.ModuleF)(nil)).Elem(),
 			"Project":     reflect.TypeOf((*q.Project)(nil)).Elem(),
+			"TestResult":  reflect.TypeOf((*q.TestResult)(nil)).Elem(),
 		},
 		AliasTypes: map[string]reflect.Type{},
 		Vars:       map[string]reflect.Value{},

@@ -568,7 +568,7 @@ func TestBuild_RunTest_DisabledSkipsOnTest(t *testing.T) {
 	// Inject an OnTest callback that would fail the build if invoked.
 	var called bool
 	for _, m := range mods {
-		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
 			called = true
 			out.AddErr(errors.New("onTest should not have been invoked"))
 		}
@@ -599,7 +599,7 @@ func TestBuild_RunTest_EnabledSurfacesOnTestError(t *testing.T) {
 
 	wantErr := errors.New("boom from onTest")
 	for _, m := range mods {
-		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
 			out.AddErr(wantErr)
 		}
 	}
@@ -644,7 +644,7 @@ func TestBuild_RunTest_BypassesCache(t *testing.T) {
 
 	var called bool
 	for _, m := range mods {
-		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.BuildResult) {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
 			called = true
 		}
 	}
@@ -702,11 +702,11 @@ func TestBuild_RunTest_DepOnTestNotInvoked(t *testing.T) {
 		m := m
 		switch m.Path {
 		case "test/depresult":
-			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, _ *classfile.BuildResult) {
+			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, _ *classfile.TestResult) {
 				rootCalled = true
 			}
 		case "test/liba":
-			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, out *classfile.BuildResult) {
+			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, out *classfile.TestResult) {
 				depCalled = true
 				out.AddErr(errors.New("dep OnTest should not have been invoked"))
 			}
