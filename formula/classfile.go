@@ -22,6 +22,7 @@ type ModuleF struct {
 
 	fOnRequire func(proj *Project, deps *ModuleDeps)
 	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
+	fOnTest    func(ctx *Context, proj *Project, out *TestResult)
 
 	modPath    string
 	modFromVer string
@@ -196,6 +197,32 @@ func (b *BuildResult) SetMetadata(metadata string) {
 // OnBuild event is used to instruct the Formula to compile a project.
 func (p *ModuleF) OnBuild(f func(ctx *Context, proj *Project, out *BuildResult)) {
 	p.fOnBuild = f
+}
+
+// TestResult represents the outcome of a formula's onTest hook.
+// Unlike BuildResult it has no metadata field: a test's job is to verify
+// the build, not to emit additional pkg-config-style flags. Future
+// extensions (pass/fail counts, skip markers, captured logs) should be
+// added here without polluting BuildResult.
+type TestResult struct {
+	errs []error
+}
+
+// AddErr records a test failure.
+func (t *TestResult) AddErr(err error) {
+	t.errs = append(t.errs, err)
+}
+
+// Errs returns all errors collected during the test hook.
+func (t *TestResult) Errs() []error {
+	return t.errs
+}
+
+// OnTest event is used to run post-build verification for a project.
+// It fires after OnBuild has completed successfully, reusing the same build
+// context so tests can locate built artifacts via ctx.OutputDir.
+func (p *ModuleF) OnTest(f func(ctx *Context, proj *Project, out *TestResult)) {
+	p.fOnTest = f
 }
 
 // -----------------------------------------------------------------------------

@@ -32,10 +32,14 @@ func TestLoadFS(t *testing.T) {
 		if f.OnRequire == nil {
 			t.Error("OnRequire is nil")
 		}
+		if f.OnTest == nil {
+			t.Error("OnTest is nil")
+		}
 
 		// Functional test: verify callbacks can be invoked without panic
 		f.OnRequire(&formulapkg.Project{}, &formulapkg.ModuleDeps{})
 		f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+		f.OnTest(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.TestResult{})
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {

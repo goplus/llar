@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -543,6 +544,277 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	}
 	if _, ok := cache.get("2.0.0", "amd64-linux"); !ok {
 		t.Error("cache miss for 2.0.0")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OnTest (RunTest) behaviour tests
+// ---------------------------------------------------------------------------
+
+// TestBuild_RunTest_DisabledSkipsOnTest verifies that OnTest callbacks are not
+// invoked when Builder.runTest is false, even if the formula defines one.
+func TestBuild_RunTest_DisabledSkipsOnTest(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	// runTest is false by default.
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	// Inject an OnTest callback that would fail the build if invoked.
+	var called bool
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
+			called = true
+			out.AddErr(errors.New("onTest should not have been invoked"))
+		}
+	}
+
+	if _, err := b.Build(ctx, mods); err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+	if called {
+		t.Error("OnTest was invoked despite runTest=false")
+	}
+}
+
+// TestBuild_RunTest_EnabledSurfacesOnTestError verifies that when runTest is
+// enabled, OnTest runs after OnBuild and its errors are wrapped with context
+// identifying the failing module.
+func TestBuild_RunTest_EnabledSurfacesOnTestError(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	wantErr := errors.New("boom from onTest")
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
+			out.AddErr(wantErr)
+		}
+	}
+
+	_, err = b.Build(ctx, mods)
+	if err == nil {
+		t.Fatal("Build() error = nil, want onTest failure")
+	}
+	if !strings.Contains(err.Error(), "onTest failed for test/liba@1.0.0") {
+		t.Errorf("error = %v, want it to describe the failing module", err)
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("error chain does not wrap injected cause: %v", err)
+	}
+}
+
+// TestBuild_RunTest_ReusesCacheWhenHit verifies that runTest=true reuses the
+// build cache: on a cache hit, OnBuild is skipped (cached metadata is returned
+// as-is) and OnTest still runs against the cached artifacts. The cache entry
+// must not be rewritten since nothing was rebuilt.
+func TestBuild_RunTest_ReusesCacheWhenHit(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// Pre-populate cache with a sentinel metadata value. If the cache is
+	// consulted and reused (as the new behavior requires), Build() will
+	// return this value without re-running OnBuild.
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-lCACHED",
+		BuildTime: time.Now(),
+	})
+	if err := b.saveCache("test/liba", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	var testCalled bool
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
+			testCalled = true
+		}
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// OnTest must have run even though OnBuild was skipped via cache hit.
+	if !testCalled {
+		t.Error("OnTest was not invoked despite runTest=true on cache hit")
+	}
+	// Result metadata should be the cached sentinel value, not the fresh
+	// "-lA" that OnBuild would have produced.
+	if len(results) == 0 || results[len(results)-1].Metadata != "-lCACHED" {
+		t.Errorf("metadata = %+v, want last entry %q (cache should be reused)", results, "-lCACHED")
+	}
+
+	// Cache entry must remain the same sentinel (nothing new to save).
+	cacheAfter, err := b.loadCache("test/liba")
+	if err != nil {
+		t.Fatalf("loadCache() failed: %v", err)
+	}
+	entry, ok := cacheAfter.get("1.0.0", "amd64-linux")
+	if !ok {
+		t.Fatal("cache entry removed; expected pre-populated entry to remain")
+	}
+	if entry.Metadata != "-lCACHED" {
+		t.Errorf("cache metadata = %q after cache-hit test run, want %q (no rewrite expected)", entry.Metadata, "-lCACHED")
+	}
+}
+
+// TestBuild_RunTest_SavesCacheOnMiss verifies that runTest=true writes the
+// build cache on a cache miss: OnBuild runs, fresh metadata is produced,
+// and the result is persisted for later invocations to reuse.
+func TestBuild_RunTest_SavesCacheOnMiss(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// No pre-populated cache: this is a cache miss.
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	var testCalled bool
+	for _, m := range mods {
+		m.OnTest = func(ctx *classfile.Context, proj *classfile.Project, out *classfile.TestResult) {
+			testCalled = true
+		}
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if !testCalled {
+		t.Error("OnTest was not invoked despite runTest=true")
+	}
+	// OnBuild ran; result metadata should reflect the formula output.
+	if len(results) == 0 || results[len(results)-1].Metadata != "-lA" {
+		t.Errorf("metadata = %+v, want last entry %q (OnBuild should run on cache miss)", results, "-lA")
+	}
+
+	// Cache must have been written with the freshly-built metadata so the
+	// next invocation can reuse it.
+	cacheAfter, err := b.loadCache("test/liba")
+	if err != nil {
+		t.Fatalf("loadCache() failed: %v", err)
+	}
+	entry, ok := cacheAfter.get("1.0.0", "amd64-linux")
+	if !ok {
+		t.Fatal("cache entry missing; expected cache write after cache-miss test run")
+	}
+	if entry.Metadata != "-lA" {
+		t.Errorf("cache metadata = %q, want %q (cache should be written)", entry.Metadata, "-lA")
+	}
+}
+
+// TestBuild_RunTest_DepOnTestNotInvoked verifies that when runTest is
+// enabled, OnTest is invoked only on the root target. A dependency that
+// happens to define OnTest must NOT see it triggered by a test run whose
+// target is a downstream consumer. This matches the product design
+// (issues/106 §9): "onTest runs only after the main module build".
+func TestBuild_RunTest_DepOnTestNotInvoked(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// test/depresult depends on test/liba.
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	var rootCalled, depCalled bool
+	for _, m := range mods {
+		m := m
+		switch m.Path {
+		case "test/depresult":
+			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, _ *classfile.TestResult) {
+				rootCalled = true
+			}
+		case "test/liba":
+			m.OnTest = func(_ *classfile.Context, _ *classfile.Project, out *classfile.TestResult) {
+				depCalled = true
+				out.AddErr(errors.New("dep OnTest should not have been invoked"))
+			}
+		}
+	}
+
+	if _, err := b.Build(ctx, mods); err != nil {
+		t.Fatalf("Build() error = %v, want nil (dep OnTest must not run)", err)
+	}
+	if !rootCalled {
+		t.Error("root OnTest was not invoked")
+	}
+	if depCalled {
+		t.Error("dep OnTest was invoked; runTest must only test the root target")
+	}
+}
+
+// TestBuild_RunTest_DepCacheStillUsed verifies that when runTest is enabled,
+// only the root target bypasses the build cache. Dependencies whose entries
+// exist in the cache must still short-circuit through cache lookup so test
+// runs do not pay the cost of rebuilding the full dependency tree.
+func TestBuild_RunTest_DepCacheStillUsed(t *testing.T) {
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	// Pre-populate liba's cache with a sentinel metadata; if liba is rebuilt
+	// it would produce "-lA" instead, so the sentinel is a unique cache signal.
+	cache := &buildCache{}
+	cache.set("1.0.0", "amd64-linux", &buildEntry{
+		Metadata:  "-lA-CACHED",
+		BuildTime: time.Now(),
+	})
+	if err := b.saveCache("test/liba", cache); err != nil {
+		t.Fatalf("saveCache() failed: %v", err)
+	}
+
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, main, modules.Options{FormulaStore: store})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	results, err := b.Build(ctx, mods)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	libaResult, ok := findResult(results, b, mods, "test/liba")
+	if !ok {
+		t.Fatal("missing result for test/liba")
+	}
+	if libaResult.Metadata != "-lA-CACHED" {
+		t.Errorf("liba metadata = %q, want %q (dep cache should be consulted under runTest)", libaResult.Metadata, "-lA-CACHED")
 	}
 }
 

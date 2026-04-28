@@ -702,7 +702,7 @@ func TestBuildModule_SilentSuccess(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := buildModule(context.Background(), store, "test/liba", "1.0.0", matrixStr)
+	err := buildModule(context.Background(), store, "test/liba", "1.0.0", matrixStr, false)
 
 	w.Close()
 	os.Stdout = old

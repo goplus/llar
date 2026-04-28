@@ -20,8 +20,9 @@ import (
 type Builder struct {
 	store        repo.Store
 	matrix       string
+	runTest      bool
 	workspaceDir string
-	newRepo func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
+	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
 type Result struct {
@@ -30,8 +31,16 @@ type Result struct {
 }
 
 type Options struct {
-	Store        repo.Store
-	MatrixStr    string
+	Store     repo.Store
+	MatrixStr string
+	// RunTest, when true, causes Build to invoke OnTest on the root target
+	// after OnBuild (or after reusing cached build metadata). The build
+	// cache is consulted as usual: on a cache hit the root's OnBuild is
+	// skipped and OnTest runs against the cached artifacts; on a cache
+	// miss OnBuild runs and the fresh metadata is cached before OnTest.
+	// Transitive dependencies honor the cache normally and do not have
+	// their OnTest hooks triggered.
+	RunTest      bool
 	WorkspaceDir string
 }
 
@@ -61,6 +70,7 @@ func NewBuilder(opts Options) (*Builder, error) {
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
+		runTest:      opts.RunTest,
 		workspaceDir: workspaceDir,
 		newRepo:      vcs.NewRepo,
 	}, nil
@@ -180,23 +190,57 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
 
+	// Identify the root target. By MVS convention (see constructBuildList
+	// and modules.Load), targets[0] is the main module requested by the
+	// caller; runTest semantics (fresh build + OnTest invocation) only
+	// apply to it.
+	//
+	// Root identity is tracked by (Path, Version) rather than pointer
+	// equality so the comparison survives any future refactor of
+	// constructBuildList that stops reusing *modules.Module pointers
+	// (e.g. parallel builds that clone module structs). The pair is
+	// unique in an MVS build list, so it is a safe identity key.
+	var rootID module.Version
+	if len(targets) > 0 {
+		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
+	}
+
 	build := func(mod *modules.Module) (Result, error) {
+		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
+		testThisMod := b.runTest && isRoot && mod.OnTest != nil
+
 		unlock, err := b.store.LockModule(mod.Path)
 		if err != nil {
 			return Result{}, err
 		}
 		defer unlock()
 
-		// Check cache
+		// Consult the build cache. A hit means we already have the
+		// module's build metadata and its installDir is populated from a
+		// previous successful build.
 		cache, err := b.loadCache(mod.Path)
-		if err == nil {
+		if err != nil {
+			cache = nil
+		}
+		var cachedEntry *buildEntry
+		if cache != nil {
 			if entry, ok := cache.get(mod.Version, b.matrix); ok {
-				dir, _ := b.installDir(mod.Path, mod.Version)
-				return Result{Metadata: entry.Metadata, OutputDir: dir}, nil
+				cachedEntry = entry
 			}
 		}
 
-		// TODO(MeteorsLiu): Source cache dir
+		// Fast path: cache hit and no OnTest to run. Skip source clone
+		// and OnBuild entirely.
+		if cachedEntry != nil && !testThisMod {
+			dir, _ := b.installDir(mod.Path, mod.Version)
+			return Result{Metadata: cachedEntry.Metadata, OutputDir: dir}, nil
+		}
+
+		// At this point we need to run OnBuild, OnTest, or both. All of
+		// them expect a source checkout and a prepared build context, so
+		// set those up uniformly regardless of cache state.
+
+		// TODO(MeteorsLiu): Source cache dir (belongs in the vcs layer)
 		tmpSourceDir, err := os.MkdirTemp("", fmt.Sprintf("source-%s-%s*", strings.ReplaceAll(mod.Path, "/", "-"), mod.Version))
 		if err != nil {
 			return Result{}, err
@@ -239,26 +283,46 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, err
 		}
 
-		var out classfile.BuildResult
-		mod.OnBuild(buildContext, project, &out)
-
-		if len(out.Errs()) > 0 {
-			return Result{}, errors.Join(out.Errs()...)
+		// Run OnBuild only on cache miss; reuse cached metadata otherwise.
+		var metadata string
+		if cachedEntry != nil {
+			metadata = cachedEntry.Metadata
+		} else {
+			var out classfile.BuildResult
+			mod.OnBuild(buildContext, project, &out)
+			if len(out.Errs()) > 0 {
+				return Result{}, errors.Join(out.Errs()...)
+			}
+			metadata = out.Metadata()
 		}
 
-		// Save to cache
-		if cache == nil {
-			cache = &buildCache{}
-		}
-		cache.set(mod.Version, b.matrix, &buildEntry{
-			Metadata:  out.Metadata(),
-			BuildTime: time.Now(),
-		})
-		if err := b.saveCache(mod.Path, cache); err != nil {
-			return Result{}, err
+		// Run OnTest (root only) against the just-built or cached
+		// artifacts, reusing the same build context so tests see a
+		// consistent environment either way.
+		if testThisMod {
+			var testOut classfile.TestResult
+			mod.OnTest(buildContext, project, &testOut)
+			if len(testOut.Errs()) > 0 {
+				return Result{}, fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))
+			}
 		}
 
-		return Result{Metadata: out.Metadata(), OutputDir: installDir}, nil
+		// Save cache only on cache miss. A cache hit means the entry is
+		// already present and current; OnTest does not modify metadata.
+		if cachedEntry == nil {
+			if cache == nil {
+				cache = &buildCache{}
+			}
+			cache.set(mod.Version, b.matrix, &buildEntry{
+				Metadata:  metadata,
+				BuildTime: time.Now(),
+			})
+			if err := b.saveCache(mod.Path, cache); err != nil {
+				return Result{}, err
+			}
+		}
+
+		return Result{Metadata: metadata, OutputDir: installDir}, nil
 	}
 
 	var results []Result
