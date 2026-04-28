@@ -1,0 +1,78 @@
+import "os"
+
+id "test/cmaketest"
+
+fromVer "1.0.0"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	c.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
+
+	err = c.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = c.install()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lcmtadd"
+}
+
+onTest (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	// Build the test program in its own tree so onTest works identically
+	// on cache hit (where onBuild was skipped and no _build dir exists)
+	// and on cache miss (where onBuild just populated _build).
+	testSrc := ctx.SourceDir + "/tests"
+	testBuild := ctx.SourceDir + "/_testbuild"
+
+	tc := cmake.new(testSrc, testBuild, testBuild+"/_out")
+	tc.buildType "Release"
+	tc.define "CMAKE_POLICY_VERSION_MINIMUM", "3.5"
+	tc.use installDir
+
+	err = tc.configure()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = tc.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	// Run the freshly-built test binary. A non-zero exit code surfaces
+	// via lastErr and fails onTest.
+	exec testBuild + "/cmtadd_check"
+	if lastErr != nil {
+		out.addErr lastErr
+		return
+	}
+
+	err = os.writeFile(installDir+"/ontest.stamp", []byte("cmtadd_check passed"), 0o644)
+	if err != nil {
+		out.addErr err
+	}
+}

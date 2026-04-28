@@ -541,3 +541,158 @@ func TestE2E_RealFreetypeBuild(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// E2E tests: real cmake build + real onTest compilation & execution
+// ---------------------------------------------------------------------------
+
+// cmakeBuildToolsAvailable reports whether cmake is on PATH. A C toolchain
+// is almost always present when cmake is; if not, cmake.configure() will
+// surface a clear error and the test fails noisily rather than silently.
+func cmakeBuildToolsAvailable(t *testing.T) bool {
+	t.Helper()
+	if _, err := exec.LookPath("cmake"); err != nil {
+		t.Skip("cmake not found, skipping real cmake onTest test")
+		return false
+	}
+	return true
+}
+
+// TestE2E_OnTest_RealCMakeBuild exercises the full onTest path against a
+// genuine CMake-based library build. The fixture (`test/cmaketest`) ships a
+// tiny static library (libcmtadd) whose formula's onBuild installs it via
+// `cmake`, and whose onTest re-invokes `cmake.new` on a sibling `tests/`
+// project to compile a check binary linked against the just-installed
+// library, then executes it. A passing onTest proves four things at once:
+//  1. onBuild produced a real, linkable artifact;
+//  2. the TestContext/TestResult wiring reaches interpreted formula code;
+//  3. cmake.use() correctly injects CMAKE_PREFIX_PATH so the test program
+//     can find the installed library;
+//  4. exec + lastErr surface the test binary's exit status.
+func TestE2E_OnTest_RealCMakeBuild(t *testing.T) {
+	if !cmakeBuildToolsAvailable(t) {
+		return
+	}
+
+	store := setupTestStore(t)
+	b := setupBuilder(t, store, "amd64-linux")
+	b.runTest = true
+
+	main := module.Version{Path: "test/cmaketest", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Metadata != "-lcmtadd" {
+		t.Errorf("metadata = %q, want %q", results[0].Metadata, "-lcmtadd")
+	}
+
+	// Verify onBuild's install actually produced the library and header
+	// cmake.use() in onTest relies on. If either is missing, the onTest
+	// binary could not have been linked, and we would not reach the stamp.
+	installDir := results[0].OutputDir
+	headerPath := filepath.Join(installDir, "include", "cmtadd.h")
+	if _, err := os.Stat(headerPath); err != nil {
+		t.Errorf("cmtadd.h not installed at %s: %v", headerPath, err)
+	}
+	libDir := filepath.Join(installDir, "lib")
+	libEntries, err := os.ReadDir(libDir)
+	if err != nil {
+		t.Fatalf("lib dir not found at %s: %v", libDir, err)
+	}
+	hasLib := false
+	for _, e := range libEntries {
+		if strings.HasPrefix(e.Name(), "libcmtadd") {
+			hasLib = true
+			break
+		}
+	}
+	if !hasLib {
+		t.Errorf("no libcmtadd* found in %s", libDir)
+	}
+
+	// The stamp is written by onTest only after cmtadd_check exits 0. Its
+	// presence + content is direct evidence that the cmake-built test
+	// binary ran and asserted cmt_add(2,3) == 5.
+	stamp := filepath.Join(installDir, "ontest.stamp")
+	data, err := os.ReadFile(stamp)
+	if err != nil {
+		t.Fatalf("onTest stamp missing; cmtadd_check did not run or failed: %v", err)
+	}
+	if string(data) != "cmtadd_check passed" {
+		t.Errorf("stamp content = %q, want %q", data, "cmtadd_check passed")
+	}
+}
+
+// TestE2E_OnTest_RealCMakeBuild_ReusesCacheOnTestRerun is the headline
+// regression test for the cache-reuse refactor: a `llar test` invocation
+// against an already-built module must skip onBuild entirely yet still
+// run onTest successfully against the cached install tree.
+//
+// The test first runs a plain build (runTest=false) to populate the cache
+// and install dir. It then runs a second build on the same workspace with
+// runTest=true and asserts that:
+//  1. the build cache file's mtime is unchanged (onBuild was skipped), and
+//  2. the onTest stamp - which only onTest writes - appears in the install
+//     dir, proving onTest built and ran cmtadd_check against the cached
+//     library artifacts from the first build.
+func TestE2E_OnTest_RealCMakeBuild_ReusesCacheOnTestRerun(t *testing.T) {
+	if !cmakeBuildToolsAvailable(t) {
+		return
+	}
+
+	store := setupTestStore(t)
+	wsDir := t.TempDir()
+
+	main := module.Version{Path: "test/cmaketest", Version: "1.0.0"}
+
+	// Phase 1: populate cache with a plain (non-test) build.
+	b1 := setupBuilder(t, store, "amd64-linux")
+	b1.workspaceDir = wsDir
+	results1, _ := loadAndBuild(t, b1, store, main)
+	if results1[0].Metadata != "-lcmtadd" {
+		t.Fatalf("phase1 metadata = %q, want %q", results1[0].Metadata, "-lcmtadd")
+	}
+
+	cacheDir, _ := b1.cacheDir("test/cmaketest")
+	cachePath := filepath.Join(cacheDir, cacheFile)
+	cacheInfoBefore, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatalf("phase1 cache not written: %v", err)
+	}
+
+	installDir := results1[0].OutputDir
+	stamp := filepath.Join(installDir, "ontest.stamp")
+	if _, err := os.Stat(stamp); err == nil {
+		t.Fatalf("ontest.stamp unexpectedly present after plain build: onBuild should not touch it")
+	}
+
+	// Phase 2: same workspace, runTest=true. Expected behaviour (per the
+	// refactor): cache hit so onBuild is skipped, but onTest still runs
+	// against the cached artifacts and writes the stamp.
+	b2 := setupBuilder(t, store, "amd64-linux")
+	b2.workspaceDir = wsDir
+	b2.runTest = true
+	results2, _ := loadAndBuild(t, b2, store, main)
+
+	if results2[0].Metadata != "-lcmtadd" {
+		t.Errorf("phase2 metadata = %q, want %q", results2[0].Metadata, "-lcmtadd")
+	}
+
+	cacheInfoAfter, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatalf("cache disappeared after test run: %v", err)
+	}
+	if !cacheInfoBefore.ModTime().Equal(cacheInfoAfter.ModTime()) {
+		t.Error("cache file was rewritten during test run (onBuild should have been skipped)")
+	}
+
+	data, err := os.ReadFile(stamp)
+	if err != nil {
+		t.Fatalf("ontest.stamp missing; cache-hit onTest did not run cmtadd_check: %v", err)
+	}
+	if string(data) != "cmtadd_check passed" {
+		t.Errorf("stamp content = %q, want %q", data, "cmtadd_check passed")
+	}
+}
