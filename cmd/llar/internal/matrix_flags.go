@@ -5,54 +5,29 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/spf13/pflag"
 )
 
 var matrixKeyRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
 
-type knownMatrixFlags struct {
-	long       map[string]bool
-	short      map[string]bool
-	needsValue map[string]bool
-}
-
-func knownMakeMatrixFlags() knownMatrixFlags {
-	return knownMatrixFlags{
-		long:       map[string]bool{"help": true, "verbose": true, "output": true},
-		short:      map[string]bool{"h": true, "v": true, "o": true},
-		needsValue: map[string]bool{"output": true, "o": true},
-	}
-}
-
-func knownTestMatrixFlags() knownMatrixFlags {
-	return knownMatrixFlags{
-		long:       map[string]bool{"help": true, "verbose": true},
-		short:      map[string]bool{"h": true, "v": true},
-		needsValue: map[string]bool{},
-	}
-}
-
-func parseMatrixArgs(args []string, known knownMatrixFlags) ([]string, string, error) {
-	matrix := map[string]string{}
-	clean := make([]string, 0, len(args))
+func parseMatrixArgs(args []string, flags *pflag.FlagSet) ([]string, string, error) {
+	matrixFlags := map[string]matrixFlagDef{}
 	parseFlags := true
 
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
+	for _, arg := range args {
 		if !parseFlags {
-			clean = append(clean, arg)
 			continue
 		}
 		if arg == "--" {
 			parseFlags = false
-			clean = append(clean, arg)
 			continue
 		}
 		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			clean = append(clean, arg)
 			continue
 		}
 		if strings.HasPrefix(arg, "--") {
-			key, value, hasValue, err := splitLongFlag(arg)
+			key, _, _, err := splitLongFlag(arg)
 			if err != nil {
 				return nil, "", err
 			}
@@ -64,69 +39,107 @@ func parseMatrixArgs(args []string, known knownMatrixFlags) ([]string, string, e
 				if !validMatrixKey(matrixKey) {
 					return nil, "", fmt.Errorf("invalid matrix key %q", matrixKey)
 				}
-				if !hasValue {
-					if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-						return nil, "", fmt.Errorf("missing value for matrix flag --%s", key)
-					}
-					i++
-					value = args[i]
-				}
-				if value == "" {
-					return nil, "", fmt.Errorf("missing value for matrix flag --%s", key)
-				}
-				matrix[matrixKey] = value
+				matrixFlags[key] = ensureMatrixFlag(flags, key, matrixKey)
 				continue
 			}
-			if known.long[key] {
-				clean = append(clean, arg)
-				if !hasValue && known.needsValue[key] {
-					if i+1 >= len(args) {
-						return nil, "", fmt.Errorf("missing value for --%s", key)
-					}
-					i++
-					clean = append(clean, args[i])
+			if flag := flags.Lookup(key); flag != nil {
+				if matrixKey, ok := matrixKeyForFlag(flag); ok {
+					matrixFlags[key] = matrixFlagDef{flagName: key, matrixKey: matrixKey}
 				}
 				continue
 			}
 			if !validMatrixKey(key) {
 				return nil, "", fmt.Errorf("invalid matrix key %q", key)
 			}
-			if !hasValue {
-				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return nil, "", fmt.Errorf("missing value for matrix flag --%s", key)
-				}
-				i++
-				value = args[i]
-			}
-			if value == "" {
-				return nil, "", fmt.Errorf("missing value for matrix flag --%s", key)
-			}
-			matrix[key] = value
+			matrixFlags[key] = ensureMatrixFlag(flags, key, key)
 			continue
 		}
 		key := strings.TrimPrefix(arg, "-")
-		if known.short[key] {
-			clean = append(clean, arg)
-			if known.needsValue[key] {
-				if i+1 >= len(args) {
-					return nil, "", fmt.Errorf("missing value for %s", arg)
-				}
-				i++
-				clean = append(clean, args[i])
-			}
+		if len(key) != 1 {
+			return nil, "", fmt.Errorf("unknown short flag %q", arg)
+		}
+		if flags.ShorthandLookup(key) != nil {
 			continue
 		}
 		return nil, "", fmt.Errorf("unknown short flag %q", arg)
 	}
 
+	resetMatrixFlags(flags)
+	if err := flags.Parse(args); err != nil {
+		return nil, "", err
+	}
+
+	matrix := parsedMatrixValues(flags, matrixFlags)
 	if len(matrix) == 0 {
-		return clean, hostMatrixCombo(), nil
+		return flags.Args(), hostMatrixCombo(), nil
 	}
 	matrixStr, err := encodeMatrix(matrix)
 	if err != nil {
 		return nil, "", err
 	}
-	return clean, matrixStr, nil
+	return flags.Args(), matrixStr, nil
+}
+
+const matrixFlagAnnotation = "llar.matrix"
+const matrixFlagKeyAnnotation = "llar.matrix-key"
+
+type matrixFlagDef struct {
+	flagName  string
+	matrixKey string
+}
+
+func ensureMatrixFlag(flags *pflag.FlagSet, flagName, matrixKey string) matrixFlagDef {
+	if flag := flags.Lookup(flagName); flag == nil {
+		flags.String(flagName, "", "")
+		flag = flags.Lookup(flagName)
+		flag.Annotations = map[string][]string{
+			matrixFlagAnnotation:    {"true"},
+			matrixFlagKeyAnnotation: {matrixKey},
+		}
+		_ = flags.MarkHidden(flagName)
+	}
+	return matrixFlagDef{flagName: flagName, matrixKey: matrixKey}
+}
+
+func isMatrixFlag(flag *pflag.Flag) bool {
+	return flag != nil && len(flag.Annotations[matrixFlagAnnotation]) > 0
+}
+
+func matrixKeyForFlag(flag *pflag.Flag) (string, bool) {
+	if !isMatrixFlag(flag) {
+		return "", false
+	}
+	values := flag.Annotations[matrixFlagKeyAnnotation]
+	if len(values) == 0 || values[0] == "" {
+		return "", false
+	}
+	return values[0], true
+}
+
+func resetMatrixFlags(flags *pflag.FlagSet) {
+	flags.VisitAll(func(flag *pflag.Flag) {
+		if !isMatrixFlag(flag) {
+			return
+		}
+		flag.Changed = false
+		_ = flag.Value.Set(flag.DefValue)
+	})
+}
+
+func parsedMatrixValues(flags *pflag.FlagSet, matrixFlags map[string]matrixFlagDef) map[string]string {
+	matrix := map[string]string{}
+	for flagName, def := range matrixFlags {
+		flag := flags.Lookup(flagName)
+		if flag == nil || !flag.Changed {
+			continue
+		}
+		value := flag.Value.String()
+		if value == "" || strings.HasPrefix(value, "-") {
+			continue
+		}
+		matrix[def.matrixKey] = value
+	}
+	return matrix
 }
 
 func splitLongFlag(arg string) (key, value string, hasValue bool, err error) {

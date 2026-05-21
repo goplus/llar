@@ -60,6 +60,9 @@ type Module struct {
 type Options struct {
 	// FormulaStore is the store for downloading and caching formulas.
 	FormulaStore repo.Store
+
+	// MatrixStr is the active target matrix selected by the command.
+	MatrixStr string
 }
 
 func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {

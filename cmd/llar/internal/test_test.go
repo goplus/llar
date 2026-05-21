@@ -82,6 +82,25 @@ func TestTest_RemoteStoreError(t *testing.T) {
 	}
 }
 
+func TestTestMatrixFlagsPassedToBuild(t *testing.T) {
+	cleanArgs, matrix, err := parseMatrixArgs([]string{"test/liba@1.0.0", "--os", "linux", "--arch", "amd64", "-v"}, testCmd.Flags())
+	if err != nil {
+		t.Fatalf("parseMatrixArgs: %v", err)
+	}
+	if matrix != "amd64-linux" {
+		t.Fatalf("matrix = %q, want amd64-linux", matrix)
+	}
+	wantArgs := []string{"test/liba@1.0.0"}
+	if len(cleanArgs) != len(wantArgs) {
+		t.Fatalf("args = %#v, want %#v", cleanArgs, wantArgs)
+	}
+	for i := range wantArgs {
+		if cleanArgs[i] != wantArgs[i] {
+			t.Fatalf("args = %#v, want %#v", cleanArgs, wantArgs)
+		}
+	}
+}
+
 // TestTestLocal_DotPattern exercises the local branch end-to-end: module
 // resolution via modlocal + overlay store succeeds, but the actual build
 // fails at git sync because the overlay has no real upstream. This verifies
