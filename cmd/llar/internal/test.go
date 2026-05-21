@@ -13,8 +13,9 @@ import (
 var testVerbose bool
 
 var testCmd = &cobra.Command{
-	Use:   "test [module@version]",
-	Short: "Build a module and run its onTest hook",
+	Use:                "test [module@version]",
+	Short:              "Build a module and run its onTest hook",
+	DisableFlagParsing: true,
 	Long: `Test builds a module the same way as 'llar make', then executes
 the module's onTest callback on the resulting artifacts.
 
@@ -22,7 +23,6 @@ The build cache is consulted as usual: if the module has already been built
 with the same matrix, onBuild is skipped and onTest runs against the cached
 artifacts. On a cache miss, onBuild runs and its result is cached for later
 invocations before onTest executes.`,
-	Args: cobra.ExactArgs(1),
 	RunE: runTest,
 }
 
@@ -32,6 +32,17 @@ func init() {
 }
 
 func runTest(cmd *cobra.Command, args []string) error {
+	args, matrixStr, err := parseMatrixArgs(args, cmd.Flags())
+	if err != nil {
+		return err
+	}
+	if cmd.Flags().Changed("help") {
+		return cmd.Help()
+	}
+	if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+		return err
+	}
+
 	pattern, version, isLocal, err := parseModuleArg(args[0])
 	if err != nil {
 		return err
@@ -44,8 +55,6 @@ func runTest(cmd *cobra.Command, args []string) error {
 	savedVerbose := makeVerbose
 	makeVerbose = testVerbose
 	defer func() { makeVerbose = savedVerbose }()
-
-	matrixStr := hostMatrixCombo()
 
 	remoteStore, err := newRemoteStore()
 	if err != nil {

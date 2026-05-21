@@ -677,6 +677,48 @@ func TestMakeLocal_BuildSuccess(t *testing.T) {
 	}
 }
 
+func TestMakeMatrixFlagsPassedToBuild(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
+
+	origDir, _ := os.Getwd()
+	os.Chdir(filepath.Join(formulaDir, "test", "liba"))
+	defer os.Chdir(origDir)
+
+	workspaceDir := isolatedWorkspaceDir(t)
+	matrixStr := "amd64-linux"
+	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, "-lMATRIX")
+
+	out, err := runMakeCmd(t, "./@1.0.0", "--os", "linux", "--arch", "amd64", "-v")
+	if err != nil {
+		t.Fatalf("llar make failed: %v", err)
+	}
+	if strings.TrimSpace(out) != "-lMATRIX" {
+		t.Fatalf("output = %q, want -lMATRIX", out)
+	}
+}
+
+func TestMakeMatrixExplicitPrefixPassedToBuild(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
+
+	origDir, _ := os.Getwd()
+	os.Chdir(filepath.Join(formulaDir, "test", "liba"))
+	defer os.Chdir(origDir)
+
+	workspaceDir := isolatedWorkspaceDir(t)
+	matrixStr := "amd64-linux|debug=true"
+	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, "-lDEBUG")
+
+	out, err := runMakeCmd(t, "./@1.0.0", "--arch", "amd64", "--os", "linux", "--matrix-debug", "true", "-v")
+	if err != nil {
+		t.Fatalf("llar make failed: %v", err)
+	}
+	if strings.TrimSpace(out) != "-lDEBUG" {
+		t.Fatalf("output = %q, want -lDEBUG", out)
+	}
+}
+
 func TestBuildModule_SilentSuccess(t *testing.T) {
 	formulaDir := setupLocalFormulas(t)
 	store := repo.NewOverlayStore(

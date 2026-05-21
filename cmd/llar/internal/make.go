@@ -38,11 +38,11 @@ var newRemoteStore = func() (repo.Store, error) {
 }
 
 var makeCmd = &cobra.Command{
-	Use:   "make [module@version]",
-	Short: "Build a module to FormulaDir",
-	Long:  `Make downloads and builds a module to FormulaDir.`,
-	Args:  cobra.ExactArgs(1),
-	RunE:  runMake,
+	Use:                "make [module@version]",
+	Short:              "Build a module to FormulaDir",
+	Long:               `Make downloads and builds a module to FormulaDir.`,
+	DisableFlagParsing: true,
+	RunE:               runMake,
 }
 
 func init() {
@@ -52,6 +52,17 @@ func init() {
 }
 
 func runMake(cmd *cobra.Command, args []string) error {
+	args, matrixStr, err := parseMatrixArgs(args, cmd.Flags())
+	if err != nil {
+		return err
+	}
+	if cmd.Flags().Changed("help") {
+		return cmd.Help()
+	}
+	if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+		return err
+	}
+
 	pattern, version, isLocal, err := parseModuleArg(args[0])
 	if err != nil {
 		return err
@@ -67,8 +78,6 @@ func runMake(cmd *cobra.Command, args []string) error {
 		}
 		makeOutput = abs
 	}
-
-	matrixStr := hostMatrixCombo()
 
 	// Set up remote formula store (always needed for deps)
 	remoteStore, err := newRemoteStore()
@@ -132,6 +141,7 @@ func hostMatrixCombo() string {
 func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string, runTest bool) error {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
+		MatrixStr:    matrixStr,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
